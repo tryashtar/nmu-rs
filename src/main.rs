@@ -1,9 +1,11 @@
 use chrono::{DateTime, Utc};
+use jwalk::WalkDir;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::fs::File;
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 use thiserror::Error;
 
 #[derive(Deserialize)]
@@ -42,7 +44,7 @@ struct DateCache {
     cache: HashMap<PathBuf, DateTime<Utc>>,
 }
 impl DateCache {
-    pub fn new(path: Option<PathBuf>) -> Self {
+    fn new(path: Option<PathBuf>) -> Self {
         match path {
             None => DateCache {
                 path: None,
@@ -57,7 +59,7 @@ impl DateCache {
             },
         }
     }
-    pub fn save(&self) -> Result<(), YamlError> {
+    fn save(&self) -> Result<(), YamlError> {
         match &self.path {
             None => Ok(()),
             Some(path) => {
@@ -67,9 +69,22 @@ impl DateCache {
             }
         }
     }
+    fn changed_recently(&self, path: &Path) -> bool {
+        match fs::canonicalize(path) {
+            Err(_) => true,
+            Ok(path) => match self.cache.get(&path) {
+                None => true,
+                Some(cache_time) => match fs::metadata(&path).and_then(|x| x.modified()) {
+                    Err(_) => true,
+                    Ok(time) => Into::<SystemTime>::into(*cache_time) < time,
+                },
+            },
+        }
+    }
 }
 
 fn main() {
+    println!("NAIVE MUSIC UPDATER");
     let path = Path::new("/d/Music/.music-cache/library.yaml");
     let raw = load_yaml::<RawLibraryConfig>(path);
     match raw {
@@ -79,8 +94,15 @@ fn main() {
         }
         Ok(raw) => {
             let config = LibraryConfig::new(path.parent().unwrap(), raw);
-            for f in config.date_cache.cache {
-                println!("{}: {}", f.0.display(), f.1);
+            for folder in config.config_folders {
+                for entry in WalkDir::new(folder) {
+                    let path = entry.unwrap().path();
+                    if let Some(name) = path.file_name().and_then(|x| x.to_str()) {
+                        if name == "config.yaml" && config.date_cache.changed_recently(&path) {
+                            println!("{}", path.display());
+                        }
+                    }
+                }
             }
         }
     }
