@@ -17,28 +17,98 @@ struct RawLibraryConfig {
     extensions: HashSet<String>,
     custom_fields: Vec<String>,
     cache: Option<PathBuf>,
+    art: Option<RawArtRepo>,
 }
 
 struct LibraryConfig {
     library_folder: PathBuf,
-    logs: Option<PathBuf>,
+    log_folder: Option<PathBuf>,
     config_folders: Vec<PathBuf>,
-    extensions: HashSet<String>,
+    song_extensions: HashSet<String>,
     custom_fields: Vec<String>,
     date_cache: DateCache,
+    art_repo: Option<ArtRepo>,
 }
 impl LibraryConfig {
-    pub fn new(folder: &Path, raw: RawLibraryConfig) -> Self {
-        LibraryConfig {
+    fn new(folder: &Path, raw: RawLibraryConfig) -> Self {
+        Self {
             library_folder: folder.join(raw.library),
-            logs: raw.logs.map(|x| folder.join(x)),
+            log_folder: raw.logs.map(|x| folder.join(x)),
             config_folders: raw.config_folders.iter().map(|x| folder.join(x)).collect(),
-            extensions: raw.extensions,
+            song_extensions: raw.extensions,
             custom_fields: raw.custom_fields,
             date_cache: DateCache::new(raw.cache.map(|x| folder.join(x))),
+            art_repo: raw.art.map(|x| ArtRepo::new(&folder, x)),
         }
     }
 }
+
+#[derive(Deserialize)]
+struct RawArtRepo {
+    templates: PathBuf,
+    cache: Option<PathBuf>,
+    icons: Option<PathBuf>,
+    file_cache: Option<PathBuf>,
+    named_settings: HashMap<String, ArtTemplateSettings>,
+    extensions: HashSet<String>,
+}
+
+struct ArtRepo {
+    templates_folder: PathBuf,
+    cache_folder: Option<PathBuf>,
+    icon_folder: Option<PathBuf>,
+    used_templates: ArtCache,
+    named_settings: HashMap<String, ArtTemplateSettings>,
+    image_extensions: HashSet<String>,
+}
+impl ArtRepo {
+    fn new(folder: &Path, raw: RawArtRepo) -> Self {
+        Self {
+            templates_folder: folder.join(raw.templates),
+            cache_folder: raw.cache.map(|x| folder.join(x)),
+            icon_folder: raw.icons.map(|x| folder.join(x)),
+            used_templates: ArtCache::new(raw.file_cache.map(|x| folder.join(x))),
+            named_settings: raw.named_settings,
+            image_extensions: raw.extensions,
+        }
+    }
+}
+
+struct ArtCache {
+    path: Option<PathBuf>,
+    cache: HashMap<PathBuf, Vec<PathBuf>>,
+}
+impl ArtCache {
+    fn new(path: Option<PathBuf>) -> Self {
+        match path {
+            None => Self {
+                path: None,
+                cache: HashMap::new(),
+            },
+            Some(path) => Self {
+                path: Some(path.clone()),
+                cache: match load_yaml(path.as_path()) {
+                    Err(_) => HashMap::new(),
+                    Ok(map) => map,
+                },
+            },
+        }
+    }
+    fn save(&self) -> Result<(), YamlError> {
+        match &self.path {
+            None => Ok(()),
+            Some(path) => {
+                let file = File::create(path)?;
+                let writer = BufWriter::new(file);
+                serde_yaml::to_writer(writer, &self.cache)?;
+                Ok(())
+            }
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct ArtTemplateSettings {}
 
 struct DateCache {
     path: Option<PathBuf>,
@@ -47,11 +117,11 @@ struct DateCache {
 impl DateCache {
     fn new(path: Option<PathBuf>) -> Self {
         match path {
-            None => DateCache {
+            None => Self {
                 path: None,
                 cache: HashMap::new(),
             },
-            Some(path) => DateCache {
+            Some(path) => Self {
                 path: Some(path.clone()),
                 cache: match load_yaml(path.as_path()) {
                     Err(_) => HashMap::new(),
@@ -111,37 +181,63 @@ fn main() {
 fn find_scan_songs(scan_songs: &mut HashSet<PathBuf>, library_config: &LibraryConfig) {
     for song in WalkDir::new(&library_config.library_folder)
         .into_iter()
-        .filter_map(|x| song_path(x, &library_config.extensions))
+        .filter_map(|x| file_path(x, &library_config.song_extensions))
     {
         scan_songs.insert(song);
     }
     for config_root in &library_config.config_folders {
         for config_path in WalkDir::new(config_root)
             .into_iter()
-            .filter_map(|x| recently_changed_config_path(x, &library_config.date_cache))
+            .filter_map(|x| recently_changed_path(x, &library_config.date_cache, "config.yaml"))
         {
             let config_folder = config_path.parent().unwrap_or_else(|| Path::new(""));
             for song in WalkDir::new(config_folder)
                 .into_iter()
-                .filter_map(|x| song_path(x, &library_config.extensions))
+                .filter_map(|x| file_path(x, &library_config.song_extensions))
             {
                 scan_songs.insert(song);
             }
         }
     }
+    if let Some(art_repo) = &library_config.art_repo {
+        let mut scan_images = HashSet::<PathBuf>::new();
+        for config_path in WalkDir::new(&art_repo.templates_folder)
+            .into_iter()
+            .filter_map(|x| recently_changed_path(x, &library_config.date_cache, "images.yaml"))
+        {
+            let config_folder = config_path.parent().unwrap_or_else(|| Path::new(""));
+            for image in WalkDir::new(config_folder)
+                .into_iter()
+                .filter_map(|x| file_path(x, &art_repo.image_extensions))
+            {
+                scan_images.insert(image);
+            }
+        }
+        for (image_path, songs) in &art_repo.used_templates.cache {
+            if scan_images.contains(image_path)
+                || library_config
+                    .date_cache
+                    .changed_recently(image_path.as_path())
+            {
+                for song in songs {
+                    scan_songs.insert(song.clone());
+                }
+            }
+        }
+    }
 }
 
-fn song_path(
+fn file_path(
     item: jwalk::Result<jwalk::DirEntry<((), ())>>,
-    extensions: &HashSet<String>,
+    filter_extensions: &HashSet<String>,
 ) -> Option<PathBuf> {
     match item {
         Err(_) => None,
         Ok(entry) => {
             let path: PathBuf = entry.path();
             if let Some(ext) = path.extension().and_then(|x| x.to_str()) {
-                if extensions.contains(ext) {
-                    Some(entry);
+                if filter_extensions.contains(ext) {
+                    return Some(path);
                 }
             }
             None
@@ -149,17 +245,18 @@ fn song_path(
     }
 }
 
-fn recently_changed_config_path(
+fn recently_changed_path(
     item: jwalk::Result<jwalk::DirEntry<((), ())>>,
     cache: &DateCache,
+    filter_filename: &str,
 ) -> Option<PathBuf> {
     match item {
         Err(_) => None,
         Ok(entry) => {
             let path: PathBuf = entry.path();
             if let Some(file_name) = path.file_name().and_then(|x| x.to_str()) {
-                if file_name == "config.yaml" && cache.changed_recently(&path) {
-                    Some(entry);
+                if file_name == filter_filename && cache.changed_recently(&path) {
+                    return Some(path);
                 }
             }
             None
