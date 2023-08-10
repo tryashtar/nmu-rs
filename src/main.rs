@@ -2,8 +2,9 @@ use chrono::{DateTime, Utc};
 use jwalk::WalkDir;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
+use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use thiserror::Error;
@@ -13,23 +14,23 @@ struct RawLibraryConfig {
     library: PathBuf,
     logs: Option<PathBuf>,
     config_folders: Vec<PathBuf>,
-    extensions: Vec<String>,
+    extensions: HashSet<String>,
     custom_fields: Vec<String>,
     cache: Option<PathBuf>,
 }
 
 struct LibraryConfig {
-    library: PathBuf,
+    library_folder: PathBuf,
     logs: Option<PathBuf>,
     config_folders: Vec<PathBuf>,
-    extensions: Vec<String>,
+    extensions: HashSet<String>,
     custom_fields: Vec<String>,
     date_cache: DateCache,
 }
 impl LibraryConfig {
     pub fn new(folder: &Path, raw: RawLibraryConfig) -> Self {
         LibraryConfig {
-            library: folder.join(raw.library),
+            library_folder: folder.join(raw.library),
             logs: raw.logs.map(|x| folder.join(x)),
             config_folders: raw.config_folders.iter().map(|x| folder.join(x)).collect(),
             extensions: raw.extensions,
@@ -64,7 +65,8 @@ impl DateCache {
             None => Ok(()),
             Some(path) => {
                 let file = File::create(path)?;
-                serde_yaml::to_writer(file, &self.cache)?;
+                let writer = BufWriter::new(file);
+                serde_yaml::to_writer(writer, &self.cache)?;
                 Ok(())
             }
         }
@@ -85,25 +87,82 @@ impl DateCache {
 
 fn main() {
     println!("NAIVE MUSIC UPDATER");
-    let path = Path::new("/d/Music/.music-cache/library.yaml");
-    let raw = load_yaml::<RawLibraryConfig>(path);
+    let library_config_path = Path::new("/d/Music/.music-cache/library.yaml");
+    let raw = load_yaml::<RawLibraryConfig>(library_config_path);
     match raw {
         Err(error) => {
             println!("{}", error);
             return;
         }
         Ok(raw) => {
-            let config = LibraryConfig::new(path.parent().unwrap(), raw);
-            for folder in config.config_folders {
-                for entry in WalkDir::new(folder) {
-                    let path = entry.unwrap().path();
-                    if let Some(name) = path.file_name().and_then(|x| x.to_str()) {
-                        if name == "config.yaml" && config.date_cache.changed_recently(&path) {
-                            println!("{}", path.display());
-                        }
-                    }
+            let library_config_folder = library_config_path
+                .parent()
+                .unwrap_or_else(|| Path::new(""));
+            let library_config = LibraryConfig::new(library_config_folder, raw);
+            let mut scan_songs = HashSet::<PathBuf>::new();
+            find_scan_songs(&mut scan_songs, &library_config);
+            for scan in scan_songs {
+                println!("{}", scan.display());
+            }
+        }
+    }
+}
+
+fn find_scan_songs(scan_songs: &mut HashSet<PathBuf>, library_config: &LibraryConfig) {
+    for song in WalkDir::new(&library_config.library_folder)
+        .into_iter()
+        .filter_map(|x| song_path(x, &library_config.extensions))
+    {
+        scan_songs.insert(song);
+    }
+    for config_root in &library_config.config_folders {
+        for config_path in WalkDir::new(config_root)
+            .into_iter()
+            .filter_map(|x| recently_changed_config_path(x, &library_config.date_cache))
+        {
+            let config_folder = config_path.parent().unwrap_or_else(|| Path::new(""));
+            for song in WalkDir::new(config_folder)
+                .into_iter()
+                .filter_map(|x| song_path(x, &library_config.extensions))
+            {
+                scan_songs.insert(song);
+            }
+        }
+    }
+}
+
+fn song_path(
+    item: jwalk::Result<jwalk::DirEntry<((), ())>>,
+    extensions: &HashSet<String>,
+) -> Option<PathBuf> {
+    match item {
+        Err(_) => None,
+        Ok(entry) => {
+            let path: PathBuf = entry.path();
+            if let Some(ext) = path.extension().and_then(|x| x.to_str()) {
+                if extensions.contains(ext) {
+                    Some(entry);
                 }
             }
+            None
+        }
+    }
+}
+
+fn recently_changed_config_path(
+    item: jwalk::Result<jwalk::DirEntry<((), ())>>,
+    cache: &DateCache,
+) -> Option<PathBuf> {
+    match item {
+        Err(_) => None,
+        Ok(entry) => {
+            let path: PathBuf = entry.path();
+            if let Some(file_name) = path.file_name().and_then(|x| x.to_str()) {
+                if file_name == "config.yaml" && cache.changed_recently(&path) {
+                    Some(entry);
+                }
+            }
+            None
         }
     }
 }
@@ -120,6 +179,7 @@ where
     T: DeserializeOwned,
 {
     let file = File::open(path)?;
-    let yaml: T = serde_yaml::from_reader(file)?;
+    let reader = BufReader::new(file);
+    let yaml: T = serde_yaml::from_reader(reader)?;
     Ok(yaml)
 }
