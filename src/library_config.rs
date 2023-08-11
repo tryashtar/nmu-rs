@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use path_absolutize::Absolutize;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
@@ -141,9 +142,9 @@ impl DateCache {
         }
     }
     pub fn changed_recently(&self, path: &Path) -> bool {
-        match fs::canonicalize(path) {
+        match path.absolutize() {
             Err(_) => true,
-            Ok(path) => match self.cache.get(&path) {
+            Ok(path) => match self.cache.get(path.as_ref()) {
                 None => true,
                 Some(cache_time) => match fs::metadata(&path).and_then(|x| x.modified()) {
                     Err(_) => true,

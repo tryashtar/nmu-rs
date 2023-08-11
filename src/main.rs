@@ -1,5 +1,5 @@
 use jwalk::WalkDir;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 mod library_config;
@@ -14,55 +14,82 @@ fn main() {
             println!("{}", error);
             return;
         }
-        Ok(raw) => {
+        Ok(raw_config) => {
             let library_config_folder = library_config_path
                 .parent()
                 .unwrap_or_else(|| Path::new(""));
-            let library_config = LibraryConfig::new(library_config_folder, raw);
-            let mut scan_songs = HashSet::<PathBuf>::new();
+            let library_config: LibraryConfig =
+                LibraryConfig::new(library_config_folder, raw_config);
+            let mut scan_songs = BTreeSet::<PathBuf>::new();
             find_scan_songs(&mut scan_songs, &library_config);
-            for scan in scan_songs {
-                println!("{}", scan.display());
+            for song_path in scan_songs {
+                let nice_path = song_path
+                    .strip_prefix(&library_config.library_folder)
+                    .unwrap_or(song_path.as_path())
+                    .with_extension("");
+                println!("{}", nice_path.display());
             }
         }
     }
 }
 
-fn find_scan_songs(scan_songs: &mut HashSet<PathBuf>, library_config: &LibraryConfig) {
+fn find_scan_songs(scan_songs: &mut BTreeSet<PathBuf>, library_config: &LibraryConfig) {
+    // scan all songs that have changed
     for song in WalkDir::new(&library_config.library_folder)
         .into_iter()
-        .filter_map(|x| file_path(x, &library_config.song_extensions))
+        .filter_map(file_path)
+        .filter(|x| {
+            match_extension(x, &library_config.song_extensions)
+                && library_config.date_cache.changed_recently(&x)
+        })
     {
         scan_songs.insert(song);
     }
+    // for every config that's changed, scan all songs it applies to
     for config_root in &library_config.config_folders {
         for config_path in WalkDir::new(config_root)
             .into_iter()
-            .filter_map(|x| recently_changed_path(x, &library_config.date_cache, "config.yaml"))
+            .filter_map(file_path)
+            .filter(|x| {
+                match_name(x, "config.yaml") && library_config.date_cache.changed_recently(&x)
+            })
         {
             let config_folder = config_path.parent().unwrap_or_else(|| Path::new(""));
-            for song in WalkDir::new(config_folder)
+            let corresponding_folder = &library_config.library_folder.join(
+                config_folder
+                    .strip_prefix(config_root)
+                    .unwrap_or(config_folder),
+            );
+            for song in WalkDir::new(corresponding_folder)
                 .into_iter()
-                .filter_map(|x| file_path(x, &library_config.song_extensions))
+                .filter_map(file_path)
+                .filter(|x| match_extension(x, &library_config.song_extensions))
             {
                 scan_songs.insert(song);
             }
         }
     }
     if let Some(art_repo) = &library_config.art_repo {
+        // for every config that's changed, find all templates it applies to
         let mut scan_images = HashSet::<PathBuf>::new();
         for config_path in WalkDir::new(&art_repo.templates_folder)
             .into_iter()
-            .filter_map(|x| recently_changed_path(x, &library_config.date_cache, "images.yaml"))
+            .filter_map(file_path)
+            .filter(|x| {
+                match_name(x, "images.yaml") && library_config.date_cache.changed_recently(x)
+            })
         {
             let config_folder = config_path.parent().unwrap_or_else(|| Path::new(""));
             for image in WalkDir::new(config_folder)
                 .into_iter()
-                .filter_map(|x| file_path(x, &art_repo.image_extensions))
+                .filter_map(file_path)
+                .filter(|x| match_extension(x, &art_repo.image_extensions))
             {
                 scan_images.insert(image);
             }
         }
+        // find all templates that have changed
+        // scan all songs that used to use any of these templates
         for (image_path, songs) in &art_repo.used_templates.cache {
             if scan_images.contains(image_path)
                 || library_config
@@ -77,39 +104,34 @@ fn find_scan_songs(scan_songs: &mut HashSet<PathBuf>, library_config: &LibraryCo
     }
 }
 
-fn file_path(
-    item: jwalk::Result<jwalk::DirEntry<((), ())>>,
-    filter_extensions: &HashSet<String>,
-) -> Option<PathBuf> {
+fn match_name(path: &Path, name: &str) -> bool {
+    if let Some(file_name) = path.file_name().and_then(|x| x.to_str()) {
+        if file_name == name {
+            return true;
+        }
+    }
+    false
+}
+
+fn match_extension(path: &Path, extensions: &HashSet<String>) -> bool {
+    if let Some(ext) = path.extension().and_then(|x| x.to_str()) {
+        if extensions.contains(ext) {
+            return true;
+        }
+    }
+    false
+}
+
+fn file_path(item: jwalk::Result<jwalk::DirEntry<((), ())>>) -> Option<PathBuf> {
     match item {
         Err(_) => None,
         Ok(entry) => {
             let path: PathBuf = entry.path();
             if let Some(ext) = path.extension().and_then(|x| x.to_str()) {
-                if filter_extensions.contains(ext) {
-                    return Some(path);
-                }
+                Some(path)
+            } else {
+                None
             }
-            None
-        }
-    }
-}
-
-fn recently_changed_path(
-    item: jwalk::Result<jwalk::DirEntry<((), ())>>,
-    cache: &DateCache,
-    filter_filename: &str,
-) -> Option<PathBuf> {
-    match item {
-        Err(_) => None,
-        Ok(entry) => {
-            let path: PathBuf = entry.path();
-            if let Some(file_name) = path.file_name().and_then(|x| x.to_str()) {
-                if file_name == filter_filename && cache.changed_recently(&path) {
-                    return Some(path);
-                }
-            }
-            None
         }
     }
 }
