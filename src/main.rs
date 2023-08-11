@@ -1,15 +1,19 @@
 use jwalk::WalkDir;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 mod library_config;
 use library_config::*;
 
+mod song_config;
+use song_config::*;
+
 fn main() {
     println!("NAIVE MUSIC UPDATER");
     let library_config_path = Path::new("/d/Music/.music-cache/library.yaml");
-    let raw = load_yaml::<RawLibraryConfig>(library_config_path);
-    match raw {
+    let raw_config = load_yaml::<RawLibraryConfig>(library_config_path);
+    match raw_config {
         Err(error) => {
             println!("{}", error);
             return;
@@ -22,14 +26,41 @@ fn main() {
                 LibraryConfig::new(library_config_folder, raw_config);
             let mut scan_songs = BTreeSet::<PathBuf>::new();
             find_scan_songs(&mut scan_songs, &library_config);
+            let mut cached_configs: HashMap<PathBuf, Option<SongConfig>> = HashMap::new();
             for song_path in scan_songs {
                 let nice_path = song_path
                     .strip_prefix(&library_config.library_folder)
                     .unwrap_or(song_path.as_path())
                     .with_extension("");
                 println!("{}", nice_path.display());
+                let relative_parent = song_path
+                    .strip_prefix(&library_config.library_folder)
+                    .unwrap_or(song_path.as_path())
+                    .parent()
+                    .unwrap_or_else(|| Path::new(""));
+                for ancestor in relative_parent.ancestors().collect::<Vec<_>>().iter().rev() {
+                    for config_root in &library_config.config_folders {
+                        let config_path = config_root.join(ancestor).join("config.yaml");
+                        let config = cached_configs
+                            .entry(config_path)
+                            .or_insert_with_key(|x| load_config(x.as_path()));
+                        if let Some(config) = config {}
+                    }
+                }
             }
         }
+    }
+}
+
+fn load_config(path: &Path) -> Option<SongConfig> {
+    match load_yaml::<SongConfig>(path) {
+        Err(YamlError::Io(err)) if err.kind() == ErrorKind::NotFound => None,
+        Err(error) => {
+            println!("{}", path.display());
+            println!("{error}");
+            None
+        }
+        Ok(config) => Some(config),
     }
 }
 
