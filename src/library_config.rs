@@ -38,7 +38,7 @@ impl LibraryConfig {
             song_extensions: raw.extensions,
             custom_fields: raw.custom_fields,
             date_cache: DateCache::new(raw.cache.map(|x| folder.join(x))),
-            art_repo: raw.art.map(|x| ArtRepo::new(&folder, x)),
+            art_repo: raw.art.map(|x| ArtRepo::new(folder, x)),
         }
     }
 }

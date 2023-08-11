@@ -12,25 +12,23 @@ use song_config::*;
 
 fn main() {
     println!("NAIVE MUSIC UPDATER");
-    let first_argument = env::args().skip(1).next();
+    let first_argument = env::args().nth(1);
     let library_config_path = Path::new(first_argument.as_deref().unwrap_or("library.yaml"));
     let raw_config = load_yaml::<RawLibraryConfig>(library_config_path);
     match raw_config {
         Err(YamlError::Io(error))
             if error.kind() == ErrorKind::NotFound && first_argument.is_none() =>
         {
-            println!("{}", error);
-            println!(
+            eprintln!("{}", error);
+            eprintln!(
                 "Provide the path to a library.yaml or add one to '{}'",
                 std::env::current_dir()
                     .unwrap_or_else(|_| PathBuf::new())
                     .display()
             );
-            return;
         }
         Err(error) => {
-            println!("{}", error);
-            return;
+            eprintln!("{}", error);
         }
         Ok(raw_config) => {
             let library_config_folder = library_config_path
@@ -39,14 +37,15 @@ fn main() {
             let library_config: LibraryConfig =
                 LibraryConfig::new(library_config_folder, raw_config);
             let mut scan_songs = BTreeSet::<PathBuf>::new();
-            find_scan_songs(&mut scan_songs, &library_config);
             let mut cached_configs: HashMap<PathBuf, Option<SongConfig>> = HashMap::new();
+            find_scan_songs(&mut scan_songs, &library_config);
             for song_path in scan_songs {
                 let nice_path = song_path
                     .strip_prefix(&library_config.library_folder)
                     .unwrap_or(song_path.as_path())
                     .with_extension("");
                 println!("{}", nice_path.display());
+                let mut metadata = Metadata::new();
                 let relative_parent = song_path
                     .strip_prefix(&library_config.library_folder)
                     .unwrap_or(song_path.as_path())
@@ -58,7 +57,11 @@ fn main() {
                         let config = cached_configs
                             .entry(config_path)
                             .or_insert_with_key(|x| load_config(x.as_path()));
-                        if let Some(config) = config {}
+                        if let Some(config) = config {
+                            if let Some(songs) = &config.songs {
+                                songs.apply(&mut metadata);
+                            }
+                        }
                     }
                 }
             }
@@ -70,8 +73,8 @@ fn load_config(path: &Path) -> Option<SongConfig> {
     match load_yaml::<SongConfig>(path) {
         Err(YamlError::Io(err)) if err.kind() == ErrorKind::NotFound => None,
         Err(error) => {
-            println!("{}", path.display());
-            println!("{error}");
+            eprintln!("{}", path.display());
+            eprintln!("{error}");
             None
         }
         Ok(config) => Some(config),
@@ -85,7 +88,7 @@ fn find_scan_songs(scan_songs: &mut BTreeSet<PathBuf>, library_config: &LibraryC
         .filter_map(file_path)
         .filter(|x| {
             match_extension(x, &library_config.song_extensions)
-                && library_config.date_cache.changed_recently(&x)
+                && library_config.date_cache.changed_recently(x)
         })
     {
         scan_songs.insert(song);
@@ -96,7 +99,7 @@ fn find_scan_songs(scan_songs: &mut BTreeSet<PathBuf>, library_config: &LibraryC
             .into_iter()
             .filter_map(file_path)
             .filter(|x| {
-                match_name(x, "config.yaml") && library_config.date_cache.changed_recently(&x)
+                match_name(x, "config.yaml") && library_config.date_cache.changed_recently(x)
             })
         {
             let config_folder = config_path.parent().unwrap_or_else(|| Path::new(""));

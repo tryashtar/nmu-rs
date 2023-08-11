@@ -1,5 +1,5 @@
-use std::collections::HashSet;
 use serde::Deserialize;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Deserialize)]
 pub struct SongConfig {
@@ -9,7 +9,10 @@ pub struct SongConfig {
 #[derive(Deserialize)]
 #[serde(untagged)]
 pub enum MetadataStrategy {
-    Map(MapStrategy)
+    Map(MapStrategy),
+}
+impl MetadataStrategy {
+    pub fn apply(&self, metadata: &mut Metadata) {}
 }
 
 #[derive(Deserialize)]
@@ -18,7 +21,14 @@ pub struct MapStrategy {
 }
 
 pub struct Metadata {
-    pub fields: HashSet<MetadataField, MetadataValue>,
+    pub fields: HashMap<MetadataField, MetadataValue>,
+}
+impl Metadata {
+    pub fn new() -> Self {
+        Self {
+            fields: HashMap::new(),
+        }
+    }
 }
 
 pub enum MetadataValue {
@@ -45,5 +55,5 @@ pub enum MetadataField {
     Genres,
     Art,
     SimpleLyrics,
-    Custom(String)
+    Custom(String),
 }
