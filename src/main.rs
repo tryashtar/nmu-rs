@@ -1,5 +1,6 @@
 use jwalk::WalkDir;
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::env;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
@@ -11,9 +12,22 @@ use song_config::*;
 
 fn main() {
     println!("NAIVE MUSIC UPDATER");
-    let library_config_path = Path::new("/d/Music/.music-cache/library.yaml");
+    let first_argument = env::args().skip(1).next();
+    let library_config_path = Path::new(first_argument.as_deref().unwrap_or("library.yaml"));
     let raw_config = load_yaml::<RawLibraryConfig>(library_config_path);
     match raw_config {
+        Err(YamlError::Io(error))
+            if error.kind() == ErrorKind::NotFound && first_argument.is_none() =>
+        {
+            println!("{}", error);
+            println!(
+                "Provide the path to a library.yaml or add one to '{}'",
+                std::env::current_dir()
+                    .unwrap_or_else(|_| PathBuf::new())
+                    .display()
+            );
+            return;
+        }
         Err(error) => {
             println!("{}", error);
             return;
@@ -158,7 +172,7 @@ fn file_path(item: jwalk::Result<jwalk::DirEntry<((), ())>>) -> Option<PathBuf> 
         Err(_) => None,
         Ok(entry) => {
             let path: PathBuf = entry.path();
-            if let Some(ext) = path.extension().and_then(|x| x.to_str()) {
+            if path.extension().and_then(|x| x.to_str()).is_some() {
                 Some(path)
             } else {
                 None
