@@ -46,7 +46,6 @@ pub enum LocalItemSelector {
 pub enum FieldSelector {
     Single(MetadataField),
     Multiple(HashSet<MetadataField>),
-    #[serde(rename = "*")]
     All,
 }
 
@@ -54,7 +53,24 @@ pub enum FieldSelector {
 #[serde(untagged)]
 pub enum ValueGetter {
     Direct(MetadataValue),
-    Copy { from: LocalItemSelector },
+    Copy {
+        from: LocalItemSelector,
+        value: ItemValueGetter,
+        modify: Option<ValueModifier>,
+    },
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum ValueModifier {}
+
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum ItemValueGetter {
+    FileName,
+    CleanName,
+    Path,
+    Copy(MetadataField),
 }
 
 pub struct Metadata {
@@ -77,23 +93,35 @@ pub enum MetadataValue {
 }
 
 #[derive(Eq, Hash, PartialEq, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "lowercase")]
 pub enum MetadataField {
     Title,
     Album,
+    #[serde(alias = "performer")]
     Performers,
+    #[serde(rename = "album artists")]
+    #[serde(alias = "album artist")]
     AlbumArtists,
+    #[serde(alias = "composer")]
     Composers,
     Arranger,
     Comment,
     Track,
+    #[serde(rename = "track total")]
+    #[serde(alias = "track count")]
     TrackTotal,
     Disc,
+    #[serde(rename = "disc total")]
+    #[serde(alias = "disc count")]
     DiscTotal,
     Year,
+    #[serde(alias = "lang")]
     Language,
+    #[serde(alias = "genre")]
     Genres,
     Art,
+    #[serde(rename = "simple lyrics")]
+    #[serde(alias = "lyrics")]
     SimpleLyrics,
     Custom(String),
 }

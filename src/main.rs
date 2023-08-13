@@ -28,8 +28,6 @@ fn main() {
                 std::env::current_dir()
                     .unwrap_or_else(|_| PathBuf::new())
                     .display()
-                    .to_string()
-                    .red()
             );
         }
         Err(error) => {
