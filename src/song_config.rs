@@ -1,23 +1,60 @@
-use serde::Deserialize;
-use std::collections::{HashMap, HashSet};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct SongConfig {
-    pub songs: Option<MetadataStrategy>,
+    pub songs: Option<MetadataOperation>,
+    pub set: Option<HashMap<ItemSelector, MetadataOperation>>,
+    pub set_all: Option<Vec<AllSetter>>,
 }
 
-#[derive(Deserialize)]
-#[serde(untagged)]
-pub enum MetadataStrategy {
-    Map(MapStrategy),
+#[derive(Deserialize, Serialize)]
+pub struct AllSetter {
+    names: ItemSelector,
+    set: MetadataOperation,
 }
-impl MetadataStrategy {
+
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum MetadataOperation {
+    Blank { remove: FieldSelector },
+    Keep { keep: FieldSelector },
+    Sequence(Vec<MetadataOperation>),
+    Set(HashMap<MetadataField, ValueGetter>),
+}
+impl MetadataOperation {
     pub fn apply(&self, metadata: &mut Metadata) {}
 }
 
-#[derive(Deserialize)]
-pub struct MapStrategy {
-    //pub fields: HashSet<MetadataField, ValueGetter>,
+#[derive(Eq, Hash, PartialEq, Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum ItemSelector {
+    Path(PathBuf),
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum LocalItemSelector {
+    This,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum FieldSelector {
+    Single(MetadataField),
+    Multiple(HashSet<MetadataField>),
+    #[serde(rename = "*")]
+    All,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum ValueGetter {
+    Direct(MetadataValue),
+    Copy { from: LocalItemSelector },
 }
 
 pub struct Metadata {
@@ -31,13 +68,16 @@ impl Metadata {
     }
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum MetadataValue {
     Blank,
     String(String),
     List(Vec<String>),
 }
 
-#[derive(Eq, Hash, PartialEq, Debug)]
+#[derive(Eq, Hash, PartialEq, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MetadataField {
     Title,
     Album,

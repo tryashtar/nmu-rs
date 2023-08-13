@@ -1,8 +1,11 @@
+use colored::Colorize;
 use jwalk::WalkDir;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::env;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+
+mod tests;
 
 mod library_config;
 use library_config::*;
@@ -19,16 +22,18 @@ fn main() {
         Err(YamlError::Io(error))
             if error.kind() == ErrorKind::NotFound && first_argument.is_none() =>
         {
-            eprintln!("{}", error);
+            eprintln!("{}", error.to_string().red());
             eprintln!(
                 "Provide the path to a library.yaml or add one to '{}'",
                 std::env::current_dir()
                     .unwrap_or_else(|_| PathBuf::new())
                     .display()
+                    .to_string()
+                    .red()
             );
         }
         Err(error) => {
-            eprintln!("{}", error);
+            eprintln!("{}", error.to_string().red());
         }
         Ok(raw_config) => {
             let library_config_folder = library_config_path
@@ -73,8 +78,8 @@ fn load_config(path: &Path) -> Option<SongConfig> {
     match load_yaml::<SongConfig>(path) {
         Err(YamlError::Io(err)) if err.kind() == ErrorKind::NotFound => None,
         Err(error) => {
-            eprintln!("{}", path.display());
-            eprintln!("{error}");
+            eprintln!("{}", path.display().to_string().red());
+            eprintln!("{}", error.to_string().red());
             None
         }
         Ok(config) => Some(config),
