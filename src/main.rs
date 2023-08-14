@@ -4,6 +4,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::env;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use thiserror::Error;
 
 mod tests;
 
@@ -59,9 +60,11 @@ fn main() {
                         let config_path = config_root.join(ancestor).join("config.yaml");
                         let config = cached_configs
                             .entry(config_path)
-                            .or_insert_with_key(|x| load_config(x.as_path()));
+                            .or_insert_with_key(|x| load_config(x.as_path(), &library_config).ok());
                         if let Some(config) = config {
-                            if let Some(songs) = &config.songs {}
+                            if let Some(songs) = &config.songs {
+                                songs.apply(&mut metadata);
+                            }
                         }
                     }
                 }
@@ -70,15 +73,26 @@ fn main() {
     }
 }
 
-fn load_config(path: &Path) -> Option<SongConfig> {
-    match load_yaml::<SongConfig>(path) {
-        Err(YamlError::Io(err)) if err.kind() == ErrorKind::NotFound => None,
+#[derive(Error, Debug)]
+#[error("{0}")]
+pub enum ConfigError {
+    Yaml(#[from] YamlError),
+    Library(#[from] LibraryError),
+}
+
+fn load_config(path: &Path, library_config: &LibraryConfig) -> Result<SongConfig, ConfigError> {
+    match load_yaml::<RawSongConfig>(path) {
+        Err(YamlError::Io(error)) if error.kind() == ErrorKind::NotFound => {
+            Err(ConfigError::Yaml(YamlError::Io(error)))
+        }
         Err(error) => {
             eprintln!("{}", path.display().to_string().red());
             eprintln!("{}", error.to_string().red());
-            None
+            Err(ConfigError::Yaml(error))
         }
-        Ok(config) => Some(config),
+        Ok(config) => library_config
+            .resolve_config(config)
+            .map_err(|x| ConfigError::Library(x)),
     }
 }
 

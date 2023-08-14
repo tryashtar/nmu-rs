@@ -9,6 +9,10 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use thiserror::Error;
 
+use crate::song_config::{
+    AllSetter, Metadata, MetadataOperation, RawSongConfig, ReferencableOperation, SongConfig,
+};
+
 #[derive(Deserialize)]
 pub struct RawLibraryConfig {
     library: PathBuf,
@@ -18,6 +22,7 @@ pub struct RawLibraryConfig {
     custom_fields: Vec<String>,
     cache: Option<PathBuf>,
     art: Option<RawArtRepo>,
+    pub named_strategies: HashMap<String, MetadataOperation>,
 }
 
 pub struct LibraryConfig {
@@ -28,6 +33,7 @@ pub struct LibraryConfig {
     pub custom_fields: Vec<String>,
     pub date_cache: DateCache,
     pub art_repo: Option<ArtRepo>,
+    pub named_strategies: HashMap<String, MetadataOperation>,
 }
 impl LibraryConfig {
     pub fn new(folder: &Path, raw: RawLibraryConfig) -> Self {
@@ -39,8 +45,67 @@ impl LibraryConfig {
             custom_fields: raw.custom_fields,
             date_cache: DateCache::new(raw.cache.map(|x| folder.join(x))),
             art_repo: raw.art.map(|x| ArtRepo::new(folder, x)),
+            named_strategies: raw.named_strategies,
         }
     }
+    pub fn resolve_config(&self, raw_config: RawSongConfig) -> Result<SongConfig, LibraryError> {
+        let songs = raw_config
+            .songs
+            .map(|x| self.resolve_operation(&x))
+            .transpose()?;
+        let set = raw_config
+            .set
+            .map(|x| {
+                x.into_iter()
+                    .map(|(y, z)| self.resolve_operation(&z).map(|q| (y, q)))
+                    .collect::<Result<HashMap<PathBuf, MetadataOperation>, _>>()
+            })
+            .transpose()?;
+        let set_all = raw_config
+            .set_all
+            .map(|x| {
+                x.into_iter()
+                    .map(|y| {
+                        self.resolve_operation(&y.set)
+                            .map(|q| AllSetter::new(y.names, q))
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?;
+        Ok(SongConfig {
+            songs,
+            set,
+            set_all,
+        })
+    }
+    fn resolve_operation(
+        &self,
+        operation: &ReferencableOperation,
+    ) -> Result<MetadataOperation, LibraryError> {
+        match operation {
+            ReferencableOperation::Direct(direct) => Ok(direct.clone()),
+            ReferencableOperation::Reference(reference) => {
+                match self.named_strategies.get(reference) {
+                    None => Err(LibraryError::MissingNamedStrategy(reference.clone())),
+                    Some(strat) => Ok(strat.clone()),
+                }
+            }
+            ReferencableOperation::Sequence(sequence) => {
+                let converted: Result<Vec<_>, _> =
+                    sequence.iter().map(|x| self.resolve_operation(x)).collect();
+                match converted {
+                    Ok(vec) => Ok(MetadataOperation::Sequence(vec)),
+                    Err(err) => Err(err),
+                }
+            }
+        }
+    }
+}
+
+#[derive(Error, Debug)]
+#[error("{0}")]
+pub enum LibraryError {
+    MissingNamedStrategy(String),
 }
 
 #[derive(Deserialize)]
