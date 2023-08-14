@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::SystemTime;
 use thiserror::Error;
 
@@ -22,7 +23,7 @@ pub struct RawLibraryConfig {
     custom_fields: Vec<String>,
     cache: Option<PathBuf>,
     art: Option<RawArtRepo>,
-    pub named_strategies: HashMap<String, MetadataOperation>,
+    pub named_strategies: HashMap<String, Rc<MetadataOperation>>,
 }
 
 pub struct LibraryConfig {
@@ -33,7 +34,7 @@ pub struct LibraryConfig {
     pub custom_fields: Vec<String>,
     pub date_cache: DateCache,
     pub art_repo: Option<ArtRepo>,
-    pub named_strategies: HashMap<String, MetadataOperation>,
+    pub named_strategies: HashMap<String, Rc<MetadataOperation>>,
 }
 impl LibraryConfig {
     pub fn new(folder: &Path, raw: RawLibraryConfig) -> Self {
@@ -51,14 +52,14 @@ impl LibraryConfig {
     pub fn resolve_config(&self, raw_config: RawSongConfig) -> Result<SongConfig, LibraryError> {
         let songs = raw_config
             .songs
-            .map(|x| self.resolve_operation(&x))
+            .map(|x| self.resolve_operation(x))
             .transpose()?;
         let set = raw_config
             .set
             .map(|x| {
                 x.into_iter()
-                    .map(|(y, z)| self.resolve_operation(&z).map(|q| (y, q)))
-                    .collect::<Result<HashMap<PathBuf, MetadataOperation>, _>>()
+                    .map(|(y, z)| self.resolve_operation(z).map(|q| (y, q)))
+                    .collect::<Result<HashMap<_, _>, _>>()
             })
             .transpose()?;
         let set_all = raw_config
@@ -66,7 +67,7 @@ impl LibraryConfig {
             .map(|x| {
                 x.into_iter()
                     .map(|y| {
-                        self.resolve_operation(&y.set)
+                        self.resolve_operation(y.set)
                             .map(|q| AllSetter::new(y.names, q))
                     })
                     .collect::<Result<Vec<_>, _>>()
@@ -80,24 +81,21 @@ impl LibraryConfig {
     }
     fn resolve_operation(
         &self,
-        operation: &ReferencableOperation,
-    ) -> Result<MetadataOperation, LibraryError> {
+        operation: ReferencableOperation,
+    ) -> Result<Rc<MetadataOperation>, LibraryError> {
         match operation {
-            ReferencableOperation::Direct(direct) => Ok(direct.clone()),
+            ReferencableOperation::Direct(direct) => Ok(Rc::new(direct)),
             ReferencableOperation::Reference(reference) => {
-                match self.named_strategies.get(reference) {
-                    None => Err(LibraryError::MissingNamedStrategy(reference.clone())),
+                match self.named_strategies.get(&reference) {
+                    None => Err(LibraryError::MissingNamedStrategy(reference)),
                     Some(strat) => Ok(strat.clone()),
                 }
             }
-            ReferencableOperation::Sequence(sequence) => {
-                let converted: Result<Vec<_>, _> =
-                    sequence.iter().map(|x| self.resolve_operation(x)).collect();
-                match converted {
-                    Ok(vec) => Ok(MetadataOperation::Sequence(vec)),
-                    Err(err) => Err(err),
-                }
-            }
+            ReferencableOperation::Sequence(sequence) => sequence
+                .into_iter()
+                .map(|x| self.resolve_operation(x))
+                .collect::<Result<Vec<_>, _>>()
+                .map(|x| Rc::new(MetadataOperation::Sequence(x))),
         }
     }
 }
