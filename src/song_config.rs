@@ -1,13 +1,14 @@
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
+    ops::Range,
     path::PathBuf,
 };
 
 #[derive(Deserialize, Serialize)]
 pub struct SongConfig {
     pub songs: Option<MetadataOperation>,
-    pub set: Option<HashMap<ItemSelector, MetadataOperation>>,
+    pub set: Option<HashMap<PathBuf, MetadataOperation>>,
     pub set_all: Option<Vec<AllSetter>>,
 }
 
@@ -29,16 +30,50 @@ impl MetadataOperation {
     pub fn apply(&self, metadata: &mut Metadata) {}
 }
 
-#[derive(Eq, Hash, PartialEq, Debug, Deserialize, Serialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum ItemSelector {
     Path(PathBuf),
+    Multi(Vec<ItemSelector>),
+    Segmented {
+        path: Vec<PathSegment>,
+    },
+    Subpath {
+        subpath: Box<ItemSelector>,
+        select: Box<ItemSelector>,
+    },
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(untagged)]
+pub enum PathSegment {
+    Literal(String),
+    Regex { regex: String },
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+#[serde(untagged)]
 pub enum LocalItemSelector {
+    #[serde(alias = "self")]
     This,
+    Select {
+        selector: ItemSelector,
+    },
+    DrillUp {
+        must_be: Option<MusicItemType>,
+        up: Range<i32>,
+    },
+    DrillDown {
+        must_be: Option<MusicItemType>,
+        from_root: Range<i32>,
+    },
+}
+
+#[derive(Deserialize, Serialize)]
+pub enum MusicItemType {
+    Song,
+    Folder,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -55,9 +90,14 @@ pub enum ValueGetter {
     Direct(MetadataValue),
     Copy {
         from: LocalItemSelector,
+        #[serde(default = "default_value")]
         value: ItemValueGetter,
         modify: Option<ValueModifier>,
     },
+}
+
+fn default_value() -> ItemValueGetter {
+    ItemValueGetter::CleanName
 }
 
 #[derive(Deserialize, Serialize)]
@@ -70,7 +110,7 @@ pub enum ItemValueGetter {
     FileName,
     CleanName,
     Path,
-    Copy(MetadataField),
+    Copy { copy: MetadataField },
 }
 
 pub struct Metadata {

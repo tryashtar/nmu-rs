@@ -12,6 +12,7 @@ id3 = "1.7.0"
 jwalk = "0.8.1"
 metaflac = "0.2.5"
 path-absolutize = "3.1.0"
+regex = "1.9.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 thiserror = "1.0.44"
