@@ -46,7 +46,8 @@ fn item_sel_seg() {
 
 #[test]
 fn item_sel_subpath() {
-    let result = serde_yaml::from_str::<ItemSelector>("subpath: a/b/c, select: [d, e, f]").unwrap();
+    let result =
+        serde_yaml::from_str::<ItemSelector>("{subpath: a/b/c, select: [d, e, f]}").unwrap();
     assert!(matches!(result, ItemSelector::Subpath { .. }));
 }
 
@@ -65,18 +66,18 @@ fn segment_regex() {
 #[test]
 fn local_item_self() {
     let result = serde_yaml::from_str::<LocalItemSelector>("this").unwrap();
-    assert!(matches!(result, LocalItemSelector::This));
+    assert!(matches!(result, LocalItemSelector::This { .. }));
 }
 
 #[test]
 fn local_item_this() {
     let result = serde_yaml::from_str::<LocalItemSelector>("self").unwrap();
-    assert!(matches!(result, LocalItemSelector::This));
+    assert!(matches!(result, LocalItemSelector::This { .. }));
 }
 
 #[test]
 fn local_item_select() {
-    let result = serde_yaml::from_str::<LocalItemSelector>("select: 'a/b/c'").unwrap();
+    let result = serde_yaml::from_str::<LocalItemSelector>("selector: 'a/b/c'").unwrap();
     assert!(matches!(result, LocalItemSelector::Select { .. }));
 }
 
@@ -95,7 +96,10 @@ fn local_item_down() {
 #[test]
 fn field_title() {
     let result = serde_yaml::from_str::<MetadataField>("title").unwrap();
-    assert!(matches!(result, MetadataField::Title));
+    assert!(matches!(
+        result,
+        MetadataField::Builtin(BuiltinMetadataField::Title)
+    ));
 }
 
 #[test]
@@ -119,7 +123,7 @@ fn field_select_multiple() {
 #[test]
 fn field_select_all() {
     let result = serde_yaml::from_str::<FieldSelector>("'*'").unwrap();
-    assert!(matches!(result, FieldSelector::All));
+    assert!(matches!(result, FieldSelector::All { .. }));
 }
 
 #[test]
@@ -149,19 +153,28 @@ fn value_from() {
 #[test]
 fn value_get_name() {
     let result = serde_yaml::from_str::<ItemValueGetter>("clean_name").unwrap();
-    assert!(matches!(result, ItemValueGetter::CleanName));
+    assert!(matches!(
+        result,
+        ItemValueGetter::Field(FieldValueGetter::CleanName)
+    ));
 }
 
 #[test]
 fn value_get_file() {
     let result = serde_yaml::from_str::<ItemValueGetter>("file_name").unwrap();
-    assert!(matches!(result, ItemValueGetter::FileName));
+    assert!(matches!(
+        result,
+        ItemValueGetter::Field(FieldValueGetter::FileName)
+    ));
 }
 
 #[test]
 fn value_get_path() {
     let result = serde_yaml::from_str::<ItemValueGetter>("path").unwrap();
-    assert!(matches!(result, ItemValueGetter::Path));
+    assert!(matches!(
+        result,
+        ItemValueGetter::Field(FieldValueGetter::Path)
+    ));
 }
 
 #[test]

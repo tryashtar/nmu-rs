@@ -1,7 +1,7 @@
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
-    ops::Range,
     path::PathBuf,
 };
 
@@ -9,6 +9,7 @@ use std::{
 pub struct SongConfig {
     pub songs: Option<MetadataOperation>,
     pub set: Option<HashMap<PathBuf, MetadataOperation>>,
+    #[serde(rename = "set all")]
     pub set_all: Option<Vec<AllSetter>>,
 }
 
@@ -48,26 +49,42 @@ pub enum ItemSelector {
 #[serde(untagged)]
 pub enum PathSegment {
     Literal(String),
-    Regex { regex: String },
+    Regex {
+        #[serde(with = "serde_regex")]
+        regex: Regex,
+    },
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 #[serde(untagged)]
 pub enum LocalItemSelector {
-    #[serde(alias = "self")]
-    This,
+    This(SelfItemSelector),
     Select {
         selector: ItemSelector,
     },
     DrillUp {
         must_be: Option<MusicItemType>,
-        up: Range<i32>,
+        up: Range,
     },
     DrillDown {
         must_be: Option<MusicItemType>,
-        from_root: Range<i32>,
+        from_root: Range,
     },
+}
+
+// not directly in LocalItemSelector as a workaround for serde
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SelfItemSelector {
+    #[serde(alias = "self")]
+    This,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum Range {
+    Index(i32),
 }
 
 #[derive(Deserialize, Serialize)]
@@ -79,8 +96,15 @@ pub enum MusicItemType {
 #[derive(Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum FieldSelector {
+    All(AllFieldSelector),
     Single(MetadataField),
     Multiple(HashSet<MetadataField>),
+}
+
+// not directly in FieldSelector as a workaround for serde
+#[derive(Deserialize, Serialize)]
+pub enum AllFieldSelector {
+    #[serde(rename = "*")]
     All,
 }
 
@@ -97,7 +121,7 @@ pub enum ValueGetter {
 }
 
 fn default_value() -> ItemValueGetter {
-    ItemValueGetter::CleanName
+    ItemValueGetter::Field(FieldValueGetter::CleanName)
 }
 
 #[derive(Deserialize, Serialize)]
@@ -107,10 +131,17 @@ pub enum ValueModifier {}
 #[derive(Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum ItemValueGetter {
+    Field(FieldValueGetter),
+    Copy { copy: MetadataField },
+}
+
+// not directly in ItemValueGetter as a workaround for serde
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldValueGetter {
     FileName,
     CleanName,
     Path,
-    Copy { copy: MetadataField },
 }
 
 pub struct Metadata {
@@ -133,8 +164,16 @@ pub enum MetadataValue {
 }
 
 #[derive(Eq, Hash, PartialEq, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(untagged)]
 pub enum MetadataField {
+    Builtin(BuiltinMetadataField),
+    Custom(String),
+}
+
+// not directly in MetadataField as a workaround for serde
+#[derive(Eq, Hash, PartialEq, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BuiltinMetadataField {
     Title,
     Album,
     #[serde(alias = "performer")]
@@ -163,5 +202,4 @@ pub enum MetadataField {
     #[serde(rename = "simple lyrics")]
     #[serde(alias = "lyrics")]
     SimpleLyrics,
-    Custom(String),
 }
