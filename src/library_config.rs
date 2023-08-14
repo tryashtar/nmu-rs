@@ -211,7 +211,7 @@ impl DateCache {
                 None => true,
                 Some(cache_time) => match fs::metadata(&path).and_then(|x| x.modified()) {
                     Err(_) => true,
-                    Ok(time) => Into::<SystemTime>::into(*cache_time) < time,
+                    Ok(file_time) => Into::<SystemTime>::into(*cache_time) < file_time,
                 },
             },
         }

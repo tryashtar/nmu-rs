@@ -182,3 +182,87 @@ fn value_get_meta() {
     let result = serde_yaml::from_str::<ItemValueGetter>("copy: title").unwrap();
     assert!(matches!(result, ItemValueGetter::Copy { .. }));
 }
+
+#[test]
+fn meta_op_modify() {
+    let result =
+        serde_yaml::from_str::<MetadataOperation>("modify: {title: {split: ' '}}").unwrap();
+    assert!(matches!(result, MetadataOperation::Modify { .. }));
+}
+
+#[test]
+fn meta_op_context() {
+    let result = serde_yaml::from_str::<MetadataOperation>(
+        "{source: 'test', modify: {title: {split: ' '}}}",
+    )
+    .unwrap();
+    assert!(matches!(result, MetadataOperation::Context { .. }));
+}
+
+#[test]
+fn meta_op_mode() {
+    let result =
+        serde_yaml::from_str::<MetadataOperation>("{mode: append, values: {title: 'test'}}")
+            .unwrap();
+    assert!(matches!(result, MetadataOperation::Moded { .. }));
+}
+
+#[test]
+fn range_index() {
+    let result = serde_yaml::from_str::<Range>("5").unwrap();
+    assert!(matches!(result, Range::Index { .. }));
+}
+
+#[test]
+fn range_tuple() {
+    let result = serde_yaml::from_str::<Range>("[0, 5]").unwrap();
+    assert!(matches!(result, Range::Tuple { .. }));
+}
+
+#[test]
+fn range_struct() {
+    let result = serde_yaml::from_str::<Range>("{start: 5}").unwrap();
+    assert!(matches!(result, Range::Struct { .. }));
+}
+
+#[test]
+fn modifier_append() {
+    let result = serde_yaml::from_str::<ValueModifier>("append: 'test'").unwrap();
+    assert!(matches!(result, ValueModifier::Append { .. }));
+}
+
+#[test]
+fn modifier_prepend() {
+    let result = serde_yaml::from_str::<ValueModifier>("prepend: 'test'").unwrap();
+    assert!(matches!(result, ValueModifier::Prepend { .. }));
+}
+
+#[test]
+fn modifier_join() {
+    let result = serde_yaml::from_str::<ValueModifier>("join: 'test'").unwrap();
+    assert!(matches!(result, ValueModifier::Join { .. }));
+}
+
+#[test]
+fn modifier_split() {
+    let result = serde_yaml::from_str::<ValueModifier>("split: 'test'").unwrap();
+    assert!(matches!(result, ValueModifier::Split { .. }));
+}
+
+#[test]
+fn modifier_sequence() {
+    let result = serde_yaml::from_str::<ValueModifier>("[{split: ' '},{join: ','}]").unwrap();
+    assert!(matches!(result, ValueModifier::Sequence { .. }));
+}
+
+#[test]
+fn take_simple() {
+    let result = serde_yaml::from_str::<ValueModifier>("take: first").unwrap();
+    assert!(matches!(result, ValueModifier::Take { .. }));
+}
+
+#[test]
+fn take_struct() {
+    let result = serde_yaml::from_str::<ValueModifier>("take: {index: first}").unwrap();
+    assert!(matches!(result, ValueModifier::Take { .. }));
+}

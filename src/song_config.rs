@@ -2,7 +2,8 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
-    path::PathBuf, rc::Rc,
+    path::PathBuf,
+    rc::Rc,
 };
 
 #[derive(Deserialize, Serialize)]
@@ -46,13 +47,36 @@ pub enum ReferencableOperation {
 #[derive(Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum MetadataOperation {
-    Blank { remove: FieldSelector },
-    Keep { keep: FieldSelector },
+    Blank {
+        remove: FieldSelector,
+    },
+    Keep {
+        keep: FieldSelector,
+    },
+    Context {
+        source: ValueGetter,
+        modify: HashMap<MetadataField, ValueModifier>,
+    },
+    Modify {
+        modify: HashMap<MetadataField, ValueModifier>,
+    },
+    Moded {
+        mode: CombineMode,
+        values: HashMap<MetadataField, ValueGetter>,
+    },
     Sequence(Vec<Rc<MetadataOperation>>),
     Set(HashMap<MetadataField, ValueGetter>),
 }
 impl MetadataOperation {
     pub fn apply(&self, metadata: &mut Metadata) {}
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CombineMode {
+    Replace,
+    Append,
+    Prepend,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -110,6 +134,11 @@ pub enum SelfItemSelector {
 pub enum Range {
     Index(i32),
     Named(NamedRange),
+    Tuple(i32, i32),
+    Struct {
+        start: Option<i32>,
+        stop: Option<i32>,
+    },
 }
 
 // not directly in Range as a workaround for serde
@@ -122,6 +151,7 @@ pub enum NamedRange {
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum MusicItemType {
     Song,
     Folder,
@@ -160,7 +190,40 @@ fn default_value() -> ItemValueGetter {
 
 #[derive(Deserialize, Serialize)]
 #[serde(untagged)]
-pub enum ValueModifier {}
+pub enum ValueModifier {
+    Prepend {
+        prepend: Box<ValueGetter>,
+        index: Option<Range>,
+    },
+    Append {
+        append: Box<ValueGetter>,
+        index: Option<Range>,
+    },
+    Join {
+        join: Box<ValueGetter>,
+    },
+    Split {
+        split: String,
+    },
+    Regex {
+        #[serde(with = "serde_regex")]
+        regex: Regex,
+    },
+    Group {
+        group: String,
+    },
+    Take {
+        take: TakeModifier,
+    },
+    Sequence(Vec<ValueModifier>),
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum TakeModifier {
+    Simple(Range),
+    Defined { index: Range },
+}
 
 #[derive(Deserialize, Serialize)]
 #[serde(untagged)]
