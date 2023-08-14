@@ -7,8 +7,8 @@ use std::{
 
 #[derive(Deserialize, Serialize)]
 pub struct SongConfig {
-    pub songs: Option<MetadataOperation>,
-    pub set: Option<HashMap<PathBuf, MetadataOperation>>,
+    pub songs: Option<ReferencableOperation>,
+    pub set: Option<HashMap<PathBuf, ReferencableOperation>>,
     #[serde(rename = "set all")]
     pub set_all: Option<Vec<AllSetter>>,
 }
@@ -16,7 +16,15 @@ pub struct SongConfig {
 #[derive(Deserialize, Serialize)]
 pub struct AllSetter {
     names: ItemSelector,
-    set: MetadataOperation,
+    set: ReferencableOperation,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum ReferencableOperation {
+    Reference(String),
+    Sequence(Vec<ReferencableOperation>),
+    Direct(MetadataOperation),
 }
 
 #[derive(Deserialize, Serialize)]
@@ -85,6 +93,16 @@ pub enum SelfItemSelector {
 #[serde(untagged)]
 pub enum Range {
     Index(i32),
+    Named(NamedRange),
+}
+
+// not directly in Range as a workaround for serde
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NamedRange {
+    All,
+    First,
+    Last,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -160,6 +178,7 @@ impl Metadata {
 pub enum MetadataValue {
     Blank,
     String(String),
+    Number(u32),
     List(Vec<String>),
 }
 

@@ -61,9 +61,7 @@ fn main() {
                             .entry(config_path)
                             .or_insert_with_key(|x| load_config(x.as_path()));
                         if let Some(config) = config {
-                            if let Some(songs) = &config.songs {
-                                songs.apply(&mut metadata);
-                            }
+                            if let Some(songs) = &config.songs {}
                         }
                     }
                 }
