@@ -11,7 +11,7 @@ use std::time::SystemTime;
 use thiserror::Error;
 
 use crate::song_config::{
-    AllSetter, Metadata, MetadataOperation, RawSongConfig, ReferencableOperation, SongConfig,
+    AllSetter, MetadataOperation, RawSongConfig, ReferencableOperation, SongConfig,
 };
 
 #[derive(Deserialize)]
@@ -41,8 +41,19 @@ impl LibraryConfig {
         Self {
             library_folder: folder.join(raw.library),
             log_folder: raw.logs.map(|x| folder.join(x)),
-            config_folders: raw.config_folders.iter().map(|x| folder.join(x)).collect(),
-            song_extensions: raw.extensions,
+            config_folders: raw
+                .config_folders
+                .into_iter()
+                .map(|x| folder.join(x))
+                .collect(),
+            song_extensions: raw
+                .extensions
+                .into_iter()
+                .map(|x| match x.strip_prefix('.') {
+                    Some(stripped) => stripped.to_owned(),
+                    None => x,
+                })
+                .collect(),
             custom_fields: raw.custom_fields,
             date_cache: DateCache::new(raw.cache.map(|x| folder.join(x))),
             art_repo: raw.art.map(|x| ArtRepo::new(folder, x)),
@@ -67,8 +78,10 @@ impl LibraryConfig {
             .map(|x| {
                 x.into_iter()
                     .map(|y| {
-                        self.resolve_operation(y.set)
-                            .map(|q| AllSetter::new(y.names, q))
+                        self.resolve_operation(y.set).map(|q| AllSetter {
+                            names: y.names,
+                            set: q,
+                        })
                     })
                     .collect::<Result<Vec<_>, _>>()
             })
@@ -157,7 +170,7 @@ impl ArtCache {
             },
         }
     }
-    fn save(&self) -> Result<(), YamlError> {
+    pub fn save(&self) -> Result<(), YamlError> {
         match &self.path {
             None => Ok(()),
             Some(path) => {
@@ -193,7 +206,7 @@ impl DateCache {
             },
         }
     }
-    fn save(&self) -> Result<(), YamlError> {
+    pub fn save(&self) -> Result<(), YamlError> {
         match &self.path {
             None => Ok(()),
             Some(path) => {

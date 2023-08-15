@@ -40,35 +40,47 @@ fn main() {
                 .unwrap_or_else(|| Path::new(""));
             let library_config: LibraryConfig =
                 LibraryConfig::new(library_config_folder, raw_config);
-            let mut scan_songs = BTreeSet::<PathBuf>::new();
-            let mut cached_configs: HashMap<PathBuf, Option<SongConfig>> = HashMap::new();
-            find_scan_songs(&mut scan_songs, &library_config);
-            for song_path in scan_songs {
-                let nice_path = song_path
-                    .strip_prefix(&library_config.library_folder)
-                    .unwrap_or(song_path.as_path())
-                    .with_extension("");
-                println!("{}", nice_path.display());
-                let mut metadata = Metadata::new();
-                let relative_parent = song_path
-                    .strip_prefix(&library_config.library_folder)
-                    .unwrap_or(song_path.as_path())
-                    .parent()
-                    .unwrap_or_else(|| Path::new(""));
-                for ancestor in relative_parent.ancestors().collect::<Vec<_>>().iter().rev() {
-                    for config_root in &library_config.config_folders {
-                        let config_path = config_root.join(ancestor).join("config.yaml");
-                        let config = cached_configs
-                            .entry(config_path)
-                            .or_insert_with_key(|x| load_config(x.as_path(), &library_config).ok());
-                        if let Some(config) = config {
-                            if let Some(songs) = &config.songs {
-                                songs.apply(&mut metadata);
-                            }
-                        }
+            do_scan(library_config);
+        }
+    }
+}
+
+fn do_scan(library_config: LibraryConfig) {
+    let mut scan_songs = BTreeSet::<PathBuf>::new();
+    let mut cached_configs: HashMap<PathBuf, Option<SongConfig>> = HashMap::new();
+    find_scan_songs(&mut scan_songs, &library_config);
+    for song_path in scan_songs {
+        let nice_path = song_path
+            .strip_prefix(&library_config.library_folder)
+            .unwrap_or(song_path.as_path())
+            .with_extension("");
+        println!("{}", nice_path.display());
+        let mut metadata = Metadata::new();
+        let relative_parent = song_path
+            .strip_prefix(&library_config.library_folder)
+            .unwrap_or(song_path.as_path())
+            .parent()
+            .unwrap_or_else(|| Path::new(""));
+        for ancestor in relative_parent.ancestors().collect::<Vec<_>>().iter().rev() {
+            for config_root in &library_config.config_folders {
+                let config_path = config_root.join(ancestor).join("config.yaml");
+                let config = cached_configs
+                    .entry(config_path)
+                    .or_insert_with_key(|x| load_config(x.as_path(), &library_config).ok());
+                if let Some(config) = config {
+                    if let Some(songs) = &config.songs {
+                        songs.apply(&mut metadata);
                     }
                 }
             }
+        }
+    }
+    if let Err(err) = library_config.date_cache.save() {
+        eprintln!("{}", err);
+    }
+    if let Some(repo) = library_config.art_repo {
+        if let Err(err) = repo.used_templates.save() {
+            eprintln!("{}", err);
         }
     }
 }
@@ -92,7 +104,7 @@ fn load_config(path: &Path, library_config: &LibraryConfig) -> Result<SongConfig
         }
         Ok(config) => library_config
             .resolve_config(config)
-            .map_err(|x| ConfigError::Library(x)),
+            .map_err(ConfigError::Library),
     }
 }
 

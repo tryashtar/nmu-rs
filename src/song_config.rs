@@ -27,13 +27,8 @@ pub struct SongConfig {
 }
 
 pub struct AllSetter {
-    names: ItemSelector,
-    set: Rc<MetadataOperation>,
-}
-impl AllSetter {
-    pub fn new(names: ItemSelector, set: Rc<MetadataOperation>) -> Self {
-        Self { names, set }
-    }
+    pub names: ItemSelector,
+    pub set: Rc<MetadataOperation>,
 }
 
 #[derive(Deserialize, Serialize)]
