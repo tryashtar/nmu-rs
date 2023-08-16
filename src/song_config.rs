@@ -2,9 +2,12 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
-    path::PathBuf,
+    path::{Component, Path, PathBuf},
     rc::Rc,
 };
+use strum::{EnumIter, IntoEnumIterator};
+
+use crate::library_config::LibraryConfig;
 
 #[derive(Deserialize, Serialize)]
 pub struct RawSongConfig {
@@ -21,9 +24,7 @@ pub struct RawAllSetter {
 }
 
 pub struct SongConfig {
-    pub songs: Option<Rc<MetadataOperation>>,
-    pub set: Option<HashMap<PathBuf, Rc<MetadataOperation>>>,
-    pub set_all: Option<Vec<AllSetter>>,
+    pub set: Vec<AllSetter>,
 }
 
 pub struct AllSetter {
@@ -63,7 +64,72 @@ pub enum MetadataOperation {
     Set(HashMap<MetadataField, ValueGetter>),
 }
 impl MetadataOperation {
-    pub fn apply(&self, metadata: &mut Metadata) {}
+    pub fn apply(&self, metadata: &mut Metadata, path: &Path, config: &LibraryConfig) {
+        match self {
+            Self::Blank { remove } => {
+                for field in &config.custom_fields {
+                    if remove.is_match(field) {
+                        metadata.fields.insert(field.clone(), MetadataValue::Blank);
+                    }
+                }
+                for field in BuiltinMetadataField::iter() {
+                    let builtin = MetadataField::Builtin(field);
+                    if remove.is_match(&builtin) {
+                        metadata.fields.insert(builtin, MetadataValue::Blank);
+                    }
+                }
+            }
+            Self::Keep { keep } => {
+                metadata.fields.retain(|k, _| !keep.is_match(k));
+            }
+            Self::Set(set) => {
+                for (field, value) in set {
+                    if let Ok(value) = value.get(path) {
+                        metadata.fields.insert(field.clone(), value);
+                    }
+                }
+            }
+            Self::Context { source, modify } => {
+                if let Ok(value) = source.get(path) {
+                    for (field, modifier) in modify {
+                        if let Ok(modified) = modifier.modify(&value) {
+                            metadata.fields.insert(field.clone(), modified);
+                        }
+                    }
+                }
+            }
+            Self::Sequence(many) => {
+                for op in many {
+                    op.apply(metadata, path, config);
+                }
+            }
+            Self::Moded { mode, values } => {
+                for (field, value) in values {
+                    if let Ok(adding) = value.get(path) {
+                        match metadata.fields.get(field) {
+                            None => {
+                                metadata.fields.insert(field.clone(), adding);
+                            }
+                            Some(existing) => {
+                                if let Ok(combined) = existing.combine(&adding, mode) {
+                                    metadata.fields.insert(field.clone(), combined);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Self::Modify { modify } => {
+                for (field, modifier) in modify {
+                    if let Some(existing) = metadata.fields.get(field) {
+                        if let Ok(modified) = modifier.modify(existing) {
+                            metadata.fields.insert(field.clone(), modified);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -77,6 +143,7 @@ pub enum CombineMode {
 #[derive(Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum ItemSelector {
+    All,
     Path(PathBuf),
     Multi(Vec<ItemSelector>),
     Segmented {
@@ -86,6 +153,38 @@ pub enum ItemSelector {
         subpath: Box<ItemSelector>,
         select: Box<ItemSelector>,
     },
+}
+impl ItemSelector {
+    pub fn matches(&self, check_path: &Path) -> bool {
+        !self.consume(check_path).is_empty()
+    }
+    fn consume<'a>(&self, check_path: &'a Path) -> Vec<&'a Path> {
+        match self {
+            Self::All => vec![check_path],
+            Self::Path(path) => check_path.strip_prefix(path).into_iter().collect(),
+            Self::Multi(multi) => multi.iter().flat_map(|x| x.consume(check_path)).collect(),
+            Self::Segmented { path } => {
+                let components = check_path.components().collect::<Vec<_>>();
+                if path.len() > components.len() {
+                    return vec![];
+                }
+                for (segment, component) in path.iter().zip(components.iter()) {
+                    if !segment.matches(component) {
+                        return vec![];
+                    }
+                }
+                check_path
+                    .strip_prefix(components.into_iter().take(path.len()).collect::<PathBuf>())
+                    .into_iter()
+                    .collect()
+            }
+            Self::Subpath { subpath, select } => subpath
+                .consume(check_path)
+                .into_iter()
+                .flat_map(|x| select.consume(x))
+                .collect(),
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -97,15 +196,24 @@ pub enum PathSegment {
         regex: Regex,
     },
 }
+impl PathSegment {
+    fn matches(&self, component: &Component) -> bool {
+        let str = component.as_os_str().to_str();
+        match str {
+            None => false,
+            Some(str) => match self {
+                Self::Literal(literal) => str == literal,
+                Self::Regex { regex } => regex.is_match(str),
+            },
+        }
+    }
+}
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 #[serde(untagged)]
 pub enum LocalItemSelector {
     This(SelfItemSelector),
-    Select {
-        selector: ItemSelector,
-    },
     DrillUp {
         must_be: Option<MusicItemType>,
         up: Range,
@@ -114,6 +222,11 @@ pub enum LocalItemSelector {
         must_be: Option<MusicItemType>,
         from_root: Range,
     },
+}
+impl LocalItemSelector {
+    fn get<'a>(&self, start: &'a Path) -> Option<&'a Path> {
+        Some(start)
+    }
 }
 
 // not directly in LocalItemSelector as a workaround for serde
@@ -159,6 +272,15 @@ pub enum FieldSelector {
     Single(MetadataField),
     Multiple(HashSet<MetadataField>),
 }
+impl FieldSelector {
+    fn is_match(&self, field: &MetadataField) -> bool {
+        match self {
+            Self::All(_) => true,
+            Self::Single(single) => field == single,
+            Self::Multiple(set) => set.contains(field),
+        }
+    }
+}
 
 // not directly in FieldSelector as a workaround for serde
 #[derive(Deserialize, Serialize)]
@@ -177,6 +299,18 @@ pub enum ValueGetter {
         value: ItemValueGetter,
         modify: Option<ValueModifier>,
     },
+}
+impl ValueGetter {
+    fn get(&self, path: &Path) -> Result<MetadataValue, ValueError> {
+        match self {
+            Self::Direct(value) => Ok(value.clone()),
+            Self::Copy {
+                from,
+                value,
+                modify,
+            } => Err(ValueError::UnexpectedType),
+        }
+    }
 }
 
 fn default_value() -> ItemValueGetter {
@@ -212,6 +346,15 @@ pub enum ValueModifier {
     },
     Sequence(Vec<ValueModifier>),
 }
+impl ValueModifier {
+    fn modify(&self, value: &MetadataValue) -> Result<MetadataValue, ValueError> {
+        Err(ValueError::UnexpectedType)
+    }
+}
+
+pub enum ValueError {
+    UnexpectedType,
+}
 
 #[derive(Deserialize, Serialize)]
 #[serde(untagged)]
@@ -226,6 +369,9 @@ pub enum ItemValueGetter {
     Field(FieldValueGetter),
     Copy { copy: MetadataField },
 }
+impl ItemValueGetter {
+    fn get(&self) {}
+}
 
 // not directly in ItemValueGetter as a workaround for serde
 #[derive(Deserialize, Serialize)]
@@ -236,6 +382,7 @@ pub enum FieldValueGetter {
     Path,
 }
 
+#[derive(Debug)]
 pub struct Metadata {
     pub fields: HashMap<MetadataField, MetadataValue>,
 }
@@ -247,7 +394,7 @@ impl Metadata {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum MetadataValue {
     Blank,
@@ -255,8 +402,34 @@ pub enum MetadataValue {
     Number(u32),
     List(Vec<String>),
 }
+impl MetadataValue {
+    fn combine(&self, other: &Self, mode: &CombineMode) -> Result<Self, ValueError> {
+        match mode {
+            CombineMode::Replace => Ok(other.clone()),
+            CombineMode::Append => {
+                let mut list1 = self.to_list()?;
+                let mut list2 = other.to_list()?;
+                list1.append(&mut list2);
+                Ok(Self::List(list1))
+            }
+            CombineMode::Prepend => {
+                let mut list1 = other.to_list()?;
+                let mut list2 = self.to_list()?;
+                list1.append(&mut list2);
+                Ok(Self::List(list1))
+            }
+        }
+    }
+    fn to_list(&self) -> Result<Vec<String>, ValueError> {
+        match self {
+            Self::Blank | Self::Number(_) => Err(ValueError::UnexpectedType),
+            Self::String(str) => Ok(vec![str.clone()]),
+            Self::List(list) => Ok(list.clone()),
+        }
+    }
+}
 
-#[derive(Eq, Hash, PartialEq, Debug, Deserialize, Serialize)]
+#[derive(Eq, Hash, PartialEq, Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum MetadataField {
     Builtin(BuiltinMetadataField),
@@ -264,7 +437,7 @@ pub enum MetadataField {
 }
 
 // not directly in MetadataField as a workaround for serde
-#[derive(Eq, Hash, PartialEq, Debug, Deserialize, Serialize)]
+#[derive(Eq, Hash, PartialEq, Debug, EnumIter, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BuiltinMetadataField {
     Title,

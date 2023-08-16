@@ -61,26 +61,36 @@ fn do_scan(library_config: LibraryConfig) {
             .unwrap_or(song_path.as_path())
             .parent()
             .unwrap_or_else(|| Path::new(""));
-        for ancestor in relative_parent.ancestors().collect::<Vec<_>>().iter().rev() {
+        for ancestor in relative_parent
+            .ancestors()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+        {
+            let select_song_path = nice_path
+                .strip_prefix(ancestor)
+                .unwrap_or(nice_path.as_path());
             for config_root in &library_config.config_folders {
                 let config_path = config_root.join(ancestor).join("config.yaml");
-                let config = cached_configs
+                if let Some(config) = cached_configs
                     .entry(config_path)
-                    .or_insert_with_key(|x| load_config(x.as_path(), &library_config).ok());
-                if let Some(config) = config {
-                    if let Some(songs) = &config.songs {
-                        songs.apply(&mut metadata);
+                    .or_insert_with_key(|x| load_config(x.as_path(), &library_config).ok())
+                {
+                    for setter in &config.set {
+                        if setter.names.matches(select_song_path) {
+                            setter.set.apply(&mut metadata, select_song_path, &library_config);
+                        }
                     }
                 }
             }
         }
     }
     if let Err(err) = library_config.date_cache.save() {
-        eprintln!("{}", err);
+        eprintln!("{}", err.to_string().red());
     }
     if let Some(repo) = library_config.art_repo {
         if let Err(err) = repo.used_templates.save() {
-            eprintln!("{}", err);
+            eprintln!("{}", err.to_string().red());
         }
     }
 }

@@ -11,7 +11,8 @@ use std::time::SystemTime;
 use thiserror::Error;
 
 use crate::song_config::{
-    AllSetter, MetadataOperation, RawSongConfig, ReferencableOperation, SongConfig,
+    AllSetter, ItemSelector, MetadataField, MetadataOperation, RawSongConfig,
+    ReferencableOperation, SongConfig,
 };
 
 #[derive(Deserialize)]
@@ -31,7 +32,7 @@ pub struct LibraryConfig {
     pub log_folder: Option<PathBuf>,
     pub config_folders: Vec<PathBuf>,
     pub song_extensions: HashSet<String>,
-    pub custom_fields: Vec<String>,
+    pub custom_fields: Vec<MetadataField>,
     pub date_cache: DateCache,
     pub art_repo: Option<ArtRepo>,
     pub named_strategies: HashMap<String, Rc<MetadataOperation>>,
@@ -54,7 +55,11 @@ impl LibraryConfig {
                     None => x,
                 })
                 .collect(),
-            custom_fields: raw.custom_fields,
+            custom_fields: raw
+                .custom_fields
+                .into_iter()
+                .map(MetadataField::Custom)
+                .collect(),
             date_cache: DateCache::new(raw.cache.map(|x| folder.join(x))),
             art_repo: raw.art.map(|x| ArtRepo::new(folder, x)),
             named_strategies: raw.named_strategies,
@@ -63,14 +68,26 @@ impl LibraryConfig {
     pub fn resolve_config(&self, raw_config: RawSongConfig) -> Result<SongConfig, LibraryError> {
         let songs = raw_config
             .songs
-            .map(|x| self.resolve_operation(x))
+            .map(|x| {
+                self.resolve_operation(x).map(|q| {
+                    vec![AllSetter {
+                        names: ItemSelector::All,
+                        set: q,
+                    }]
+                })
+            })
             .transpose()?;
         let set = raw_config
             .set
             .map(|x| {
                 x.into_iter()
-                    .map(|(y, z)| self.resolve_operation(z).map(|q| (y, q)))
-                    .collect::<Result<HashMap<_, _>, _>>()
+                    .map(|(y, z)| {
+                        self.resolve_operation(z).map(|q| AllSetter {
+                            names: ItemSelector::Path(y),
+                            set: q,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()
             })
             .transpose()?;
         let set_all = raw_config
@@ -86,11 +103,16 @@ impl LibraryConfig {
                     .collect::<Result<Vec<_>, _>>()
             })
             .transpose()?;
-        Ok(SongConfig {
-            songs,
-            set,
-            set_all,
-        })
+        let merged = set
+            .into_iter()
+            .chain(set_all)
+            .chain(songs)
+            .reduce(|mut result, mut more| {
+                result.append(&mut more);
+                result
+            })
+            .unwrap_or(vec![]);
+        Ok(SongConfig { set: merged })
     }
     fn resolve_operation(
         &self,
