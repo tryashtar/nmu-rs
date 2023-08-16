@@ -84,6 +84,7 @@ fn do_scan(library_config: LibraryConfig) {
                 }
             }
         }
+        println!("{:?}", metadata);
     }
     if let Err(err) = library_config.date_cache.save() {
         eprintln!("{}", err.to_string().red());

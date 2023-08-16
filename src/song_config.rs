@@ -2,10 +2,11 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
+    fmt::{self},
     path::{Component, Path, PathBuf},
     rc::Rc,
 };
-use strum::{EnumIter, IntoEnumIterator};
+use strum::{Display, EnumIter, IntoEnumIterator};
 
 use crate::library_config::LibraryConfig;
 
@@ -84,13 +85,13 @@ impl MetadataOperation {
             }
             Self::Set(set) => {
                 for (field, value) in set {
-                    if let Ok(value) = value.get(path) {
+                    if let Ok(value) = value.get(path, config) {
                         metadata.fields.insert(field.clone(), value);
                     }
                 }
             }
             Self::Context { source, modify } => {
-                if let Ok(value) = source.get(path) {
+                if let Ok(value) = source.get(path, config) {
                     for (field, modifier) in modify {
                         if let Ok(modified) = modifier.modify(&value) {
                             metadata.fields.insert(field.clone(), modified);
@@ -105,7 +106,7 @@ impl MetadataOperation {
             }
             Self::Moded { mode, values } => {
                 for (field, value) in values {
-                    if let Ok(adding) = value.get(path) {
+                    if let Ok(adding) = value.get(path, config) {
                         match metadata.fields.get(field) {
                             None => {
                                 metadata.fields.insert(field.clone(), adding);
@@ -214,6 +215,9 @@ impl PathSegment {
 #[serde(untagged)]
 pub enum LocalItemSelector {
     This(SelfItemSelector),
+    Select {
+        selector: ItemSelector,
+    },
     DrillUp {
         must_be: Option<MusicItemType>,
         up: Range,
@@ -301,14 +305,22 @@ pub enum ValueGetter {
     },
 }
 impl ValueGetter {
-    fn get(&self, path: &Path) -> Result<MetadataValue, ValueError> {
+    fn get(&self, path: &Path, config: &LibraryConfig) -> Result<MetadataValue, ValueError> {
         match self {
             Self::Direct(value) => Ok(value.clone()),
             Self::Copy {
                 from,
                 value,
                 modify,
-            } => Err(ValueError::UnexpectedType),
+            } => {
+                let item = from.get(path).ok_or(ValueError::ItemNotFound)?;
+                let result = value.get(item, config)?;
+                if let Some(modify) = modify {
+                    modify.modify(&result)
+                } else {
+                    Ok(result)
+                }
+            }
         }
     }
 }
@@ -354,6 +366,7 @@ impl ValueModifier {
 
 pub enum ValueError {
     UnexpectedType,
+    ItemNotFound,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -370,7 +383,28 @@ pub enum ItemValueGetter {
     Copy { copy: MetadataField },
 }
 impl ItemValueGetter {
-    fn get(&self) {}
+    fn get(&self, path: &Path, config: &LibraryConfig) -> Result<MetadataValue, ValueError> {
+        match self {
+            Self::Field(field) => match field {
+                FieldValueGetter::CleanName => Ok(MetadataValue::String(
+                    path.file_name()
+                        .map(|x| x.to_string_lossy())
+                        .unwrap_or_else(|| path.to_string_lossy())
+                        .into_owned(),
+                )),
+                FieldValueGetter::FileName => Ok(MetadataValue::String(
+                    path.file_name()
+                        .map(|x| x.to_string_lossy())
+                        .unwrap_or_else(|| path.to_string_lossy())
+                        .into_owned(),
+                )),
+                FieldValueGetter::Path => {
+                    Ok(MetadataValue::String(path.to_string_lossy().into_owned()))
+                }
+            },
+            Self::Copy { copy } => Err(ValueError::ItemNotFound),
+        }
+    }
 }
 
 // not directly in ItemValueGetter as a workaround for serde
@@ -382,7 +416,6 @@ pub enum FieldValueGetter {
     Path,
 }
 
-#[derive(Debug)]
 pub struct Metadata {
     pub fields: HashMap<MetadataField, MetadataValue>,
 }
@@ -391,6 +424,25 @@ impl Metadata {
         Self {
             fields: HashMap::new(),
         }
+    }
+}
+impl fmt::Debug for Metadata {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut item = fmt.debug_struct("Metadata");
+        for (field, value) in &self.fields {
+            let field_name = match field {
+                MetadataField::Custom(str) => str.clone(),
+                MetadataField::Builtin(builtin) => builtin.to_string(),
+            };
+            let field_value = match value {
+                MetadataValue::Blank => "(blank)".to_owned(),
+                MetadataValue::String(str) => str.clone(),
+                MetadataValue::List(list) => format!("[{}]", list.join("; ")),
+                MetadataValue::Number(num) => num.to_string(),
+            };
+            item.field(&field_name, &field_value);
+        }
+        item.finish()
     }
 }
 
@@ -437,7 +489,7 @@ pub enum MetadataField {
 }
 
 // not directly in MetadataField as a workaround for serde
-#[derive(Eq, Hash, PartialEq, Debug, EnumIter, Clone, Deserialize, Serialize)]
+#[derive(Eq, Hash, PartialEq, Debug, Display, EnumIter, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BuiltinMetadataField {
     Title,
