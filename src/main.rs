@@ -1,4 +1,5 @@
 use colored::Colorize;
+use itertools::Itertools;
 use jwalk::WalkDir;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::env;
@@ -13,6 +14,10 @@ use library_config::*;
 
 mod song_config;
 use song_config::*;
+
+mod tag_interop;
+use tag_interop::Tags;
+
 
 fn main() {
     println!("NAIVE MUSIC UPDATER");
@@ -56,6 +61,8 @@ fn do_scan(library_config: LibraryConfig) {
             .with_extension("");
         println!("{}", nice_path.display());
         let mut metadata = Metadata::new();
+        let tags = Tags::load(&song_path);
+        let existing_metadata = tags.get_metadata();
         let relative_parent = song_path
             .strip_prefix(&library_config.library_folder)
             .unwrap_or(song_path.as_path())
@@ -78,13 +85,15 @@ fn do_scan(library_config: LibraryConfig) {
                 {
                     for setter in &config.set {
                         if setter.names.matches(select_song_path) {
-                            setter.set.apply(&mut metadata, select_song_path, &library_config);
+                            setter
+                                .set
+                                .apply(&mut metadata, select_song_path, &library_config);
                         }
                     }
                 }
             }
         }
-        println!("{:?}", metadata);
+        print_differences(&existing_metadata, &metadata);
     }
     if let Err(err) = library_config.date_cache.save() {
         eprintln!("{}", err.to_string().red());
@@ -92,6 +101,22 @@ fn do_scan(library_config: LibraryConfig) {
     if let Some(repo) = library_config.art_repo {
         if let Err(err) = repo.used_templates.save() {
             eprintln!("{}", err.to_string().red());
+        }
+    }
+}
+
+fn print_differences(existing: &Metadata, incoming: &Metadata) {
+    let all_keys = existing
+        .fields
+        .keys()
+        .chain(incoming.fields.keys())
+        .unique();
+    for key in all_keys {
+        if let Some(new) = incoming.fields.get(key) {
+            let current = existing.fields.get(key).unwrap_or(&MetadataValue::Blank);
+            if current != new {
+                println!("\t{:?}: {:?} -> {:?}", key, current, new);
+            }
         }
     }
 }

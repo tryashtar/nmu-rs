@@ -74,7 +74,7 @@ impl MetadataOperation {
                     }
                 }
                 for field in BuiltinMetadataField::iter() {
-                    let builtin = MetadataField::Builtin(field);
+                    let builtin = field.into();
                     if remove.is_match(&builtin) {
                         metadata.fields.insert(builtin, MetadataValue::Blank);
                     }
@@ -416,6 +416,7 @@ pub enum FieldValueGetter {
     Path,
 }
 
+#[derive(Debug, Clone)]
 pub struct Metadata {
     pub fields: HashMap<MetadataField, MetadataValue>,
 }
@@ -426,27 +427,8 @@ impl Metadata {
         }
     }
 }
-impl fmt::Debug for Metadata {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut item = fmt.debug_struct("Metadata");
-        for (field, value) in &self.fields {
-            let field_name = match field {
-                MetadataField::Custom(str) => str.clone(),
-                MetadataField::Builtin(builtin) => builtin.to_string(),
-            };
-            let field_value = match value {
-                MetadataValue::Blank => "(blank)".to_owned(),
-                MetadataValue::String(str) => str.clone(),
-                MetadataValue::List(list) => format!("[{}]", list.join("; ")),
-                MetadataValue::Number(num) => num.to_string(),
-            };
-            item.field(&field_name, &field_value);
-        }
-        item.finish()
-    }
-}
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
+#[derive(Deserialize, PartialEq, Eq, Serialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum MetadataValue {
     Blank,
@@ -520,4 +502,9 @@ pub enum BuiltinMetadataField {
     #[serde(rename = "simple lyrics")]
     #[serde(alias = "lyrics")]
     SimpleLyrics,
+}
+impl From<BuiltinMetadataField> for MetadataField {
+    fn from(value: BuiltinMetadataField) -> Self {
+        Self::Builtin(value)
+    }
 }

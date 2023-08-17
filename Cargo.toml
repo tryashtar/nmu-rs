@@ -9,6 +9,7 @@ edition = "2021"
 chrono = { version = "0.4.26", features = ["serde"] }
 colored = "2.0.4"
 id3 = "1.7.0"
+itertools = "0.11.0"
 jwalk = "0.8.1"
 metaflac = "0.2.5"
 path-absolutize = "3.1.0"
