@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use id3::TagLike;
 use metaflac::{block::VorbisComment, Block};
