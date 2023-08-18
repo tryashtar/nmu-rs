@@ -85,7 +85,7 @@ impl MetadataOperation {
             }
             Self::Set(set) => {
                 for (field, value) in set {
-                    if let Ok(value) = value.get(path, config) {
+                    if let Ok(PendingValue::Safe(value)) = value.get(path, config) {
                         metadata.fields.insert(field.clone(), value);
                     }
                 }
@@ -93,7 +93,9 @@ impl MetadataOperation {
             Self::Context { source, modify } => {
                 if let Ok(value) = source.get(path, config) {
                     for (field, modifier) in modify {
-                        if let Ok(modified) = modifier.modify(&value) {
+                        if let Ok(PendingValue::Safe(modified)) =
+                            modifier.modify(&value, path, config)
+                        {
                             metadata.fields.insert(field.clone(), modified);
                         }
                     }
@@ -106,7 +108,7 @@ impl MetadataOperation {
             }
             Self::Moded { mode, values } => {
                 for (field, value) in values {
-                    if let Ok(adding) = value.get(path, config) {
+                    if let Ok(PendingValue::Safe(adding)) = value.get(path, config) {
                         match metadata.fields.get(field) {
                             None => {
                                 metadata.fields.insert(field.clone(), adding);
@@ -123,7 +125,9 @@ impl MetadataOperation {
             Self::Modify { modify } => {
                 for (field, modifier) in modify {
                     if let Some(existing) = metadata.fields.get(field) {
-                        if let Ok(modified) = modifier.modify(existing) {
+                        if let Ok(PendingValue::Safe(modified)) =
+                            modifier.modify(&existing.clone().into(), path, config)
+                        {
                             metadata.fields.insert(field.clone(), modified);
                         }
                     }
@@ -252,6 +256,37 @@ pub enum Range {
         stop: Option<i32>,
     },
 }
+impl Range {
+    fn in_range(&self, index: usize, length: usize) -> bool {
+        match self {
+            Range::Index(i) => index == Self::wrap(*i, length),
+            Range::Named(NamedRange::All) => true,
+            Range::Named(NamedRange::First) => index == 0,
+            Range::Named(NamedRange::Last) => index == (length as usize) - 1,
+            Range::Tuple(start, end) => {
+                index >= Self::wrap(*start, length) && index <= Self::wrap(*end, length)
+            }
+            Range::Struct { start, stop } => {
+                let m1 = match start {
+                    None => true,
+                    Some(start) => index >= Self::wrap(*start, length),
+                };
+                let m2 = match stop {
+                    None => true,
+                    Some(stop) => index <= Self::wrap(*stop, length),
+                };
+                m1 && m2
+            }
+        }
+    }
+    fn wrap(index: i32, length: usize) -> usize {
+        if index >= 0 {
+            index as usize
+        } else {
+            ((length as i32) - index) as usize
+        }
+    }
+}
 
 // not directly in Range as a workaround for serde
 #[derive(Deserialize, Serialize)]
@@ -305,9 +340,9 @@ pub enum ValueGetter {
     },
 }
 impl ValueGetter {
-    fn get(&self, path: &Path, config: &LibraryConfig) -> Result<MetadataValue, ValueError> {
+    fn get(&self, path: &Path, config: &LibraryConfig) -> Result<PendingValue, ValueError> {
         match self {
-            Self::Direct(value) => Ok(value.clone()),
+            Self::Direct(value) => Ok(value.clone().into()),
             Self::Copy {
                 from,
                 value,
@@ -316,9 +351,9 @@ impl ValueGetter {
                 let item = from.get(path).ok_or(ValueError::ItemNotFound)?;
                 let result = value.get(item, config)?;
                 if let Some(modify) = modify {
-                    modify.modify(&result)
+                    modify.modify(&result.into(), path, config)
                 } else {
-                    Ok(result)
+                    Ok(result.into())
                 }
             }
         }
@@ -358,15 +393,180 @@ pub enum ValueModifier {
     },
     Sequence(Vec<ValueModifier>),
 }
+pub enum PendingValue {
+    RegexMatches(HashMap<String, String>),
+    Safe(MetadataValue),
+}
+impl From<MetadataValue> for PendingValue {
+    fn from(value: MetadataValue) -> Self {
+        PendingValue::Safe(value)
+    }
+}
 impl ValueModifier {
-    fn modify(&self, value: &MetadataValue) -> Result<MetadataValue, ValueError> {
-        Err(ValueError::UnexpectedType)
+    fn modify(
+        &self,
+        value: &PendingValue,
+        path: &Path,
+        config: &LibraryConfig,
+    ) -> Result<PendingValue, ValueError> {
+        match self {
+            Self::Group { group } => {
+                if let PendingValue::RegexMatches(matches) = value {
+                    if let Some(capture) = matches.get(group) {
+                        return Ok(MetadataValue::String(capture.as_str().to_owned()).into());
+                    }
+                }
+                return Err(ValueError::UnexpectedType);
+            }
+            Self::Regex { regex } => {
+                if let PendingValue::Safe(MetadataValue::String(str)) = value {
+                    if let Some(captures) = regex.captures(str) {
+                        let values: HashMap<String, String> = regex
+                            .capture_names()
+                            .filter_map(|x| {
+                                x.and_then(|y| {
+                                    captures
+                                        .name(y)
+                                        .map(|z| (y.to_owned(), z.as_str().to_owned()))
+                                })
+                            })
+                            .collect();
+                        return Ok(PendingValue::RegexMatches(values));
+                    } else {
+                        return Err(ValueError::NoMatchFound);
+                    }
+                }
+                return Err(ValueError::UnexpectedType);
+            }
+            Self::Take { take } => {
+                if let PendingValue::Safe(MetadataValue::List(list)) = value {
+                    return match take {
+                        TakeModifier::Defined { index } => Ok(MetadataValue::List(
+                            list.iter()
+                                .enumerate()
+                                .filter_map(|(i, x)| {
+                                    if index.in_range(i, list.len()) {
+                                        Some(x.to_owned())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect(),
+                        )
+                        .into()),
+                        TakeModifier::Simple(range) => Ok(MetadataValue::List(
+                            list.iter()
+                                .enumerate()
+                                .filter_map(|(i, x)| {
+                                    if range.in_range(i, list.len()) {
+                                        Some(x.to_owned())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect(),
+                        )
+                        .into()),
+                    };
+                }
+                return Err(ValueError::UnexpectedType);
+            }
+            Self::Append { append, index } => {
+                if let PendingValue::Safe(MetadataValue::String(extra)) =
+                    append.get(path, config)?
+                {
+                    match value {
+                        PendingValue::Safe(MetadataValue::String(str)) if index.is_none() => {
+                            Ok(MetadataValue::String(format!("{}{}", str, extra)).into())
+                        }
+                        PendingValue::Safe(MetadataValue::List(list)) => Ok(MetadataValue::List(
+                            list.iter()
+                                .enumerate()
+                                .map(|(i, x)| match index {
+                                    None => format!("{}{}", x, extra),
+                                    Some(index) => {
+                                        if index.in_range(i, list.len()) {
+                                            format!("{}{}", x, extra)
+                                        } else {
+                                            x.clone()
+                                        }
+                                    }
+                                })
+                                .collect(),
+                        )
+                        .into()),
+                        _ => Err(ValueError::UnexpectedType),
+                    }
+                } else {
+                    Err(ValueError::UnexpectedType)
+                }
+            }
+            Self::Prepend { prepend, index } => {
+                if let PendingValue::Safe(MetadataValue::String(extra)) =
+                    prepend.get(path, config)?
+                {
+                    match value {
+                        PendingValue::Safe(MetadataValue::String(str)) if index.is_none() => {
+                            Ok(MetadataValue::String(format!("{}{}", extra, str)).into())
+                        }
+                        PendingValue::Safe(MetadataValue::List(list)) => Ok(MetadataValue::List(
+                            list.iter()
+                                .enumerate()
+                                .map(|(i, x)| match index {
+                                    None => format!("{}{}", extra, x),
+                                    Some(index) => {
+                                        if index.in_range(i, list.len()) {
+                                            format!("{}{}", extra, x)
+                                        } else {
+                                            x.clone()
+                                        }
+                                    }
+                                })
+                                .collect(),
+                        )
+                        .into()),
+                        _ => Err(ValueError::UnexpectedType),
+                    }
+                } else {
+                    Err(ValueError::UnexpectedType)
+                }
+            }
+            Self::Join { join } => {
+                if let PendingValue::Safe(MetadataValue::String(extra)) = join.get(path, config)? {
+                    if let PendingValue::Safe(MetadataValue::List(list)) = value {
+                        return Ok(MetadataValue::String(list.join(&extra)).into());
+                    }
+                }
+                Err(ValueError::UnexpectedType)
+            }
+            Self::Split { split } => {
+                if let PendingValue::Safe(MetadataValue::String(str)) = value {
+                    return Ok(MetadataValue::List(
+                        str.split(split).map(|x| x.to_owned()).collect(),
+                    )
+                    .into());
+                }
+                Err(ValueError::UnexpectedType)
+            }
+            Self::Sequence(seq) => {
+                if seq.len() == 0 {
+                    Err(ValueError::EmptyList)
+                } else {
+                    let value = seq[0].modify(value, path, config)?;
+                    seq.iter()
+                        .skip(1)
+                        .try_fold(value, |x, y| y.modify(&x, path, config))
+                }
+            }
+        }
     }
 }
 
 pub enum ValueError {
     UnexpectedType,
     ItemNotFound,
+    NoMatchFound,
+    EmptyList,
 }
 
 #[derive(Deserialize, Serialize)]
