@@ -209,20 +209,20 @@ fn meta_op_mode() {
 
 #[test]
 fn range_index() {
-    let result = serde_yaml::from_str::<Range>("5").unwrap();
-    assert!(matches!(result, Range::Index { .. }));
+    let result = serde_yaml::from_str::<RawRange>("5").unwrap();
+    assert!(matches!(result, RawRange::Index { .. }));
 }
 
 #[test]
 fn range_tuple() {
-    let result = serde_yaml::from_str::<Range>("[0, 5]").unwrap();
-    assert!(matches!(result, Range::Tuple { .. }));
+    let result = serde_yaml::from_str::<RawRange>("[0, 5]").unwrap();
+    assert!(matches!(result, RawRange::Tuple { .. }));
 }
 
 #[test]
-fn range_struct() {
-    let result = serde_yaml::from_str::<Range>("{start: 5}").unwrap();
-    assert!(matches!(result, Range::Struct { .. }));
+fn range_start() {
+    let result = serde_yaml::from_str::<RawRange>("{start: 5}").unwrap();
+    assert!(matches!(result, RawRange::StartOnly { .. }));
 }
 
 #[test]
