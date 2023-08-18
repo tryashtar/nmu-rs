@@ -658,6 +658,13 @@ impl MetadataValue {
             }
         }
     }
+    pub fn from_list(list: Vec<String>) -> Option<Self> {
+        match list.len() {
+            0 => None,
+            1 => Some(MetadataValue::String(list[0].clone())),
+            _ => Some(MetadataValue::List(list)),
+        }
+    }
     fn to_list(&self) -> Result<Vec<String>, ValueError> {
         match self {
             Self::Blank | Self::Number(_) => Err(ValueError::UnexpectedType),

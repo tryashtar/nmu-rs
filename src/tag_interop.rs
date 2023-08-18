@@ -45,7 +45,7 @@ fn get_id3(tag: &id3::Tag, field: &BuiltinMetadataField) -> Option<MetadataValue
         BuiltinMetadataField::Album => convert_str(tag.album()),
         BuiltinMetadataField::AlbumArtists => convert_str(tag.album_artist()),
         BuiltinMetadataField::Arranger => convert_str(tag.text_for_frame_id("TPE4")),
-        BuiltinMetadataField::Comment => None,
+        BuiltinMetadataField::Comment => convert_comments(tag.comments().collect()),
         BuiltinMetadataField::Composers => convert_list_str(tag.text_values_for_frame_id("TCOM")),
         BuiltinMetadataField::Track => tag.track().map(MetadataValue::Number),
         BuiltinMetadataField::TrackTotal => tag.total_tracks().map(MetadataValue::Number),
@@ -56,7 +56,7 @@ fn get_id3(tag: &id3::Tag, field: &BuiltinMetadataField) -> Option<MetadataValue
         BuiltinMetadataField::Year => tag.year().map(|x| MetadataValue::Number(x as u32)),
         BuiltinMetadataField::Disc => tag.disc().map(MetadataValue::Number),
         BuiltinMetadataField::DiscTotal => tag.total_discs().map(MetadataValue::Number),
-        BuiltinMetadataField::SimpleLyrics => None,
+        BuiltinMetadataField::SimpleLyrics => convert_lyrics(tag.lyrics().collect()),
         BuiltinMetadataField::Art => None,
     }
 }
@@ -82,6 +82,16 @@ fn get_flac(tag: &VorbisComment, field: &BuiltinMetadataField) -> Option<Metadat
     }
 }
 
+fn convert_comments(item: Vec<&id3::frame::Comment>) -> Option<MetadataValue> {
+    Some(item.into_iter().map(|x| x.text.clone()).collect::<Vec<_>>())
+        .and_then(MetadataValue::from_list)
+}
+
+fn convert_lyrics(item: Vec<&id3::frame::Lyrics>) -> Option<MetadataValue> {
+    Some(item.into_iter().map(|x| x.text.clone()).collect::<Vec<_>>())
+        .and_then(MetadataValue::from_list)
+}
+
 fn convert_str(item: Option<&str>) -> Option<MetadataValue> {
     item.map(|x| MetadataValue::String(x.to_owned()))
 }
@@ -98,29 +108,10 @@ fn convert_num(item: Option<&Vec<String>>) -> Option<MetadataValue> {
 }
 
 fn convert_list_str(item: Option<Vec<&str>>) -> Option<MetadataValue> {
-    match item {
-        None => None,
-        Some(vec) => {
-            if vec.len() == 1 {
-                Some(MetadataValue::String(vec[0].to_owned()))
-            } else {
-                Some(MetadataValue::List(
-                    vec.iter().map(|&x| x.to_owned()).collect(),
-                ))
-            }
-        }
-    }
+    item.map(|x| x.into_iter().map(|y| y.to_owned()).collect())
+        .and_then(MetadataValue::from_list)
 }
 
 fn convert_list(item: Option<&Vec<String>>) -> Option<MetadataValue> {
-    match item {
-        None => None,
-        Some(vec) => {
-            if vec.len() == 1 {
-                Some(MetadataValue::String(vec[0].clone()))
-            } else {
-                Some(MetadataValue::List(vec.clone()))
-            }
-        }
-    }
+    item.and_then(|x| MetadataValue::from_list(x.clone()))
 }
