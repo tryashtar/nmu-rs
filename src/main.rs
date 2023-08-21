@@ -112,7 +112,14 @@ fn print_differences(existing: &Metadata, incoming: &Metadata) {
         .chain(incoming.fields.keys())
         .unique();
     for key in all_keys {
+        if let MetadataField::Builtin(BuiltinMetadataField::SimpleLyrics) = key {
+            continue;
+        }
+        if let MetadataField::Builtin(BuiltinMetadataField::Art) = key {
+            continue;
+        }
         if let Some(new) = incoming.fields.get(key) {
+            let new = &new.canonicalize();
             let current = existing.fields.get(key).unwrap_or(&MetadataValue::Blank);
             if current != new {
                 println!("\t{:?}: {:?} -> {:?}", key, current, new);

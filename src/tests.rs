@@ -76,12 +76,6 @@ fn local_item_this() {
 }
 
 #[test]
-fn local_item_select() {
-    let result = serde_yaml::from_str::<LocalItemSelector>("selector: 'a/b/c'").unwrap();
-    assert!(matches!(result, LocalItemSelector::Select { .. }));
-}
-
-#[test]
 fn local_item_up() {
     let result = serde_yaml::from_str::<LocalItemSelector>("up: 2").unwrap();
     assert!(matches!(result, LocalItemSelector::DrillUp { .. }));

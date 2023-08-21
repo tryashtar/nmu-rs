@@ -218,9 +218,6 @@ impl PathSegment {
 #[serde(untagged)]
 pub enum LocalItemSelector {
     This(SelfItemSelector),
-    Select {
-        selector: ItemSelector,
-    },
     DrillUp {
         must_be: Option<MusicItemType>,
         up: RawRange,
@@ -232,7 +229,50 @@ pub enum LocalItemSelector {
 }
 impl LocalItemSelector {
     fn get<'a>(&self, start: &'a Path) -> Option<&'a Path> {
-        Some(start)
+        match self {
+            Self::This(_) => Some(start),
+            Self::DrillUp { must_be, up } => {
+                let range: Range = up.into();
+                let ancestors = start.ancestors().collect::<Vec<_>>();
+                let processed = ancestors
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, x)| {
+                        if range.in_range(i, ancestors.len()) {
+                            Some(x)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                if processed.is_empty() {
+                    None
+                } else {
+                    Some(processed[0])
+                }
+            }
+            Self::DrillDown { must_be, from_root } => {
+                let range: Range = from_root.into();
+                let ancestors = start.ancestors().collect::<Vec<_>>();
+                let processed = ancestors
+                    .iter()
+                    .rev()
+                    .enumerate()
+                    .filter_map(|(i, x)| {
+                        if range.in_range(i, ancestors.len()) {
+                            Some(x)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                if processed.is_empty() {
+                    None
+                } else {
+                    Some(processed[0])
+                }
+            }
+        }
     }
 }
 
@@ -378,6 +418,13 @@ fn default_value() -> ItemValueGetter {
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NoSeparatorDecision {
+    Exit,
+    Ignore,
+}
+
+#[derive(Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum ValueModifier {
     Prepend {
@@ -393,6 +440,8 @@ pub enum ValueModifier {
     },
     Split {
         split: String,
+        #[serde(default = "default_sep")]
+        when_none: NoSeparatorDecision,
     },
     Regex {
         #[serde(with = "serde_regex")]
@@ -405,6 +454,9 @@ pub enum ValueModifier {
         take: TakeModifier,
     },
     Sequence(Vec<ValueModifier>),
+}
+fn default_sep() -> NoSeparatorDecision {
+    NoSeparatorDecision::Ignore
 }
 pub enum PendingValue {
     RegexMatches(HashMap<String, String>),
@@ -543,12 +595,15 @@ impl ValueModifier {
                 }
                 Err(ValueError::UnexpectedType)
             }
-            Self::Split { split } => {
+            Self::Split { split, when_none } => {
                 if let PendingValue::Safe(MetadataValue::String(str)) = value {
-                    return Ok(MetadataValue::List(
-                        str.split(split).map(|x| x.to_owned()).collect(),
-                    )
-                    .into());
+                    let vec = str.split(split).map(|x| x.to_owned()).collect::<Vec<_>>();
+                    if let NoSeparatorDecision::Exit = when_none {
+                        if vec.len() == 1 {
+                            return Err(ValueError::ConditionsNotMet);
+                        }
+                    }
+                    return Ok(MetadataValue::List(vec).into());
                 }
                 Err(ValueError::UnexpectedType)
             }
@@ -571,6 +626,7 @@ pub enum ValueError {
     ItemNotFound,
     NoMatchFound,
     EmptyList,
+    ConditionsNotMet,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -670,6 +726,18 @@ impl MetadataValue {
             Self::Blank | Self::Number(_) => Err(ValueError::UnexpectedType),
             Self::String(str) => Ok(vec![str.clone()]),
             Self::List(list) => Ok(list.clone()),
+        }
+    }
+    pub fn canonicalize(&self) -> Self {
+        match self {
+            Self::Blank | Self::Number(_) | Self::String(_) => self.clone(),
+            Self::List(list) => {
+                if list.len() == 1 {
+                    Self::String(list[0].clone())
+                } else {
+                    self.clone()
+                }
+            }
         }
     }
 }
