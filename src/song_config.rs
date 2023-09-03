@@ -1,7 +1,9 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
+    borrow::{Borrow, Cow},
     collections::{HashMap, HashSet},
+    ops::Deref,
     path::{Component, Path, PathBuf},
     rc::Rc,
 };
@@ -10,39 +12,73 @@ use strum::{Display, EnumIter, IntoEnumIterator};
 use crate::library_config::LibraryConfig;
 
 #[derive(Deserialize, Serialize)]
-pub struct RawSongConfig {
-    pub songs: Option<ReferencableOperation>,
-    pub set: Option<HashMap<PathBuf, ReferencableOperation>>,
+pub struct RawSongConfig<'a> {
+    pub songs: Option<ReferencableOperation<'a>>,
+    pub set: Option<HashMap<PathBuf, ReferencableOperation<'a>>>,
     #[serde(rename = "set all")]
-    pub set_all: Option<Vec<RawAllSetter>>,
+    pub set_all: Option<Vec<RawAllSetter<'a>>>,
 }
 
 #[derive(Deserialize, Serialize)]
-pub struct RawAllSetter {
+pub struct RawAllSetter<'a> {
     pub names: ItemSelector,
-    pub set: ReferencableOperation,
+    pub set: ReferencableOperation<'a>,
 }
 
-pub struct SongConfig {
-    pub set: Vec<AllSetter>,
+pub struct SongConfig<'a> {
+    pub set: Vec<AllSetter<'a>>,
 }
 
-pub struct AllSetter {
+pub struct AllSetter<'a> {
     pub names: ItemSelector,
-    pub set: Rc<MetadataOperation>,
+    pub set: Borrowable<'a, MetadataOperation<'a>>,
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(untagged)]
-pub enum ReferencableOperation {
+pub enum Borrowable<'a, T>
+where
+    T: 'a,
+{
+    #[serde(skip)]
+    Borrowed(&'a T),
+    Owned(T),
+}
+impl<T> AsRef<T> for Borrowable<'_, T> {
+    fn as_ref(&self) -> &T {
+        self
+    }
+}
+impl<'a, T> Borrow<T> for Borrowable<'a, T>
+where
+    T: ToOwned,
+{
+    fn borrow(&self) -> &T {
+        &**self
+    }
+}
+impl<B> Deref for Borrowable<'_, B> {
+    type Target = B;
+
+    fn deref(&self) -> &B {
+        match *self {
+            Self::Borrowed(borrowed) => borrowed,
+            Self::Owned(ref owned) => owned.borrow(),
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum ReferencableOperation<'a> {
     Reference(String),
-    Sequence(Vec<ReferencableOperation>),
-    Direct(MetadataOperation),
+    Sequence(Vec<ReferencableOperation<'a>>),
+    Direct(MetadataOperation<'a>),
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(untagged)]
-pub enum MetadataOperation {
+pub enum MetadataOperation<'a> {
     Blank {
         remove: FieldSelector,
     },
@@ -60,10 +96,10 @@ pub enum MetadataOperation {
         mode: CombineMode,
         values: HashMap<MetadataField, ValueGetter>,
     },
-    Sequence(Vec<Rc<MetadataOperation>>),
+    Sequence(Vec<Borrowable<'a, MetadataOperation<'a>>>),
     Set(HashMap<MetadataField, ValueGetter>),
 }
-impl MetadataOperation {
+impl MetadataOperation<'_> {
     pub fn apply(&self, metadata: &mut Metadata, path: &Path, config: &LibraryConfig) {
         match self {
             Self::Blank { remove } => {
@@ -330,7 +366,15 @@ impl From<&RawRange> for Range {
 }
 impl Range {
     fn in_range(&self, index: usize, length: usize) -> bool {
-        index >= Self::wrap(self.start, length) && index <= Self::wrap(self.stop, length)
+        let (start, stop) = self.wrap_both(length);
+        index >= start && index <= stop
+    }
+    fn slice<'a, T>(&self, items: &'a [T]) -> &'a [T] {
+        let (start, stop) = self.wrap_both(items.len());
+        &items[start..=stop]
+    }
+    fn wrap_both(&self, length: usize) -> (usize, usize) {
+        (Self::wrap(self.start, length), Self::wrap(self.stop, length))
     }
     fn wrap(index: i32, length: usize) -> usize {
         if index >= 0 {

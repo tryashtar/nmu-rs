@@ -6,17 +6,16 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 use std::time::SystemTime;
 use thiserror::Error;
 
 use crate::song_config::{
-    AllSetter, ItemSelector, MetadataField, MetadataOperation, RawSongConfig,
+    AllSetter, Borrowable, ItemSelector, MetadataField, MetadataOperation, RawSongConfig,
     ReferencableOperation, SongConfig,
 };
 
 #[derive(Deserialize)]
-pub struct RawLibraryConfig {
+pub struct RawLibraryConfig<'a> {
     library: PathBuf,
     logs: Option<PathBuf>,
     config_folders: Vec<PathBuf>,
@@ -24,10 +23,10 @@ pub struct RawLibraryConfig {
     custom_fields: Vec<String>,
     cache: Option<PathBuf>,
     art: Option<RawArtRepo>,
-    pub named_strategies: HashMap<String, Rc<MetadataOperation>>,
+    pub named_strategies: HashMap<String, MetadataOperation<'a>>,
 }
 
-pub struct LibraryConfig {
+pub struct LibraryConfig<'a> {
     pub library_folder: PathBuf,
     pub log_folder: Option<PathBuf>,
     pub config_folders: Vec<PathBuf>,
@@ -35,10 +34,10 @@ pub struct LibraryConfig {
     pub custom_fields: Vec<MetadataField>,
     pub date_cache: DateCache,
     pub art_repo: Option<ArtRepo>,
-    pub named_strategies: HashMap<String, Rc<MetadataOperation>>,
+    pub named_strategies: HashMap<String, MetadataOperation<'a>>,
 }
-impl LibraryConfig {
-    pub fn new(folder: &Path, raw: RawLibraryConfig) -> Self {
+impl<'a> LibraryConfig<'a> {
+    pub fn new(folder: &Path, raw: RawLibraryConfig<'a>) -> Self {
         Self {
             library_folder: folder.join(raw.library),
             log_folder: raw.logs.map(|x| folder.join(x)),
@@ -65,7 +64,7 @@ impl LibraryConfig {
             named_strategies: raw.named_strategies,
         }
     }
-    pub fn resolve_config(&self, raw_config: RawSongConfig) -> Result<SongConfig, LibraryError> {
+    pub fn resolve_config(&'a self, raw_config: RawSongConfig<'a>) -> Result<SongConfig<'a>, LibraryError> {
         let songs = raw_config
             .songs
             .map(|x| {
@@ -116,21 +115,21 @@ impl LibraryConfig {
     }
     fn resolve_operation(
         &self,
-        operation: ReferencableOperation,
-    ) -> Result<Rc<MetadataOperation>, LibraryError> {
+        operation: ReferencableOperation<'a>,
+    ) -> Result<Borrowable<MetadataOperation>, LibraryError> {
         match operation {
-            ReferencableOperation::Direct(direct) => Ok(Rc::new(direct)),
+            ReferencableOperation::Direct(direct) => Ok(Borrowable::Owned(direct)),
             ReferencableOperation::Reference(reference) => {
                 match self.named_strategies.get(&reference) {
                     None => Err(LibraryError::MissingNamedStrategy(reference)),
-                    Some(strat) => Ok(strat.clone()),
+                    Some(strat) => Ok(Borrowable::Borrowed(strat)),
                 }
             }
             ReferencableOperation::Sequence(sequence) => sequence
                 .into_iter()
                 .map(|x| self.resolve_operation(x))
                 .collect::<Result<Vec<_>, _>>()
-                .map(|x| Rc::new(MetadataOperation::Sequence(x))),
+                .map(|x| Borrowable::Owned(MetadataOperation::Sequence(x))),
         }
     }
 }

@@ -18,7 +18,6 @@ use song_config::*;
 mod tag_interop;
 use tag_interop::Tags;
 
-
 fn main() {
     println!("NAIVE MUSIC UPDATER");
     let first_argument = env::args().nth(1);
@@ -29,12 +28,12 @@ fn main() {
             if error.kind() == ErrorKind::NotFound && first_argument.is_none() =>
         {
             eprintln!("{}", error.to_string().red());
-            eprintln!(
-                "Provide the path to a library.yaml or add one to '{}'",
-                std::env::current_dir()
-                    .unwrap_or_else(|_| PathBuf::new())
-                    .display()
-            );
+            if let Ok(dir) = std::env::current_dir() {
+                eprintln!(
+                    "Provide the path to a library.yaml or add one to '{}'",
+                    dir.display()
+                );
+            }
         }
         Err(error) => {
             eprintln!("{}", error.to_string().red());
@@ -51,9 +50,11 @@ fn main() {
 }
 
 fn do_scan(library_config: LibraryConfig) {
-    let mut scan_songs = BTreeSet::<PathBuf>::new();
     let mut cached_configs: HashMap<PathBuf, Option<SongConfig>> = HashMap::new();
-    find_scan_songs(&mut scan_songs, &library_config);
+    let ScanResults {
+        songs: scan_songs,
+        images: scan_images,
+    } = find_scan_songs(&library_config);
     for song_path in scan_songs {
         let nice_path = song_path
             .strip_prefix(&library_config.library_folder)
@@ -106,12 +107,12 @@ fn do_scan(library_config: LibraryConfig) {
 }
 
 fn print_differences(existing: &Metadata, incoming: &Metadata) {
-    let all_keys = existing
+    for key in existing
         .fields
         .keys()
         .chain(incoming.fields.keys())
-        .unique();
-    for key in all_keys {
+        .unique()
+    {
         if let MetadataField::Builtin(BuiltinMetadataField::SimpleLyrics) = key {
             continue;
         }
@@ -135,7 +136,7 @@ pub enum ConfigError {
     Library(#[from] LibraryError),
 }
 
-fn load_config(path: &Path, library_config: &LibraryConfig) -> Result<SongConfig, ConfigError> {
+fn load_config<'a>(path: &Path, library_config: &'a LibraryConfig<'a>) -> Result<SongConfig<'a>, ConfigError> {
     match load_yaml::<RawSongConfig>(path) {
         Err(YamlError::Io(error)) if error.kind() == ErrorKind::NotFound => {
             Err(ConfigError::Yaml(YamlError::Io(error)))
@@ -151,7 +152,14 @@ fn load_config(path: &Path, library_config: &LibraryConfig) -> Result<SongConfig
     }
 }
 
-fn find_scan_songs(scan_songs: &mut BTreeSet<PathBuf>, library_config: &LibraryConfig) {
+struct ScanResults {
+    songs: BTreeSet<PathBuf>,
+    images: BTreeSet<PathBuf>,
+}
+
+fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
+    let mut scan_songs = BTreeSet::<PathBuf>::new();
+    let mut scan_images = BTreeSet::<PathBuf>::new();
     // scan all songs that have changed
     for song in WalkDir::new(&library_config.library_folder)
         .into_iter()
@@ -189,7 +197,6 @@ fn find_scan_songs(scan_songs: &mut BTreeSet<PathBuf>, library_config: &LibraryC
     }
     if let Some(art_repo) = &library_config.art_repo {
         // for every config that's changed, find all templates it applies to
-        let mut scan_images = HashSet::<PathBuf>::new();
         for config_path in WalkDir::new(&art_repo.templates_folder)
             .into_iter()
             .filter_map(file_path)
@@ -220,24 +227,24 @@ fn find_scan_songs(scan_songs: &mut BTreeSet<PathBuf>, library_config: &LibraryC
             }
         }
     }
+    ScanResults {
+        songs: scan_songs,
+        images: scan_images,
+    }
 }
 
 fn match_name(path: &Path, name: &str) -> bool {
-    if let Some(file_name) = path.file_name().and_then(|x| x.to_str()) {
-        if file_name == name {
-            return true;
-        }
+    match path.file_name().and_then(|x| x.to_str()) {
+        Some(file_name) => file_name == name,
+        None => false,
     }
-    false
 }
 
 fn match_extension(path: &Path, extensions: &HashSet<String>) -> bool {
-    if let Some(ext) = path.extension().and_then(|x| x.to_str()) {
-        if extensions.contains(ext) {
-            return true;
-        }
+    match path.extension().and_then(|x| x.to_str()) {
+        Some(ext) => extensions.contains(ext),
+        None => false,
     }
-    false
 }
 
 fn file_path(item: jwalk::Result<jwalk::DirEntry<((), ())>>) -> Option<PathBuf> {
