@@ -1,11 +1,10 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
-    borrow::{Borrow, Cow},
+    borrow::Borrow,
     collections::{HashMap, HashSet},
     ops::Deref,
     path::{Component, Path, PathBuf},
-    rc::Rc,
 };
 use strum::{Display, EnumIter, IntoEnumIterator};
 
@@ -54,7 +53,7 @@ where
     T: ToOwned,
 {
     fn borrow(&self) -> &T {
-        &**self
+        self
     }
 }
 impl<B> Deref for Borrowable<'_, B> {
@@ -255,7 +254,6 @@ impl PathSegment {
 pub enum LocalItemSelector {
     This(SelfItemSelector),
     DrillUp {
-        must_be: Option<MusicItemType>,
         up: RawRange,
     },
     DrillDown {
@@ -264,49 +262,29 @@ pub enum LocalItemSelector {
     },
 }
 impl LocalItemSelector {
-    fn get<'a>(&self, start: &'a Path) -> Option<&'a Path> {
+    fn get<'a>(& self, start: &'a Path) -> Vec<&'a Path> {
         match self {
-            Self::This(_) => Some(start),
-            Self::DrillUp { must_be, up } => {
+            Self::This(_) => vec![start],
+            Self::DrillUp { up } => {
                 let range: Range = up.into();
                 let ancestors = start.ancestors().collect::<Vec<_>>();
-                let processed = ancestors
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, x)| {
-                        if range.in_range(i, ancestors.len()) {
-                            Some(x)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                if processed.is_empty() {
-                    None
-                } else {
-                    Some(processed[0])
-                }
+                range.slice(ancestors.as_slice()).to_vec()
             }
             Self::DrillDown { must_be, from_root } => {
                 let range: Range = from_root.into();
-                let ancestors = start.ancestors().collect::<Vec<_>>();
-                let processed = ancestors
-                    .iter()
+                let ancestors = start
+                    .ancestors()
+                    .collect::<Vec<_>>()
+                    .into_iter()
                     .rev()
                     .enumerate()
-                    .filter_map(|(i, x)| {
-                        if range.in_range(i, ancestors.len()) {
-                            Some(x)
-                        } else {
-                            None
-                        }
+                    .filter_map(|(i, x)| match must_be {
+                        None => Some(x),
+                        Some(MusicItemType::Song) => (i == 0).then_some(x),
+                        Some(MusicItemType::Folder) => (i != 0).then_some(x),
                     })
                     .collect::<Vec<_>>();
-                if processed.is_empty() {
-                    None
-                } else {
-                    Some(processed[0])
-                }
+                range.slice(ancestors.as_slice()).to_vec()
             }
         }
     }
@@ -374,7 +352,10 @@ impl Range {
         &items[start..=stop]
     }
     fn wrap_both(&self, length: usize) -> (usize, usize) {
-        (Self::wrap(self.start, length), Self::wrap(self.stop, length))
+        (
+            Self::wrap(self.start, length),
+            Self::wrap(self.stop, length),
+        )
     }
     fn wrap(index: i32, length: usize) -> usize {
         if index >= 0 {
@@ -445,8 +426,20 @@ impl ValueGetter {
                 value,
                 modify,
             } => {
-                let item = from.get(path).ok_or(ValueError::ItemNotFound)?;
-                let result = value.get(item, config)?;
+                let items = from.get(path);
+                if items.len() == 0 {
+                    return Err(ValueError::ItemNotFound);
+                }
+                let values = items.into_iter().filter_map(|x| value.get(x, config).ok());
+                let result = MetadataValue::from_list(
+                    values
+                        .map(|x| x.to_list())
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into_iter()
+                        .flatten()
+                        .collect(),
+                )
+                .ok_or(ValueError::UnexpectedType)?;
                 if let Some(modify) = modify {
                     modify.modify(&result.into(), path, config)
                 } else {
@@ -794,7 +787,7 @@ pub enum MetadataField {
 }
 
 // not directly in MetadataField as a workaround for serde
-#[derive(Eq, Hash, PartialEq, Debug, Display, EnumIter, Clone, Deserialize, Serialize)]
+#[derive(Eq, Hash, PartialEq, Debug, Display, EnumIter, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BuiltinMetadataField {
     Title,
