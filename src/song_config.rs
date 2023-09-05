@@ -1,7 +1,7 @@
 use regex::Regex;
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Serialize};
 use std::{
-    borrow::Borrow,
+    borrow::{Borrow, Cow},
     collections::{HashMap, HashSet},
     ops::Deref,
     path::{Component, Path, PathBuf},
@@ -262,13 +262,15 @@ pub enum LocalItemSelector {
     },
 }
 impl LocalItemSelector {
-    fn get<'a>(& self, start: &'a Path) -> Vec<&'a Path> {
+    fn get<'a>(&self, start: &'a Path) -> Vec<&'a Path> {
         match self {
             Self::This(_) => vec![start],
             Self::DrillUp { up } => {
                 let range: Range = up.into();
                 let ancestors = start.ancestors().collect::<Vec<_>>();
-                range.slice(ancestors.as_slice()).to_vec()
+                range
+                    .slice(ancestors.as_slice(), OutOfBoundsDecision::Clamp)
+                    .to_vec()
             }
             Self::DrillDown { must_be, from_root } => {
                 let range: Range = from_root.into();
@@ -284,7 +286,9 @@ impl LocalItemSelector {
                         Some(MusicItemType::Folder) => (i != 0).then_some(x),
                     })
                     .collect::<Vec<_>>();
-                range.slice(ancestors.as_slice()).to_vec()
+                range
+                    .slice(ancestors.as_slice(), OutOfBoundsDecision::Clamp)
+                    .to_vec()
             }
         }
     }
@@ -342,26 +346,42 @@ impl From<&RawRange> for Range {
         }
     }
 }
+#[derive(Deserialize, Serialize, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+pub enum OutOfBoundsDecision {
+    Exit,
+    Wrap,
+    Clamp,
+}
 impl Range {
-    fn in_range(&self, index: usize, length: usize) -> bool {
-        let (start, stop) = self.wrap_both(length);
-        index >= start && index <= stop
+    fn in_range(&self, index: usize, length: usize, decision: OutOfBoundsDecision) -> bool {
+        let (start, stop) = self.wrap_both(length, decision);
+        index >= start && index < stop
     }
-    fn slice<'a, T>(&self, items: &'a [T]) -> &'a [T] {
-        let (start, stop) = self.wrap_both(items.len());
-        &items[start..=stop]
+    fn slice<'a, T>(&self, items: &'a [T], decision: OutOfBoundsDecision) -> &'a [T] {
+        let (start, stop) = self.wrap_both(items.len(), decision);
+        if stop >= items.len() {
+            &[]
+        } else {
+            &items[start..stop]
+        }
     }
-    fn wrap_both(&self, length: usize) -> (usize, usize) {
+    fn wrap_both(&self, length: usize, decision: OutOfBoundsDecision) -> (usize, usize) {
         (
-            Self::wrap(self.start, length),
-            Self::wrap(self.stop, length),
+            Self::wrap(self.start, length, decision),
+            Self::wrap(self.stop, length, decision),
         )
     }
-    fn wrap(index: i32, length: usize) -> usize {
-        if index >= 0 {
+    fn wrap(index: i32, length: usize, decision: OutOfBoundsDecision) -> usize {
+        let result = if index >= 0 {
             index as usize
         } else {
-            ((length as i32) - index) as usize
+            ((length as i32) - index + 1) as usize
+        };
+        match decision {
+            OutOfBoundsDecision::Exit => result,
+            OutOfBoundsDecision::Clamp => result.clamp(0, length - 1),
+            OutOfBoundsDecision::Wrap => result % length,
         }
     }
 }
@@ -427,7 +447,7 @@ impl ValueGetter {
                 modify,
             } => {
                 let items = from.get(path);
-                if items.len() == 0 {
+                if items.is_empty() {
                     return Err(ValueError::ItemNotFound);
                 }
                 let values = items.into_iter().filter_map(|x| value.get(x, config).ok());
@@ -505,22 +525,22 @@ impl From<MetadataValue> for PendingValue {
     }
 }
 impl ValueModifier {
-    fn take(list: &Vec<String>, range: &Range) -> MetadataValue {
-        let result: Vec<String> = list
-            .iter()
-            .enumerate()
-            .filter_map(|(i, x)| {
-                if range.in_range(i, list.len()) {
-                    Some(x.to_owned())
-                } else {
-                    None
-                }
-            })
-            .collect();
+    fn take(
+        list: &[String],
+        range: &Range,
+        oob: OutOfBoundsDecision,
+        min_length: Option<usize>,
+    ) -> MetadataValue {
+        let result = range.slice(list, oob);
+        if let Some(min) = min_length {
+            if result.len() < min {
+                return MetadataValue::Blank;
+            }
+        }
         if result.len() == 1 {
             MetadataValue::String(result[0].clone())
         } else {
-            MetadataValue::List(result)
+            MetadataValue::List(result.to_vec())
         }
     }
     fn append(
@@ -544,7 +564,7 @@ impl ValueModifier {
                     .map(|(i, x)| match index {
                         None => formatter(x, extra),
                         Some(index) => {
-                            if index.in_range(i, list.len()) {
+                            if index.in_range(i, list.len(), OutOfBoundsDecision::Clamp) {
                                 formatter(x, extra)
                             } else {
                                 x.clone()
@@ -594,10 +614,23 @@ impl ValueModifier {
             Self::Take { take } => {
                 if let PendingValue::Safe(MetadataValue::List(list)) = value {
                     return match take {
-                        TakeModifier::Defined { index } => {
-                            Ok(Self::take(list, &index.into()).into())
+                        TakeModifier::Defined {
+                            index,
+                            out_of_bounds,
+                            min_length,
+                        } => Ok(Self::take(
+                            list,
+                            &index.into(),
+                            *out_of_bounds,
+                            min_length.as_ref().copied(),
+                        )
+                        .into()),
+                        TakeModifier::Simple(range) => {
+                            Ok(
+                                Self::take(list, &range.into(), OutOfBoundsDecision::Exit, None)
+                                    .into(),
+                            )
                         }
-                        TakeModifier::Simple(range) => Ok(Self::take(list, &range.into()).into()),
                     };
                 }
                 Err(ValueError::UnexpectedType)
@@ -670,7 +703,15 @@ pub enum ValueError {
 #[serde(untagged)]
 pub enum TakeModifier {
     Simple(RawRange),
-    Defined { index: RawRange },
+    Defined {
+        index: RawRange,
+        #[serde(default = "default_oob")]
+        out_of_bounds: OutOfBoundsDecision,
+        min_length: Option<usize>,
+    },
+}
+fn default_oob() -> OutOfBoundsDecision {
+    OutOfBoundsDecision::Exit
 }
 
 #[derive(Deserialize, Serialize)]
@@ -680,21 +721,26 @@ pub enum ItemValueGetter {
     Copy { copy: MetadataField },
 }
 impl ItemValueGetter {
+    fn file_name(path: &Path) -> String {
+        path.file_name()
+            .map(|x| x.to_string_lossy())
+            .unwrap_or_else(|| path.to_string_lossy())
+            .into_owned()
+    }
+    fn clean<'a>(name: &'a str, config: &LibraryConfig) -> Cow<'a, str> {
+        let mut result = Cow::from(name);
+        for (find, replace) in &config.find_replace {
+            result = result.replace(find, replace).into();
+        }
+        result
+    }
     fn get(&self, path: &Path, config: &LibraryConfig) -> Result<MetadataValue, ValueError> {
         match self {
             Self::Field(field) => match field {
                 FieldValueGetter::CleanName => Ok(MetadataValue::String(
-                    path.file_name()
-                        .map(|x| x.to_string_lossy())
-                        .unwrap_or_else(|| path.to_string_lossy())
-                        .into_owned(),
+                    Self::clean(Self::file_name(path).as_str(), config).into_owned(),
                 )),
-                FieldValueGetter::FileName => Ok(MetadataValue::String(
-                    path.file_name()
-                        .map(|x| x.to_string_lossy())
-                        .unwrap_or_else(|| path.to_string_lossy())
-                        .into_owned(),
-                )),
+                FieldValueGetter::FileName => Ok(MetadataValue::String(Self::file_name(path))),
                 FieldValueGetter::Path => {
                     Ok(MetadataValue::String(path.to_string_lossy().into_owned()))
                 }

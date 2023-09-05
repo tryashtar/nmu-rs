@@ -23,7 +23,8 @@ pub struct RawLibraryConfig<'a> {
     custom_fields: Vec<String>,
     cache: Option<PathBuf>,
     art: Option<RawArtRepo>,
-    pub named_strategies: HashMap<String, MetadataOperation<'a>>,
+    named_strategies: HashMap<String, MetadataOperation<'a>>,
+    find_replace: HashMap<String, String>,
 }
 
 pub struct LibraryConfig<'a> {
@@ -35,6 +36,7 @@ pub struct LibraryConfig<'a> {
     pub date_cache: DateCache,
     pub art_repo: Option<ArtRepo>,
     pub named_strategies: HashMap<String, MetadataOperation<'a>>,
+    pub find_replace: HashMap<String, String>,
 }
 impl<'a> LibraryConfig<'a> {
     pub fn new(folder: &Path, raw: RawLibraryConfig<'a>) -> Self {
@@ -62,9 +64,13 @@ impl<'a> LibraryConfig<'a> {
             date_cache: DateCache::new(raw.cache.map(|x| folder.join(x))),
             art_repo: raw.art.map(|x| ArtRepo::new(folder, x)),
             named_strategies: raw.named_strategies,
+            find_replace: raw.find_replace,
         }
     }
-    pub fn resolve_config(&'a self, raw_config: RawSongConfig<'a>) -> Result<SongConfig<'a>, LibraryError> {
+    pub fn resolve_config(
+        &'a self,
+        raw_config: RawSongConfig<'a>,
+    ) -> Result<SongConfig<'a>, LibraryError> {
         let songs = raw_config
             .songs
             .map(|x| {

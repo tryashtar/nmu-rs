@@ -41,7 +41,7 @@ fn main() {
         Ok(raw_config) => {
             let library_config_folder = library_config_path
                 .parent()
-                .unwrap_or_else(|| Path::new(""));
+                .unwrap_or(Path::new(""));
             let library_config: LibraryConfig =
                 LibraryConfig::new(library_config_folder, raw_config);
             do_scan(library_config);
@@ -68,7 +68,7 @@ fn do_scan(library_config: LibraryConfig) {
             .strip_prefix(&library_config.library_folder)
             .unwrap_or(song_path.as_path())
             .parent()
-            .unwrap_or_else(|| Path::new(""));
+            .unwrap_or(Path::new(""));
         for ancestor in relative_parent
             .ancestors()
             .collect::<Vec<_>>()
@@ -180,7 +180,7 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
                 match_name(x, "config.yaml") && library_config.date_cache.changed_recently(x)
             })
         {
-            let config_folder = config_path.parent().unwrap_or_else(|| Path::new(""));
+            let config_folder = config_path.parent().unwrap_or(Path::new(""));
             let corresponding_folder = &library_config.library_folder.join(
                 config_folder
                     .strip_prefix(config_root)
@@ -204,7 +204,7 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
                 match_name(x, "images.yaml") && library_config.date_cache.changed_recently(x)
             })
         {
-            let config_folder = config_path.parent().unwrap_or_else(|| Path::new(""));
+            let config_folder = config_path.parent().unwrap_or(Path::new(""));
             for image in WalkDir::new(config_folder)
                 .into_iter()
                 .filter_map(file_path)
