@@ -339,3 +339,66 @@ fn select_subpath_complex() {
     assert!(!selector.matches(Path::new("c")));
     assert!(!selector.matches(Path::new("d")));
 }
+
+#[test]
+fn range_int_first() {
+    let range : Range = 0.into();
+    let values = ['a', 'b', 'c', 'd'];
+    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), ['a'])
+}
+
+#[test]
+fn range_int_last() {
+    let range : Range = 3.into();
+    let values = ['a', 'b', 'c', 'd'];
+    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), ['d'])
+}
+
+#[test]
+fn range_int_from_back() {
+    let range : Range = (-2).into();
+    let values = ['a', 'b', 'c', 'd'];
+    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), ['c'])
+}
+
+#[test]
+fn range_int_too_big() {
+    let range : Range = 5.into();
+    let values = ['a', 'b', 'c', 'd'];
+    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), [])
+}
+
+#[test]
+fn range_int_too_small() {
+    let range : Range = (-5).into();
+    let values = ['a', 'b', 'c', 'd'];
+    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), [])
+}
+
+#[test]
+fn range_mult_all() {
+    let range : Range = Range::new(0, -1);
+    let values = ['a', 'b', 'c', 'd'];
+    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), ['a', 'b', 'c', 'd'])
+}
+
+#[test]
+fn range_mult_backwards() {
+    let range : Range = Range::new(1, 0);
+    let values = ['a', 'b', 'c', 'd'];
+    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), [])
+}
+
+#[test]
+fn range_mult_some() {
+    let range : Range = Range::new(1, 2);
+    let values = ['a', 'b', 'c', 'd'];
+    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), ['b', 'c'])
+}
+
+#[test]
+fn range_mult_clamp() {
+    let range : Range = Range::new(2, 5);
+    let values = ['a', 'b', 'c', 'd'];
+    assert_eq!(range.slice(&values, OutOfBoundsDecision::Clamp), ['c', 'd'])
+}

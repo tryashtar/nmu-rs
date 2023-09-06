@@ -274,21 +274,23 @@ impl LocalItemSelector {
             }
             Self::DrillDown { must_be, from_root } => {
                 let range: Range = from_root.into();
-                let ancestors = start
-                    .ancestors()
-                    .collect::<Vec<_>>()
+                let ancestors = start.ancestors().collect::<Vec<_>>();
+                let last = ancestors.len() - 1;
+                let ancestors = ancestors
                     .into_iter()
                     .rev()
                     .enumerate()
-                    .filter_map(|(i, x)| match must_be {
+                    .map(|(i, x)| match must_be {
                         None => Some(x),
-                        Some(MusicItemType::Song) => (i == 0).then_some(x),
-                        Some(MusicItemType::Folder) => (i != 0).then_some(x),
+                        Some(MusicItemType::Song) => (i == last).then_some(x),
+                        Some(MusicItemType::Folder) => (i != last).then_some(x),
                     })
                     .collect::<Vec<_>>();
                 range
                     .slice(ancestors.as_slice(), OutOfBoundsDecision::Clamp)
-                    .to_vec()
+                    .iter()
+                    .filter_map(|x| *x)
+                    .collect::<Vec<_>>()
             }
         }
     }
@@ -317,10 +319,10 @@ pub struct Range {
     stop: i32,
 }
 impl Range {
-    fn new(start: i32, stop: i32) -> Self {
+    pub fn new(start: i32, stop: i32) -> Self {
         Self { start, stop }
     }
-    fn from_start(start: i32) -> Self {
+    pub fn from_start(start: i32) -> Self {
         Self { start, stop: -1 }
     }
 }
@@ -350,20 +352,19 @@ impl From<&RawRange> for Range {
 #[serde(rename_all = "lowercase")]
 pub enum OutOfBoundsDecision {
     Exit,
-    Wrap,
     Clamp,
 }
 impl Range {
-    fn in_range(&self, index: usize, length: usize, decision: OutOfBoundsDecision) -> bool {
+    pub fn in_range(&self, index: usize, length: usize, decision: OutOfBoundsDecision) -> bool {
         let (start, stop) = self.wrap_both(length, decision);
-        index >= start && index < stop
+        index >= start && index <= stop
     }
-    fn slice<'a, T>(&self, items: &'a [T], decision: OutOfBoundsDecision) -> &'a [T] {
+    pub fn slice<'a, T>(&self, items: &'a [T], decision: OutOfBoundsDecision) -> &'a [T] {
         let (start, stop) = self.wrap_both(items.len(), decision);
-        if stop >= items.len() {
+        if stop > items.len() {
             &[]
         } else {
-            &items[start..stop]
+            &items[start..=stop]
         }
     }
     fn wrap_both(&self, length: usize, decision: OutOfBoundsDecision) -> (usize, usize) {
@@ -376,12 +377,11 @@ impl Range {
         let result = if index >= 0 {
             index as usize
         } else {
-            ((length as i32) - index + 1) as usize
+            ((length as i32) + index) as usize
         };
         match decision {
             OutOfBoundsDecision::Exit => result,
-            OutOfBoundsDecision::Clamp => result.clamp(0, length - 1),
-            OutOfBoundsDecision::Wrap => result % length,
+            OutOfBoundsDecision::Clamp => std::cmp::min(result, length - 1),
         }
     }
 }
