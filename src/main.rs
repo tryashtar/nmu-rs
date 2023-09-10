@@ -115,6 +115,9 @@ fn print_differences(existing: &Metadata, incoming: &Metadata) {
         if let MetadataField::Builtin(BuiltinMetadataField::Art) = key {
             continue;
         }
+        if let MetadataField::Custom(_) = key {
+            continue;
+        }
         if let Some(new) = incoming.fields.get(key) {
             let new = &new.canonicalize();
             let current = existing.fields.get(key).unwrap_or(&MetadataValue::Blank);

@@ -108,10 +108,10 @@ impl<'a> LibraryConfig<'a> {
                     .collect::<Result<Vec<_>, _>>()
             })
             .transpose()?;
-        let merged = set
+        let merged = songs
             .into_iter()
             .chain(set_all)
-            .chain(songs)
+            .chain(set)
             .reduce(|mut result, mut more| {
                 result.append(&mut more);
                 result
