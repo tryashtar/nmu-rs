@@ -39,9 +39,7 @@ fn main() {
             eprintln!("{}", error.to_string().red());
         }
         Ok(raw_config) => {
-            let library_config_folder = library_config_path
-                .parent()
-                .unwrap_or(Path::new(""));
+            let library_config_folder = library_config_path.parent().unwrap_or(Path::new(""));
             let library_config: LibraryConfig =
                 LibraryConfig::new(library_config_folder, raw_config);
             do_scan(library_config);
@@ -86,9 +84,7 @@ fn do_scan(library_config: LibraryConfig) {
                 {
                     for setter in &config.set {
                         if setter.names.matches(select_song_path) {
-                            setter
-                                .set
-                                .apply(&mut metadata, select_song_path, &library_config);
+                            setter.set.apply(&mut metadata, &nice_path, &library_config);
                         }
                     }
                 }
@@ -136,7 +132,10 @@ pub enum ConfigError {
     Library(#[from] LibraryError),
 }
 
-fn load_config<'a>(path: &Path, library_config: &'a LibraryConfig<'a>) -> Result<SongConfig<'a>, ConfigError> {
+fn load_config<'a>(
+    path: &Path,
+    library_config: &'a LibraryConfig<'a>,
+) -> Result<SongConfig<'a>, ConfigError> {
     match load_yaml::<RawSongConfig>(path) {
         Err(YamlError::Io(error)) if error.kind() == ErrorKind::NotFound => {
             Err(ConfigError::Yaml(YamlError::Io(error)))
@@ -160,17 +159,6 @@ struct ScanResults {
 fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
     let mut scan_songs = BTreeSet::<PathBuf>::new();
     let mut scan_images = BTreeSet::<PathBuf>::new();
-    // scan all songs that have changed
-    for song in WalkDir::new(&library_config.library_folder)
-        .into_iter()
-        .filter_map(file_path)
-        .filter(|x| {
-            match_extension(x, &library_config.song_extensions)
-                && library_config.date_cache.changed_recently(x)
-        })
-    {
-        scan_songs.insert(song);
-    }
     // for every config that's changed, scan all songs it applies to
     for config_root in &library_config.config_folders {
         for config_path in WalkDir::new(config_root)
@@ -192,6 +180,7 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
                 .filter(|x| match_extension(x, &library_config.song_extensions))
             {
                 scan_songs.insert(song);
+                print!("\rFound {}", scan_songs.len());
             }
         }
     }
@@ -223,10 +212,26 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
             {
                 for song in songs {
                     scan_songs.insert(song.clone());
+                    print!("\rFound {}", scan_songs.len());
                 }
             }
         }
     }
+    // scan all songs that have changed
+    let mut skipped = 0;
+    for song in WalkDir::new(&library_config.library_folder)
+        .into_iter()
+        .filter_map(file_path)
+        .filter(|x| match_extension(x, &library_config.song_extensions))
+    {
+        if library_config.date_cache.changed_recently(&song) {
+            scan_songs.insert(song);
+        } else if !scan_songs.contains(&song) {
+            skipped += 1;
+        }
+        print!("\rFound {}, skipped {}", scan_songs.len(), skipped);
+    }
+    println!();
     ScanResults {
         songs: scan_songs,
         images: scan_images,
