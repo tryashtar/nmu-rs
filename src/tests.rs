@@ -141,40 +141,16 @@ fn value_direct() {
 #[test]
 fn value_from() {
     let result = serde_yaml::from_str::<ValueGetter>("from: this").unwrap();
-    assert!(matches!(result, ValueGetter::Copy { .. }));
+    assert!(matches!(result, ValueGetter::From { .. }));
 }
 
 #[test]
 fn value_get_name() {
-    let result = serde_yaml::from_str::<ItemValueGetter>("clean_name").unwrap();
+    let result = serde_yaml::from_str::<FieldValueGetter>("clean_name").unwrap();
     assert!(matches!(
         result,
-        ItemValueGetter::Field(FieldValueGetter::CleanName)
+        FieldValueGetter::CleanName
     ));
-}
-
-#[test]
-fn value_get_file() {
-    let result = serde_yaml::from_str::<ItemValueGetter>("file_name").unwrap();
-    assert!(matches!(
-        result,
-        ItemValueGetter::Field(FieldValueGetter::FileName)
-    ));
-}
-
-#[test]
-fn value_get_path() {
-    let result = serde_yaml::from_str::<ItemValueGetter>("path").unwrap();
-    assert!(matches!(
-        result,
-        ItemValueGetter::Field(FieldValueGetter::Path)
-    ));
-}
-
-#[test]
-fn value_get_meta() {
-    let result = serde_yaml::from_str::<ItemValueGetter>("copy: title").unwrap();
-    assert!(matches!(result, ItemValueGetter::Copy { .. }));
 }
 
 #[test]

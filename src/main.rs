@@ -59,7 +59,7 @@ fn do_scan(library_config: LibraryConfig) {
             .unwrap_or(song_path.as_path())
             .with_extension("");
         println!("{}", nice_path.display());
-        let mut metadata = Metadata::new();
+        let mut metadata = PendingMetadata::new();
         let tags = Tags::load(&song_path);
         let existing_metadata = tags.get_metadata();
         let relative_parent = song_path
@@ -90,7 +90,8 @@ fn do_scan(library_config: LibraryConfig) {
                 }
             }
         }
-        print_differences(&existing_metadata, &metadata);
+        let final_metadata = metadata.resolve();
+        print_differences(&existing_metadata, &final_metadata);
     }
     if let Err(err) = library_config.date_cache.save() {
         eprintln!("{}", err.to_string().red());

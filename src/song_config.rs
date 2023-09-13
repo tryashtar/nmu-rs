@@ -99,18 +99,20 @@ pub enum MetadataOperation<'a> {
     Set(HashMap<MetadataField, ValueGetter>),
 }
 impl MetadataOperation<'_> {
-    pub fn apply(&self, metadata: &mut Metadata, path: &Path, config: &LibraryConfig) {
+    pub fn apply(&self, metadata: &mut PendingMetadata, path: &Path, config: &LibraryConfig) {
         match self {
             Self::Blank { remove } => {
                 for field in &config.custom_fields {
                     if remove.is_match(field) {
-                        metadata.fields.insert(field.clone(), MetadataValue::Blank);
+                        metadata
+                            .fields
+                            .insert(field.clone(), MetadataValue::Blank.into());
                     }
                 }
                 for field in BuiltinMetadataField::iter() {
                     let builtin = field.into();
                     if remove.is_match(&builtin) {
-                        metadata.fields.insert(builtin, MetadataValue::Blank);
+                        metadata.fields.insert(builtin, MetadataValue::Blank.into());
                     }
                 }
             }
@@ -119,7 +121,7 @@ impl MetadataOperation<'_> {
             }
             Self::Set(set) => {
                 for (field, value) in set {
-                    if let Ok(PendingValue::Safe(value)) = value.get(path, config) {
+                    if let Ok(value) = value.get(path, config) {
                         metadata.fields.insert(field.clone(), value);
                     }
                 }
@@ -127,9 +129,7 @@ impl MetadataOperation<'_> {
             Self::Context { source, modify } => {
                 if let Ok(value) = source.get(path, config) {
                     for (field, modifier) in modify {
-                        if let Ok(PendingValue::Safe(modified)) =
-                            modifier.modify(&value, path, config)
-                        {
+                        if let Ok(modified) = modifier.modify(&value, path, config) {
                             metadata.fields.insert(field.clone(), modified);
                         }
                     }
@@ -142,16 +142,17 @@ impl MetadataOperation<'_> {
             }
             Self::Moded { mode, values } => {
                 for (field, value) in values {
-                    if let Ok(PendingValue::Safe(adding)) = value.get(path, config) {
+                    if let Ok(PendingValue::Ready(adding)) = value.get(path, config) {
                         match metadata.fields.get(field) {
                             None => {
-                                metadata.fields.insert(field.clone(), adding);
+                                metadata.fields.insert(field.clone(), adding.into());
                             }
-                            Some(existing) => {
+                            Some(PendingValue::Ready(existing)) => {
                                 if let Ok(combined) = existing.combine(&adding, mode) {
-                                    metadata.fields.insert(field.clone(), combined);
+                                    metadata.fields.insert(field.clone(), combined.into());
                                 }
                             }
+                            Some(_) => {}
                         }
                     }
                 }
@@ -159,9 +160,7 @@ impl MetadataOperation<'_> {
             Self::Modify { modify } => {
                 for (field, modifier) in modify {
                     if let Some(existing) = metadata.fields.get(field) {
-                        if let Ok(PendingValue::Safe(modified)) =
-                            modifier.modify(&existing.clone().into(), path, config)
-                        {
+                        if let Ok(modified) = modifier.modify(&existing.clone(), path, config) {
                             metadata.fields.insert(field.clone(), modified);
                         }
                     }
@@ -430,10 +429,14 @@ pub enum AllFieldSelector {
 #[serde(untagged)]
 pub enum ValueGetter {
     Direct(MetadataValue),
-    Copy {
+    From {
         from: LocalItemSelector,
         #[serde(default = "default_value")]
-        value: ItemValueGetter,
+        value: FieldValueGetter,
+        modify: Option<ValueModifier>,
+    },
+    Copy {
+        copy: MetadataField,
         modify: Option<ValueModifier>,
     },
 }
@@ -441,7 +444,7 @@ impl ValueGetter {
     fn get(&self, path: &Path, config: &LibraryConfig) -> Result<PendingValue, ValueError> {
         match self {
             Self::Direct(value) => Ok(value.clone().into()),
-            Self::Copy {
+            Self::From {
                 from,
                 value,
                 modify,
@@ -450,13 +453,10 @@ impl ValueGetter {
                 if items.is_empty() {
                     return Err(ValueError::ItemNotFound);
                 }
-                let values = items.into_iter().filter_map(|x| value.get(x, config).ok());
                 let result = MetadataValue::from_list(
-                    values
-                        .map(|x| x.to_list())
-                        .collect::<Result<Vec<_>, _>>()?
+                    items
                         .into_iter()
-                        .flatten()
+                        .map(|x| value.get(x, config).to_string())
                         .collect(),
                 )
                 .ok_or(ValueError::UnexpectedType)?;
@@ -466,12 +466,15 @@ impl ValueGetter {
                     Ok(result.into())
                 }
             }
+            Self::Copy { copy, modify } => Ok(PendingValue::CopyField {
+                field: copy.clone(),
+            }),
         }
     }
 }
 
-fn default_value() -> ItemValueGetter {
-    ItemValueGetter::Field(FieldValueGetter::CleanName)
+fn default_value() -> FieldValueGetter {
+    FieldValueGetter::CleanName
 }
 
 #[derive(Deserialize, Serialize)]
@@ -516,12 +519,13 @@ fn default_sep() -> NoSeparatorDecision {
     NoSeparatorDecision::Ignore
 }
 pub enum PendingValue {
+    Ready(MetadataValue),
     RegexMatches(HashMap<String, String>),
-    Safe(MetadataValue),
+    CopyField { field: MetadataField },
 }
 impl From<MetadataValue> for PendingValue {
     fn from(value: MetadataValue) -> Self {
-        PendingValue::Safe(value)
+        PendingValue::Ready(value)
     }
 }
 impl ValueModifier {
@@ -537,11 +541,7 @@ impl ValueModifier {
                 return MetadataValue::Blank;
             }
         }
-        if result.len() == 1 {
-            MetadataValue::String(result[0].clone())
-        } else {
-            MetadataValue::List(result.to_vec())
-        }
+        MetadataValue::from_list(result.to_vec()).unwrap_or(MetadataValue::Blank)
     }
     fn append(
         value: &MetadataValue,
@@ -592,7 +592,7 @@ impl ValueModifier {
                 Err(ValueError::UnexpectedType)
             }
             Self::Regex { regex } => {
-                if let PendingValue::Safe(MetadataValue::String(str)) = value {
+                if let PendingValue::Ready(MetadataValue::String(str)) = value {
                     if let Some(captures) = regex.captures(str) {
                         let values: HashMap<String, String> = regex
                             .capture_names()
@@ -612,7 +612,7 @@ impl ValueModifier {
                 Err(ValueError::UnexpectedType)
             }
             Self::Take { take } => {
-                if let PendingValue::Safe(MetadataValue::List(list)) = value {
+                if let PendingValue::Ready(MetadataValue::List(list)) = value {
                     return match take {
                         TakeModifier::Defined {
                             index,
@@ -636,10 +636,10 @@ impl ValueModifier {
                 Err(ValueError::UnexpectedType)
             }
             Self::Append { append, index } => {
-                if let PendingValue::Safe(MetadataValue::String(extra)) =
+                if let PendingValue::Ready(MetadataValue::String(extra)) =
                     append.get(path, config)?
                 {
-                    if let PendingValue::Safe(value) = value {
+                    if let PendingValue::Ready(value) = value {
                         let range = index.as_ref().map(|x| x.into());
                         return Ok(Self::append(value, &extra, range.as_ref(), true)?.into());
                     }
@@ -647,26 +647,26 @@ impl ValueModifier {
                 Err(ValueError::UnexpectedType)
             }
             Self::Prepend { prepend, index } => {
-                if let PendingValue::Safe(MetadataValue::String(extra)) =
+                if let PendingValue::Ready(MetadataValue::String(extra)) =
                     prepend.get(path, config)?
                 {
                     let range = index.as_ref().map(|x| x.into());
-                    if let PendingValue::Safe(value) = value {
+                    if let PendingValue::Ready(value) = value {
                         return Ok(Self::append(value, &extra, range.as_ref(), false)?.into());
                     }
                 }
                 Err(ValueError::UnexpectedType)
             }
             Self::Join { join } => {
-                if let PendingValue::Safe(MetadataValue::String(extra)) = join.get(path, config)? {
-                    if let PendingValue::Safe(MetadataValue::List(list)) = value {
+                if let PendingValue::Ready(MetadataValue::String(extra)) = join.get(path, config)? {
+                    if let PendingValue::Ready(MetadataValue::List(list)) = value {
                         return Ok(MetadataValue::String(list.join(&extra)).into());
                     }
                 }
                 Err(ValueError::UnexpectedType)
             }
             Self::Split { split, when_none } => {
-                if let PendingValue::Safe(MetadataValue::String(str)) = value {
+                if let PendingValue::Ready(MetadataValue::String(str)) = value {
                     let vec = str.split(split).map(|x| x.to_owned()).collect::<Vec<_>>();
                     if let NoSeparatorDecision::Exit = when_none {
                         if vec.len() == 1 {
@@ -714,42 +714,6 @@ fn default_oob() -> OutOfBoundsDecision {
     OutOfBoundsDecision::Exit
 }
 
-#[derive(Deserialize, Serialize)]
-#[serde(untagged)]
-pub enum ItemValueGetter {
-    Field(FieldValueGetter),
-    Copy { copy: MetadataField },
-}
-impl ItemValueGetter {
-    fn file_name(path: &Path) -> String {
-        path.file_name()
-            .map(|x| x.to_string_lossy())
-            .unwrap_or_else(|| path.to_string_lossy())
-            .into_owned()
-    }
-    fn clean<'a>(name: &'a str, config: &LibraryConfig) -> Cow<'a, str> {
-        let mut result = Cow::from(name);
-        for (find, replace) in &config.find_replace {
-            result = result.replace(find, replace).into();
-        }
-        result
-    }
-    fn get(&self, path: &Path, config: &LibraryConfig) -> Result<MetadataValue, ValueError> {
-        match self {
-            Self::Field(field) => match field {
-                FieldValueGetter::CleanName => Ok(MetadataValue::String(
-                    Self::clean(Self::file_name(path).as_str(), config).into_owned(),
-                )),
-                FieldValueGetter::FileName => Ok(MetadataValue::String(Self::file_name(path))),
-                FieldValueGetter::Path => {
-                    Ok(MetadataValue::String(path.to_string_lossy().into_owned()))
-                }
-            },
-            Self::Copy { copy } => Err(ValueError::ItemNotFound),
-        }
-    }
-}
-
 // not directly in ItemValueGetter as a workaround for serde
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -759,9 +723,57 @@ pub enum FieldValueGetter {
     Path,
 }
 
-#[derive(Debug, Clone)]
+impl FieldValueGetter {
+    fn file_name(path: &Path) -> Cow<str> {
+        path.file_name()
+            .map(|x| x.to_string_lossy())
+            .unwrap_or_else(|| path.to_string_lossy())
+    }
+    fn clean<'a>(name: Cow<'a, str>, config: &LibraryConfig) -> Cow<'a, str> {
+        let mut result = name;
+        for (find, replace) in &config.find_replace {
+            result = result.replace(find, replace).into();
+        }
+        result
+    }
+    fn get<'a>(&self, path: &'a Path, config: &LibraryConfig) -> Cow<'a, str> {
+        match self {
+            Self::CleanName => Self::clean(Self::file_name(path), config),
+            Self::FileName => Self::file_name(path),
+            Self::Path => path.to_string_lossy(),
+        }
+    }
+}
+
+pub struct PendingMetadata {
+    pub fields: HashMap<MetadataField, PendingValue>,
+}
 pub struct Metadata {
     pub fields: HashMap<MetadataField, MetadataValue>,
+}
+impl PendingMetadata {
+    pub fn new() -> Self {
+        Self {
+            fields: HashMap::new(),
+        }
+    }
+    pub fn resolve(self) -> Metadata {
+        Metadata {
+            fields: self
+                .fields
+                .into_iter()
+                .map(|(k, v)| {
+                    (
+                        k,
+                        match v {
+                            PendingValue::Ready(ready) => ready,
+                            _ => MetadataValue::Blank,
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
 }
 impl Metadata {
     pub fn new() -> Self {
