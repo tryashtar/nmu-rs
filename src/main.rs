@@ -59,38 +59,9 @@ fn do_scan(library_config: LibraryConfig) {
             .unwrap_or(song_path.as_path())
             .with_extension("");
         println!("{}", nice_path.display());
-        let mut metadata = PendingMetadata::new();
         let tags = Tags::load(&song_path);
         let existing_metadata = tags.get_metadata();
-        let relative_parent = song_path
-            .strip_prefix(&library_config.library_folder)
-            .unwrap_or(song_path.as_path())
-            .parent()
-            .unwrap_or(Path::new(""));
-        for ancestor in relative_parent
-            .ancestors()
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-        {
-            let select_song_path = nice_path
-                .strip_prefix(ancestor)
-                .unwrap_or(nice_path.as_path());
-            for config_root in &library_config.config_folders {
-                let config_path = config_root.join(ancestor).join("config.yaml");
-                if let Some(config) = cached_configs
-                    .entry(config_path)
-                    .or_insert_with_key(|x| load_config(x.as_path(), &library_config).ok())
-                {
-                    for setter in &config.set {
-                        if setter.names.matches(select_song_path) {
-                            setter.set.apply(&mut metadata, &nice_path, &library_config);
-                        }
-                    }
-                }
-            }
-        }
-        let final_metadata = metadata.resolve();
+        let final_metadata = get_metadata(&nice_path, &library_config, &mut cached_configs);
         print_differences(&existing_metadata, &final_metadata);
     }
     if let Err(err) = library_config.date_cache.save() {
@@ -103,7 +74,40 @@ fn do_scan(library_config: LibraryConfig) {
     }
 }
 
+fn get_metadata<'a>(
+    nice_path: &Path,
+    library_config: &'a LibraryConfig,
+    config_cache: &mut HashMap<PathBuf, Option<SongConfig<'a>>>,
+) -> Metadata {
+    let mut metadata = PendingMetadata::new();
+    for ancestor in nice_path
+        .parent()
+        .unwrap_or(Path::new(""))
+        .ancestors()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
+        let select_song_path = nice_path.strip_prefix(ancestor).unwrap_or(nice_path);
+        for config_root in &library_config.config_folders {
+            let config_path = config_root.join(ancestor).join("config.yaml");
+            if let Some(config) = config_cache
+                .entry(config_path)
+                .or_insert_with_key(|x| load_config(x.as_path(), library_config).ok())
+            {
+                for setter in &config.set {
+                    if setter.names.matches(select_song_path) {
+                        setter.set.apply(&mut metadata, nice_path, library_config);
+                    }
+                }
+            }
+        }
+    }
+    metadata.resolve()
+}
+
 fn print_differences(existing: &Metadata, incoming: &Metadata) {
+    let blank = MetadataValue::blank();
     for key in existing
         .fields
         .keys()
@@ -120,8 +124,7 @@ fn print_differences(existing: &Metadata, incoming: &Metadata) {
             continue;
         }
         if let Some(new) = incoming.fields.get(key) {
-            let new = &new.canonicalize();
-            let current = existing.fields.get(key).unwrap_or(&MetadataValue::Blank);
+            let current = existing.fields.get(key).unwrap_or(&blank);
             if current != new {
                 println!("\t{:?}: {:?} -> {:?}", key, current, new);
             }

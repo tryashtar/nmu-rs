@@ -83,17 +83,15 @@ fn get_flac(tag: &VorbisComment, field: &BuiltinMetadataField) -> Option<Metadat
 }
 
 fn convert_comments(item: Vec<&id3::frame::Comment>) -> Option<MetadataValue> {
-    Some(item.into_iter().map(|x| x.text.clone()).collect::<Vec<_>>())
-        .and_then(MetadataValue::from_list)
+    Some(item.into_iter().map(|x| x.text.clone()).collect::<Vec<_>>()).map(MetadataValue::List)
 }
 
 fn convert_lyrics(item: Vec<&id3::frame::Lyrics>) -> Option<MetadataValue> {
-    Some(item.into_iter().map(|x| x.text.clone()).collect::<Vec<_>>())
-        .and_then(MetadataValue::from_list)
+    Some(item.into_iter().map(|x| x.text.clone()).collect::<Vec<_>>()).map(MetadataValue::List)
 }
 
 fn convert_str(item: Option<&str>) -> Option<MetadataValue> {
-    item.map(|x| MetadataValue::String(x.to_owned()))
+    item.map(|x| MetadataValue::string(x.to_owned()))
 }
 
 fn convert_num(item: Option<&Vec<String>>) -> Option<MetadataValue> {
@@ -109,9 +107,9 @@ fn convert_num(item: Option<&Vec<String>>) -> Option<MetadataValue> {
 
 fn convert_list_str(item: Option<Vec<&str>>) -> Option<MetadataValue> {
     item.map(|x| x.into_iter().map(|y| y.to_owned()).collect())
-        .and_then(MetadataValue::from_list)
+        .map(MetadataValue::List)
 }
 
 fn convert_list(item: Option<&Vec<String>>) -> Option<MetadataValue> {
-    item.and_then(|x| MetadataValue::from_list(x.clone()))
+    item.map(|x| MetadataValue::List(x.clone()))
 }

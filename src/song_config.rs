@@ -106,13 +106,15 @@ impl MetadataOperation<'_> {
                     if remove.is_match(field) {
                         metadata
                             .fields
-                            .insert(field.clone(), MetadataValue::Blank.into());
+                            .insert(field.clone(), MetadataValue::blank().into());
                     }
                 }
                 for field in BuiltinMetadataField::iter() {
                     let builtin = field.into();
                     if remove.is_match(&builtin) {
-                        metadata.fields.insert(builtin, MetadataValue::Blank.into());
+                        metadata
+                            .fields
+                            .insert(builtin, MetadataValue::blank().into());
                     }
                 }
             }
@@ -129,7 +131,7 @@ impl MetadataOperation<'_> {
             Self::Context { source, modify } => {
                 if let Ok(value) = source.get(path, config) {
                     for (field, modifier) in modify {
-                        if let Ok(modified) = modifier.modify(&value, path, config) {
+                        if let Ok(modified) = modifier.modify(value.clone(), path, config) {
                             metadata.fields.insert(field.clone(), modified);
                         }
                     }
@@ -160,7 +162,7 @@ impl MetadataOperation<'_> {
             Self::Modify { modify } => {
                 for (field, modifier) in modify {
                     if let Some(existing) = metadata.fields.get(field) {
-                        if let Ok(modified) = modifier.modify(&existing.clone(), path, config) {
+                        if let Ok(modified) = modifier.modify(existing.clone(), path, config) {
                             metadata.fields.insert(field.clone(), modified);
                         }
                     }
@@ -253,11 +255,11 @@ impl PathSegment {
 pub enum LocalItemSelector {
     This(SelfItemSelector),
     DrillUp {
-        up: RawRange,
+        up: Range,
     },
     DrillDown {
         must_be: Option<MusicItemType>,
-        from_root: RawRange,
+        from_root: Range,
     },
 }
 impl LocalItemSelector {
@@ -265,14 +267,11 @@ impl LocalItemSelector {
         match self {
             Self::This(_) => vec![start],
             Self::DrillUp { up } => {
-                let range: Range = up.into();
                 let ancestors = start.ancestors().collect::<Vec<_>>();
-                range
-                    .slice(ancestors.as_slice(), OutOfBoundsDecision::Clamp)
+                up.slice(ancestors.as_slice(), OutOfBoundsDecision::Clamp)
                     .to_vec()
             }
             Self::DrillDown { must_be, from_root } => {
-                let range: Range = from_root.into();
                 let ancestors = start.ancestors().collect::<Vec<_>>();
                 let last = ancestors.len() - 1;
                 let ancestors = ancestors
@@ -285,7 +284,7 @@ impl LocalItemSelector {
                         Some(MusicItemType::Folder) => (i != last).then_some(x),
                     })
                     .collect::<Vec<_>>();
-                range
+                from_root
                     .slice(ancestors.as_slice(), OutOfBoundsDecision::Clamp)
                     .iter()
                     .filter_map(|x| *x)
@@ -303,20 +302,104 @@ pub enum SelfItemSelector {
     This,
 }
 
-#[derive(Deserialize, Serialize)]
-#[serde(untagged)]
-pub enum RawRange {
-    Index(i32),
-    Named(NamedRange),
-    Tuple(i32, i32),
-    StartOnly { start: i32 },
-    StopOnly { stop: i32 },
-    StartStop { start: i32, stop: i32 },
-}
+#[derive(Serialize)]
 pub struct Range {
-    start: i32,
-    stop: i32,
+    pub start: i32,
+    pub stop: i32,
 }
+impl<'de> Deserialize<'de> for Range {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::de::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "lowercase")]
+        enum Field {
+            Start,
+            Stop,
+        }
+
+        struct RangeVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for RangeVisitor {
+            type Value = Range;
+
+            fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
+                formatter.write_str("Range")
+            }
+
+            fn visit_seq<V>(self, mut seq: V) -> Result<Range, V::Error>
+            where
+                V: serde::de::SeqAccess<'de>,
+            {
+                let start = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
+                let stop = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(1, &self))?;
+                Ok(Range::new(start, stop))
+            }
+
+            fn visit_map<V>(self, mut map: V) -> Result<Range, V::Error>
+            where
+                V: serde::de::MapAccess<'de>,
+            {
+                let mut start = None;
+                let mut stop = None;
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        Field::Start => {
+                            if start.is_some() {
+                                return Err(serde::de::Error::duplicate_field("start"));
+                            }
+                            start = Some(map.next_value()?);
+                        }
+                        Field::Stop => {
+                            if stop.is_some() {
+                                return Err(serde::de::Error::duplicate_field("stop"));
+                            }
+                            stop = Some(map.next_value()?);
+                        }
+                    }
+                }
+                Ok(Range::new(start.unwrap_or(0), stop.unwrap_or(-1)))
+            }
+
+            fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok((v as i32).into())
+            }
+
+            fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok((v as i32).into())
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match v {
+                    "all" => Ok(Range::from_start(0)),
+                    "first" => Ok(0.into()),
+                    "last" => Ok((-1).into()),
+                    _ => Err(serde::de::Error::unknown_variant(
+                        v,
+                        &["all", "first", "last"],
+                    )),
+                }
+            }
+        }
+
+        deserializer.deserialize_any(RangeVisitor)
+    }
+}
+
 impl Range {
     pub fn new(start: i32, stop: i32) -> Self {
         Self { start, stop }
@@ -333,20 +416,7 @@ impl From<i32> for Range {
         }
     }
 }
-impl From<&RawRange> for Range {
-    fn from(value: &RawRange) -> Self {
-        match value {
-            RawRange::Index(i) => (*i).into(),
-            RawRange::Named(NamedRange::All) => Range::from_start(0),
-            RawRange::Named(NamedRange::First) => 0.into(),
-            RawRange::Named(NamedRange::Last) => (-1).into(),
-            RawRange::Tuple(start, end) => Range::new(*start, *end),
-            RawRange::StartOnly { start } => Range::from_start(*start),
-            RawRange::StopOnly { stop } => Range::new(0, *stop),
-            RawRange::StartStop { start, stop } => Range::new(*start, *stop),
-        }
-    }
-}
+
 #[derive(Deserialize, Serialize, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum OutOfBoundsDecision {
@@ -453,15 +523,14 @@ impl ValueGetter {
                 if items.is_empty() {
                     return Err(ValueError::ItemNotFound);
                 }
-                let result = MetadataValue::from_list(
+                let result = MetadataValue::List(
                     items
                         .into_iter()
                         .map(|x| value.get(x, config).to_string())
                         .collect(),
-                )
-                .ok_or(ValueError::UnexpectedType)?;
+                );
                 if let Some(modify) = modify {
-                    modify.modify(&result.into(), path, config)
+                    modify.modify(result.into(), path, config)
                 } else {
                     Ok(result.into())
                 }
@@ -489,11 +558,11 @@ pub enum NoSeparatorDecision {
 pub enum ValueModifier {
     Prepend {
         prepend: Box<ValueGetter>,
-        index: Option<RawRange>,
+        index: Option<Range>,
     },
     Append {
         append: Box<ValueGetter>,
-        index: Option<RawRange>,
+        index: Option<Range>,
     },
     Join {
         join: Box<ValueGetter>,
@@ -518,6 +587,8 @@ pub enum ValueModifier {
 fn default_sep() -> NoSeparatorDecision {
     NoSeparatorDecision::Ignore
 }
+
+#[derive(Clone)]
 pub enum PendingValue {
     Ready(MetadataValue),
     RegexMatches(HashMap<String, String>),
@@ -538,10 +609,10 @@ impl ValueModifier {
         let result = range.slice(list, oob);
         if let Some(min) = min_length {
             if result.len() < min {
-                return MetadataValue::Blank;
+                return MetadataValue::blank();
             }
         }
-        MetadataValue::from_list(result.to_vec()).unwrap_or(MetadataValue::Blank)
+        MetadataValue::List(result.to_vec())
     }
     fn append(
         value: &MetadataValue,
@@ -555,9 +626,6 @@ impl ValueModifier {
             |str: &str, extra: &str| format!("{extra}{str}")
         };
         match value {
-            MetadataValue::String(str) if index.is_none() => {
-                Ok(MetadataValue::String(formatter(str, extra)))
-            }
             MetadataValue::List(list) => Ok(MetadataValue::List(
                 list.iter()
                     .enumerate()
@@ -573,12 +641,12 @@ impl ValueModifier {
                     })
                     .collect(),
             )),
-            _ => Err(ValueError::UnexpectedType),
+            MetadataValue::Number(_) => Err(ValueError::UnexpectedType),
         }
     }
     fn modify(
         &self,
-        value: &PendingValue,
+        value: PendingValue,
         path: &Path,
         config: &LibraryConfig,
     ) -> Result<PendingValue, ValueError> {
@@ -586,27 +654,29 @@ impl ValueModifier {
             Self::Group { group } => {
                 if let PendingValue::RegexMatches(matches) = value {
                     if let Some(capture) = matches.get(group) {
-                        return Ok(MetadataValue::String(capture.as_str().to_owned()).into());
+                        return Ok(MetadataValue::string(capture.to_owned()).into());
                     }
                 }
                 Err(ValueError::UnexpectedType)
             }
             Self::Regex { regex } => {
-                if let PendingValue::Ready(MetadataValue::String(str)) = value {
-                    if let Some(captures) = regex.captures(str) {
-                        let values: HashMap<String, String> = regex
-                            .capture_names()
-                            .filter_map(|x| {
-                                x.and_then(|y| {
-                                    captures
-                                        .name(y)
-                                        .map(|z| (y.to_owned(), z.as_str().to_owned()))
+                if let PendingValue::Ready(val) = value {
+                    if let Some(str) = val.as_string() {
+                        if let Some(captures) = regex.captures(str) {
+                            let values: HashMap<String, String> = regex
+                                .capture_names()
+                                .filter_map(|x| {
+                                    x.and_then(|y| {
+                                        captures
+                                            .name(y)
+                                            .map(|z| (y.to_owned(), z.as_str().to_owned()))
+                                    })
                                 })
-                            })
-                            .collect();
-                        return Ok(PendingValue::RegexMatches(values));
-                    } else {
-                        return Err(ValueError::NoMatchFound);
+                                .collect();
+                            return Ok(PendingValue::RegexMatches(values));
+                        } else {
+                            return Err(ValueError::NoMatchFound);
+                        }
                     }
                 }
                 Err(ValueError::UnexpectedType)
@@ -619,55 +689,56 @@ impl ValueModifier {
                             out_of_bounds,
                             min_length,
                         } => Ok(Self::take(
-                            list,
-                            &index.into(),
+                            &list,
+                            index,
                             *out_of_bounds,
                             min_length.as_ref().copied(),
                         )
                         .into()),
                         TakeModifier::Simple(range) => {
-                            Ok(
-                                Self::take(list, &range.into(), OutOfBoundsDecision::Exit, None)
-                                    .into(),
-                            )
+                            Ok(Self::take(&list, range, OutOfBoundsDecision::Exit, None).into())
                         }
                     };
                 }
                 Err(ValueError::UnexpectedType)
             }
             Self::Append { append, index } => {
-                if let PendingValue::Ready(MetadataValue::String(extra)) =
-                    append.get(path, config)?
-                {
-                    if let PendingValue::Ready(value) = value {
-                        let range = index.as_ref().map(|x| x.into());
-                        return Ok(Self::append(value, &extra, range.as_ref(), true)?.into());
+                if let PendingValue::Ready(val) = append.get(path, config)? {
+                    if let Some(str) = val.as_string() {
+                        if let PendingValue::Ready(value) = value {
+                            return Ok(Self::append(&value, str, index.as_ref(), true)?.into());
+                        }
                     }
                 }
                 Err(ValueError::UnexpectedType)
             }
             Self::Prepend { prepend, index } => {
-                if let PendingValue::Ready(MetadataValue::String(extra)) =
-                    prepend.get(path, config)?
-                {
-                    let range = index.as_ref().map(|x| x.into());
-                    if let PendingValue::Ready(value) = value {
-                        return Ok(Self::append(value, &extra, range.as_ref(), false)?.into());
+                if let PendingValue::Ready(val) = prepend.get(path, config)? {
+                    if let Some(str) = val.as_string() {
+                        if let PendingValue::Ready(value) = value {
+                            return Ok(Self::append(&value, str, index.as_ref(), false)?.into());
+                        }
                     }
                 }
                 Err(ValueError::UnexpectedType)
             }
             Self::Join { join } => {
-                if let PendingValue::Ready(MetadataValue::String(extra)) = join.get(path, config)? {
-                    if let PendingValue::Ready(MetadataValue::List(list)) = value {
-                        return Ok(MetadataValue::String(list.join(&extra)).into());
+                if let PendingValue::Ready(extra) = join.get(path, config)? {
+                    if let Some(str) = extra.as_string() {
+                        if let PendingValue::Ready(MetadataValue::List(list)) = value {
+                            return Ok(MetadataValue::string(list.join(str)).into());
+                        }
                     }
                 }
                 Err(ValueError::UnexpectedType)
             }
             Self::Split { split, when_none } => {
-                if let PendingValue::Ready(MetadataValue::String(str)) = value {
-                    let vec = str.split(split).map(|x| x.to_owned()).collect::<Vec<_>>();
+                if let PendingValue::Ready(MetadataValue::List(list)) = value {
+                    let vec = list
+                        .iter()
+                        .flat_map(|x| x.split(split))
+                        .map(|x| x.to_owned())
+                        .collect::<Vec<_>>();
                     if let NoSeparatorDecision::Exit = when_none {
                         if vec.len() == 1 {
                             return Err(ValueError::ConditionsNotMet);
@@ -684,7 +755,7 @@ impl ValueModifier {
                     let value = seq[0].modify(value, path, config)?;
                     seq.iter()
                         .skip(1)
-                        .try_fold(value, |x, y| y.modify(&x, path, config))
+                        .try_fold(value, |x, y| y.modify(x, path, config))
                 }
             }
         }
@@ -702,9 +773,9 @@ pub enum ValueError {
 #[derive(Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum TakeModifier {
-    Simple(RawRange),
+    Simple(Range),
     Defined {
-        index: RawRange,
+        index: Range,
         #[serde(default = "default_oob")]
         out_of_bounds: OutOfBoundsDecision,
         min_length: Option<usize>,
@@ -767,7 +838,7 @@ impl PendingMetadata {
                         k,
                         match v {
                             PendingValue::Ready(ready) => ready,
-                            _ => MetadataValue::Blank,
+                            _ => MetadataValue::blank(),
                         },
                     )
                 })
@@ -783,56 +854,85 @@ impl Metadata {
     }
 }
 
-#[derive(Deserialize, PartialEq, Eq, Serialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, PartialEq, Eq, Debug, Clone)]
 #[serde(untagged)]
 pub enum MetadataValue {
-    Blank,
-    String(String),
     Number(u32),
+    #[serde(deserialize_with = "string_or_seq_string")]
     List(Vec<String>),
+}
+fn string_or_seq_string<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::de::Deserializer<'de>,
+{
+    struct StringOrVec(std::marker::PhantomData<Vec<String>>);
+
+    impl<'de> serde::de::Visitor<'de> for StringOrVec {
+        type Value = Vec<String>;
+
+        fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
+            formatter.write_str("string or list of strings")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(vec![value.to_owned()])
+        }
+
+        fn visit_seq<S>(self, visitor: S) -> Result<Self::Value, S::Error>
+        where
+            S: serde::de::SeqAccess<'de>,
+        {
+            Deserialize::deserialize(serde::de::value::SeqAccessDeserializer::new(visitor))
+        }
+    }
+
+    deserializer.deserialize_any(StringOrVec(std::marker::PhantomData))
+}
+impl MetadataValue {
+    pub fn blank() -> MetadataValue {
+        MetadataValue::List(vec![])
+    }
+    pub fn string(single: String) -> MetadataValue {
+        MetadataValue::List(vec![single])
+    }
+    pub fn as_string(&self) -> Option<&str> {
+        match self {
+            Self::Number(_) => None,
+            Self::List(list) => {
+                if list.is_empty() {
+                    None
+                } else {
+                    Some(list[0].as_ref())
+                }
+            }
+        }
+    }
 }
 impl MetadataValue {
     fn combine(&self, other: &Self, mode: &CombineMode) -> Result<Self, ValueError> {
         match mode {
             CombineMode::Replace => Ok(other.clone()),
             CombineMode::Append => {
-                let mut list1 = self.to_list()?;
-                let mut list2 = other.to_list()?;
+                let mut list1 = self.to_list()?.clone();
+                let mut list2 = other.to_list()?.clone();
                 list1.append(&mut list2);
                 Ok(Self::List(list1))
             }
             CombineMode::Prepend => {
-                let mut list1 = other.to_list()?;
-                let mut list2 = self.to_list()?;
+                let mut list1 = other.to_list()?.clone();
+                let mut list2 = self.to_list()?.clone();
                 list1.append(&mut list2);
                 Ok(Self::List(list1))
             }
         }
     }
-    pub fn from_list(list: Vec<String>) -> Option<Self> {
-        match list.len() {
-            0 => None,
-            1 => Some(MetadataValue::String(list[0].clone())),
-            _ => Some(MetadataValue::List(list)),
-        }
-    }
-    fn to_list(&self) -> Result<Vec<String>, ValueError> {
+    fn to_list(&self) -> Result<&Vec<String>, ValueError> {
         match self {
-            Self::Blank | Self::Number(_) => Err(ValueError::UnexpectedType),
-            Self::String(str) => Ok(vec![str.clone()]),
-            Self::List(list) => Ok(list.clone()),
-        }
-    }
-    pub fn canonicalize(&self) -> Self {
-        match self {
-            Self::Blank | Self::Number(_) | Self::String(_) => self.clone(),
-            Self::List(list) => {
-                if list.len() == 1 {
-                    Self::String(list[0].clone())
-                } else {
-                    self.clone()
-                }
-            }
+            Self::List(list) => Ok(list),
+            Self::Number(_) => Err(ValueError::UnexpectedType),
         }
     }
 }

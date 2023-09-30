@@ -123,7 +123,7 @@ fn field_select_all() {
 #[test]
 fn meta_str() {
     let result = serde_yaml::from_str::<MetadataValue>("test").unwrap();
-    assert!(matches!(result, MetadataValue::String { .. }));
+    assert!(matches!(result, MetadataValue::List { .. }));
 }
 
 #[test]
@@ -179,20 +179,20 @@ fn meta_op_mode() {
 
 #[test]
 fn range_index() {
-    let result = serde_yaml::from_str::<RawRange>("5").unwrap();
-    assert!(matches!(result, RawRange::Index { .. }));
+    let result = serde_yaml::from_str::<Range>("5").unwrap();
+    assert!(matches!(result, Range { start: 5, stop: 5 }));
 }
 
 #[test]
 fn range_tuple() {
-    let result = serde_yaml::from_str::<RawRange>("[0, 5]").unwrap();
-    assert!(matches!(result, RawRange::Tuple { .. }));
+    let result = serde_yaml::from_str::<Range>("[0, 5]").unwrap();
+    assert!(matches!(result, Range { start: 0, stop: 5 }));
 }
 
 #[test]
 fn range_start() {
-    let result = serde_yaml::from_str::<RawRange>("{start: 5}").unwrap();
-    assert!(matches!(result, RawRange::StartOnly { .. }));
+    let result = serde_yaml::from_str::<Range>("{start: 5}").unwrap();
+    assert!(matches!(result, Range { start: 5, stop: -1 }));
 }
 
 #[test]
