@@ -253,7 +253,8 @@ impl PathSegment {
 #[serde(rename_all = "lowercase")]
 #[serde(untagged)]
 pub enum LocalItemSelector {
-    This(SelfItemSelector),
+    #[serde(deserialize_with = "item_selector_this")]
+    This,
     DrillUp {
         up: Range,
     },
@@ -262,10 +263,38 @@ pub enum LocalItemSelector {
         from_root: Range,
     },
 }
+fn item_selector_this<'de, D>(deserializer: D) -> Result<(), D::Error>
+where
+    D: serde::de::Deserializer<'de>,
+{
+    struct Visitor;
+
+    impl<'de> serde::de::Visitor<'de> for Visitor {
+        type Value = ();
+
+        fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
+            formatter.write_str("string")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            if value == "this" || value == "self" {
+                Ok(())
+            }
+            else {
+                Err(serde::de::Error::custom("invalid"))
+            }
+        }
+    }
+
+    deserializer.deserialize_str(Visitor)
+}
 impl LocalItemSelector {
     fn get<'a>(&self, start: &'a Path) -> Vec<&'a Path> {
         match self {
-            Self::This(_) => vec![start],
+            Self::This => vec![start],
             Self::DrillUp { up } => {
                 let ancestors = start.ancestors().collect::<Vec<_>>();
                 up.slice(ancestors.as_slice(), OutOfBoundsDecision::Clamp)
@@ -292,14 +321,6 @@ impl LocalItemSelector {
             }
         }
     }
-}
-
-// not directly in LocalItemSelector as a workaround for serde
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SelfItemSelector {
-    #[serde(alias = "self")]
-    This,
 }
 
 #[derive(Serialize)]
@@ -455,15 +476,6 @@ impl Range {
     }
 }
 
-// not directly in Range as a workaround for serde
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum NamedRange {
-    All,
-    First,
-    Last,
-}
-
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MusicItemType {
@@ -474,25 +486,47 @@ pub enum MusicItemType {
 #[derive(Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum FieldSelector {
-    All(AllFieldSelector),
+    #[serde(deserialize_with = "field_selector_all")]
+    All,
     Single(MetadataField),
     Multiple(HashSet<MetadataField>),
+}
+fn field_selector_all<'de, D>(deserializer: D) -> Result<(), D::Error>
+where
+    D: serde::de::Deserializer<'de>,
+{
+    struct Visitor;
+
+    impl<'de> serde::de::Visitor<'de> for Visitor {
+        type Value = ();
+
+        fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
+            formatter.write_str("string")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            if value == "*" {
+                Ok(())
+            }
+            else {
+                Err(serde::de::Error::custom("invalid"))
+            }
+        }
+    }
+
+    deserializer.deserialize_str(Visitor)
 }
 impl FieldSelector {
     fn is_match(&self, field: &MetadataField) -> bool {
         match self {
-            Self::All(_) => true,
+            Self::All => true,
             Self::Single(single) => field == single,
             Self::Multiple(set) => set.contains(field),
         }
     }
-}
-
-// not directly in FieldSelector as a workaround for serde
-#[derive(Deserialize, Serialize)]
-pub enum AllFieldSelector {
-    #[serde(rename = "*")]
-    All,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -509,6 +543,13 @@ pub enum ValueGetter {
         copy: MetadataField,
         modify: Option<ValueModifier>,
     },
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldValueGetter {
+    FileName,
+    CleanName,
+    Path,
 }
 impl ValueGetter {
     fn get(&self, path: &Path, config: &LibraryConfig) -> Result<PendingValue, ValueError> {
@@ -785,15 +826,6 @@ fn default_oob() -> OutOfBoundsDecision {
     OutOfBoundsDecision::Exit
 }
 
-// not directly in ItemValueGetter as a workaround for serde
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FieldValueGetter {
-    FileName,
-    CleanName,
-    Path,
-}
-
 impl FieldValueGetter {
     fn file_name(path: &Path) -> Cow<str> {
         path.file_name()
@@ -937,15 +969,14 @@ impl MetadataValue {
     }
 }
 
-#[derive(Eq, Hash, PartialEq, Debug, Clone, Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Eq, Hash, PartialEq, Debug, Clone)]
 #[serde(untagged)]
 pub enum MetadataField {
     Builtin(BuiltinMetadataField),
     Custom(String),
 }
 
-// not directly in MetadataField as a workaround for serde
-#[derive(Eq, Hash, PartialEq, Debug, Display, EnumIter, Clone, Copy, Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Eq, Hash, PartialEq, Debug, Display, EnumIter, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum BuiltinMetadataField {
     Title,
