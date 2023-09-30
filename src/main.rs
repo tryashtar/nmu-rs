@@ -3,7 +3,7 @@ use itertools::Itertools;
 use jwalk::WalkDir;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::env;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, IsTerminal};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -186,8 +186,9 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
                 .filter_map(file_path)
                 .filter(|x| match_extension(x, &library_config.song_extensions))
             {
-                scan_songs.insert(song);
-                print!("\rFound {}", scan_songs.len());
+                if scan_songs.insert(song) && std::io::stdout().is_terminal() {
+                    print!("\rFound {}", scan_songs.len())
+                }
             }
         }
     }
@@ -218,8 +219,9 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
                     .changed_recently(image_path.as_path())
             {
                 for song in songs {
-                    scan_songs.insert(song.clone());
-                    print!("\rFound {}", scan_songs.len());
+                    if scan_songs.insert(song.clone()) && std::io::stdout().is_terminal() {
+                        print!("\rFound {}", scan_songs.len())
+                    }
                 }
             }
         }
@@ -232,12 +234,20 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
         .filter(|x| match_extension(x, &library_config.song_extensions))
     {
         if library_config.date_cache.changed_recently(&song) {
-            scan_songs.insert(song);
+            if scan_songs.insert(song) && std::io::stdout().is_terminal() {
+                print!("\rFound {}, skipped {}", scan_songs.len(), skipped);
+            }
         } else if !scan_songs.contains(&song) {
             skipped += 1;
+            if std::io::stdout().is_terminal() {
+                print!("\rFound {}, skipped {}", scan_songs.len(), skipped);
+            }
         }
-        print!("\rFound {}, skipped {}", scan_songs.len(), skipped);
     }
+    if std::io::stdout().is_terminal() {
+        print!("\r")
+    }
+    print!("Found {}, skipped {}", scan_songs.len(), skipped);
     println!();
     ScanResults {
         songs: scan_songs,
