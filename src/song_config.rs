@@ -1,3 +1,4 @@
+use jwalk::WalkDir;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -5,6 +6,7 @@ use std::{
     collections::{HashMap, HashSet},
     ops::Deref,
     path::{Component, Path, PathBuf},
+    rc::Rc,
 };
 use strum::{Display, EnumIter, IntoEnumIterator};
 
@@ -99,7 +101,12 @@ pub enum MetadataOperation<'a> {
     Set(HashMap<MetadataField, ValueGetter>),
 }
 impl MetadataOperation<'_> {
-    pub fn apply(&self, metadata: &mut PendingMetadata, path: &Path, config: &LibraryConfig) {
+    pub fn apply<'a>(
+        &'a self,
+        metadata: &mut PendingMetadata<'a>,
+        path: &Path,
+        config: &LibraryConfig,
+    ) {
         match self {
             Self::Blank { remove } => {
                 for field in &config.custom_fields {
@@ -194,34 +201,104 @@ pub enum ItemSelector {
         select: Box<ItemSelector>,
     },
 }
-impl ItemSelector {
-    pub fn matches(&self, check_path: &Path) -> bool {
-        !self.consume(check_path).is_empty()
+pub fn file_path(item: jwalk::Result<jwalk::DirEntry<((), ())>>) -> Option<PathBuf> {
+    match item {
+        Err(_) => None,
+        Ok(entry) => {
+            let path: PathBuf = entry.path();
+            if path.extension().and_then(|x| x.to_str()).is_some() {
+                Some(path)
+            } else {
+                None
+            }
+        }
     }
-    fn consume<'a>(&self, check_path: &'a Path) -> Vec<&'a Path> {
+}
+pub fn match_extension(path: &Path, extensions: &HashSet<String>) -> bool {
+    match path.extension().and_then(|x| x.to_str()) {
+        Some(ext) => extensions.contains(ext),
+        None => false,
+    }
+}
+pub fn match_name(path: &Path, name: &str) -> bool {
+    match path.file_name().and_then(|x| x.to_str()) {
+        Some(file_name) => file_name == name,
+        None => false,
+    }
+}
+impl ItemSelector {
+    pub fn matches(&self, start: &Path, check_path: &Path, config: &LibraryConfig) -> bool {
         match self {
-            Self::All => vec![check_path],
-            Self::Path(path) => check_path.strip_prefix(path).into_iter().collect(),
-            Self::Multi(multi) => multi.iter().flat_map(|x| x.consume(check_path)).collect(),
+            Self::All => true,
+            Self::Multi(checks) => checks.iter().any(|x| x.matches(start, check_path, config)),
+            Self::Path(path) => check_path.starts_with(path),
             Self::Segmented { path } => {
                 let components = check_path.components().collect::<Vec<_>>();
                 if path.len() > components.len() {
-                    return vec![];
+                    return false;
+                };
+                path.iter()
+                    .zip(components.iter())
+                    .all(|(x, y)| x.matches(&y))
+            }
+            Self::Subpath { subpath, select } => self
+                .find_matches(start, config)
+                .into_iter()
+                .any(|x| x == check_path),
+        }
+    }
+    pub fn find_matches(&self, start: &Path, config: &LibraryConfig) -> Vec<PathBuf> {
+        let full_start = config.library_folder.join(start);
+        match self {
+            Self::All => WalkDir::new(full_start)
+                .into_iter()
+                .filter_map(file_path)
+                .filter(|x| match_extension(x, &config.song_extensions))
+                .filter_map(|x| {
+                    x.strip_prefix(&config.library_folder)
+                        .ok()
+                        .map(|x| x.to_owned())
+                })
+                .collect(),
+            Self::Multi(checks) => checks
+                .iter()
+                .flat_map(|x| x.find_matches(start, config))
+                .collect(),
+            Self::Path(path) => {
+                if let Some(name) = full_start.file_name().and_then(|x| x.to_str()) {
+                    WalkDir::new(full_start.parent().unwrap_or(Path::new("")))
+                        .into_iter()
+                        .filter_map(file_path)
+                        .filter(|x| match_name(x.with_extension("").as_path(), name))
+                        .filter_map(|x| {
+                            x.strip_prefix(&config.library_folder)
+                                .ok()
+                                .map(|x| x.to_owned())
+                        })
+                        .collect()
+                } else {
+                    vec![]
                 }
-                for (segment, component) in path.iter().zip(components.iter()) {
-                    if !segment.matches(component) {
-                        return vec![];
-                    }
+            }
+            Self::Segmented { path } => {
+                let mut items = vec![full_start];
+                for segment in path {
+                    items = items
+                        .into_iter()
+                        .flat_map(|x| WalkDir::new(x).into_iter().filter_map(file_path))
+                        .filter_map(|x| {
+                            x.strip_prefix(&config.library_folder)
+                                .ok()
+                                .map(|x| x.to_owned())
+                        })
+                        .collect();
                 }
-                check_path
-                    .strip_prefix(components.into_iter().take(path.len()).collect::<PathBuf>())
-                    .into_iter()
-                    .collect()
+                items
             }
             Self::Subpath { subpath, select } => subpath
-                .consume(check_path)
+                .find_matches(start, config)
                 .into_iter()
-                .flat_map(|x| select.consume(x))
+                .flat_map(|x| select.find_matches(x.as_path(), config))
                 .collect(),
         }
     }
@@ -262,6 +339,9 @@ pub enum LocalItemSelector {
         must_be: Option<MusicItemType>,
         from_root: Range,
     },
+    Selector {
+        selector: ItemSelector,
+    },
 }
 fn item_selector_this<'de, D>(deserializer: D) -> Result<(), D::Error>
 where
@@ -282,8 +362,7 @@ where
         {
             if value == "this" || value == "self" {
                 Ok(())
-            }
-            else {
+            } else {
                 Err(serde::de::Error::custom("invalid"))
             }
         }
@@ -292,13 +371,15 @@ where
     deserializer.deserialize_str(Visitor)
 }
 impl LocalItemSelector {
-    fn get<'a>(&self, start: &'a Path) -> Vec<&'a Path> {
+    fn get(&self, start: &Path, config: &LibraryConfig) -> Vec<PathBuf> {
         match self {
-            Self::This => vec![start],
+            Self::This => vec![start.to_owned()],
             Self::DrillUp { up } => {
                 let ancestors = start.ancestors().collect::<Vec<_>>();
                 up.slice(ancestors.as_slice(), OutOfBoundsDecision::Clamp)
-                    .to_vec()
+                    .iter()
+                    .map(|x| (*x).to_owned())
+                    .collect()
             }
             Self::DrillDown { must_be, from_root } => {
                 let ancestors = start.ancestors().collect::<Vec<_>>();
@@ -316,9 +397,11 @@ impl LocalItemSelector {
                 from_root
                     .slice(ancestors.as_slice(), OutOfBoundsDecision::Clamp)
                     .iter()
-                    .filter_map(|x| *x)
-                    .collect::<Vec<_>>()
+                    .filter_map(|x| x.as_deref())
+                    .map(|x| x.to_owned())
+                    .collect()
             }
+            Self::Selector { selector } => selector.find_matches(start, config),
         }
     }
 }
@@ -510,8 +593,7 @@ where
         {
             if value == "*" {
                 Ok(())
-            }
-            else {
+            } else {
                 Err(serde::de::Error::custom("invalid"))
             }
         }
@@ -540,6 +622,7 @@ pub enum ValueGetter {
         modify: Option<ValueModifier>,
     },
     Copy {
+        from: LocalItemSelector,
         copy: MetadataField,
         modify: Option<ValueModifier>,
     },
@@ -560,14 +643,14 @@ impl ValueGetter {
                 value,
                 modify,
             } => {
-                let items = from.get(path);
+                let items = from.get(path, config);
                 if items.is_empty() {
                     return Err(ValueError::ItemNotFound);
                 }
                 let result = MetadataValue::List(
                     items
                         .into_iter()
-                        .map(|x| value.get(x, config).to_string())
+                        .map(|x| value.get(x.as_path(), config).to_string())
                         .collect(),
                 );
                 if let Some(modify) = modify {
@@ -576,8 +659,10 @@ impl ValueGetter {
                     Ok(result.into())
                 }
             }
-            Self::Copy { copy, modify } => Ok(PendingValue::CopyField {
+            Self::Copy { from, copy, modify } => Ok(PendingValue::CopyField {
                 field: copy.clone(),
+                modify: modify.as_ref(),
+                sources: from.get(path, config),
             }),
         }
     }
@@ -630,12 +715,16 @@ fn default_sep() -> NoSeparatorDecision {
 }
 
 #[derive(Clone)]
-pub enum PendingValue {
+pub enum PendingValue<'a> {
     Ready(MetadataValue),
     RegexMatches(HashMap<String, String>),
-    CopyField { field: MetadataField },
+    CopyField {
+        field: MetadataField,
+        sources: Vec<PathBuf>,
+        modify: Option<&'a ValueModifier>,
+    },
 }
-impl From<MetadataValue> for PendingValue {
+impl From<MetadataValue> for PendingValue<'_> {
     fn from(value: MetadataValue) -> Self {
         PendingValue::Ready(value)
     }
@@ -848,13 +937,13 @@ impl FieldValueGetter {
     }
 }
 
-pub struct PendingMetadata {
-    pub fields: HashMap<MetadataField, PendingValue>,
+pub struct PendingMetadata<'a> {
+    pub fields: HashMap<MetadataField, PendingValue<'a>>,
 }
 pub struct Metadata {
     pub fields: HashMap<MetadataField, MetadataValue>,
 }
-impl PendingMetadata {
+impl PendingMetadata<'_> {
     pub fn new() -> Self {
         Self {
             fields: HashMap::new(),
@@ -874,6 +963,17 @@ impl PendingMetadata {
                         },
                     )
                 })
+                .collect(),
+        }
+    }
+}
+impl From<Metadata> for PendingMetadata<'_> {
+    fn from(value: Metadata) -> Self {
+        Self {
+            fields: value
+                .fields
+                .into_iter()
+                .map(|(k, v)| (k, PendingValue::Ready(v)))
                 .collect(),
         }
     }

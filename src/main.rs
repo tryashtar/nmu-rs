@@ -79,7 +79,7 @@ fn get_metadata<'a>(
     library_config: &'a LibraryConfig,
     config_cache: &mut HashMap<PathBuf, Option<SongConfig<'a>>>,
 ) -> Metadata {
-    let mut metadata = PendingMetadata::new();
+    let mut metadata = Metadata::new();
     for ancestor in nice_path
         .parent()
         .unwrap_or(Path::new(""))
@@ -95,15 +95,20 @@ fn get_metadata<'a>(
                 .entry(config_path)
                 .or_insert_with_key(|x| load_config(x.as_path(), library_config).ok())
             {
+                let mut pending: PendingMetadata = metadata.into();
                 for setter in &config.set {
-                    if setter.names.matches(select_song_path) {
-                        setter.set.apply(&mut metadata, nice_path, library_config);
+                    if setter
+                        .names
+                        .matches(ancestor, select_song_path, library_config)
+                    {
+                        setter.set.apply(&mut pending, nice_path, library_config);
                     }
                 }
+                metadata = pending.resolve();
             }
         }
     }
-    metadata.resolve()
+    metadata
 }
 
 fn print_differences(existing: &Metadata, incoming: &Metadata) {
@@ -252,33 +257,5 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
     ScanResults {
         songs: scan_songs,
         images: scan_images,
-    }
-}
-
-fn match_name(path: &Path, name: &str) -> bool {
-    match path.file_name().and_then(|x| x.to_str()) {
-        Some(file_name) => file_name == name,
-        None => false,
-    }
-}
-
-fn match_extension(path: &Path, extensions: &HashSet<String>) -> bool {
-    match path.extension().and_then(|x| x.to_str()) {
-        Some(ext) => extensions.contains(ext),
-        None => false,
-    }
-}
-
-fn file_path(item: jwalk::Result<jwalk::DirEntry<((), ())>>) -> Option<PathBuf> {
-    match item {
-        Err(_) => None,
-        Ok(entry) => {
-            let path: PathBuf = entry.path();
-            if path.extension().and_then(|x| x.to_str()).is_some() {
-                Some(path)
-            } else {
-                None
-            }
-        }
     }
 }
