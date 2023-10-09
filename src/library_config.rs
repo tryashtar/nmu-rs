@@ -218,7 +218,7 @@ pub struct DateCache {
     cache: HashMap<PathBuf, DateTime<Utc>>,
 }
 impl DateCache {
-    fn new(path: Option<PathBuf>) -> Self {
+    pub fn new(path: Option<PathBuf>) -> Self {
         match path {
             None => Self {
                 path: None,

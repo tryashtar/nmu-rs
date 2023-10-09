@@ -70,7 +70,7 @@ impl<B> Deref for Borrowable<'_, B> {
     fn deref(&self) -> &B {
         match *self {
             Self::Borrowed(borrowed) => borrowed,
-            Self::Owned(ref owned) => owned.borrow(),
+            Self::Owned(ref owned) => owned,
         }
     }
 }
@@ -103,8 +103,8 @@ pub enum MetadataOperation<'a> {
     Set(HashMap<MetadataField, ValueGetter>),
 }
 impl MetadataOperation<'_> {
-    pub fn apply<'a>(
-        &'a self,
+    pub fn apply(
+        &self,
         metadata: &mut PendingMetadata,
         path: &Path,
         config: &LibraryConfig,
@@ -489,7 +489,7 @@ impl Range {
             ((length as i32) + index) as usize
         };
         match decision {
-            OutOfBoundsDecision::Exit => (result >= length).then_some(result),
+            OutOfBoundsDecision::Exit => (result < length).then_some(result),
             OutOfBoundsDecision::Clamp => Some(std::cmp::min(result, length - 1)),
         }
     }
@@ -955,7 +955,7 @@ impl PendingMetadata {
                     }
                     PendingValue::RegexMatches { .. } => true,
                     PendingValue::CopyField {
-                        field,
+                        field: from,
                         sources,
                         modify,
                     } => {
@@ -971,7 +971,7 @@ impl PendingMetadata {
                             }
                         }
                         .fields
-                        .get(field)
+                        .get(from)
                         .cloned()
                         .and_then(|x| match modify {
                             Some(modify) => {
@@ -1070,31 +1070,6 @@ impl MetadataValue {
                     Some(list[0].as_ref())
                 }
             }
-        }
-    }
-}
-impl MetadataValue {
-    fn combine(&self, other: &Self, mode: &CombineMode) -> Result<Self, ValueError> {
-        match mode {
-            CombineMode::Replace => Ok(other.clone()),
-            CombineMode::Append => {
-                let mut list1 = self.to_list()?.clone();
-                let mut list2 = other.to_list()?.clone();
-                list1.append(&mut list2);
-                Ok(Self::List(list1))
-            }
-            CombineMode::Prepend => {
-                let mut list1 = other.to_list()?.clone();
-                let mut list2 = self.to_list()?.clone();
-                list1.append(&mut list2);
-                Ok(Self::List(list1))
-            }
-        }
-    }
-    fn to_list(&self) -> Result<&Vec<String>, ValueError> {
-        match self {
-            Self::List(list) => Ok(list),
-            Self::Number(_) => Err(ValueError::UnexpectedType),
         }
     }
 }

@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 mod library_config;
 mod file_stuff;
+#[cfg(test)]
 mod tests;
 use library_config::*;
 
