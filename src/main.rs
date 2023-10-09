@@ -1,15 +1,14 @@
 use colored::Colorize;
 use itertools::Itertools;
 use jwalk::WalkDir;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::env;
 use std::io::{ErrorKind, IsTerminal};
 use std::path::{Path, PathBuf};
-use thiserror::Error;
-
-mod tests;
 
 mod library_config;
+mod file_stuff;
+mod tests;
 use library_config::*;
 
 mod song_config;
@@ -17,6 +16,8 @@ use song_config::*;
 
 mod tag_interop;
 use tag_interop::Tags;
+
+use crate::file_stuff::{file_path, match_name, match_extension};
 
 fn main() {
     println!("NAIVE MUSIC UPDATER");
@@ -79,7 +80,7 @@ fn get_metadata<'a>(
     library_config: &'a LibraryConfig,
     config_cache: &mut HashMap<PathBuf, Option<SongConfig<'a>>>,
 ) -> Metadata {
-    let mut metadata = Metadata::new();
+    let mut metadata = PendingMetadata::new();
     for ancestor in nice_path
         .parent()
         .unwrap_or(Path::new(""))
@@ -95,20 +96,18 @@ fn get_metadata<'a>(
                 .entry(config_path)
                 .or_insert_with_key(|x| load_config(x.as_path(), library_config).ok())
             {
-                let mut pending: PendingMetadata = metadata.into();
                 for setter in &config.set {
                     if setter
                         .names
-                        .matches(ancestor, select_song_path, library_config)
+                        .matches(select_song_path)
                     {
-                        setter.set.apply(&mut pending, nice_path, library_config);
+                        setter.set.apply(&mut metadata, nice_path, library_config);
                     }
                 }
-                metadata = pending.resolve();
             }
         }
     }
-    metadata
+    metadata.resolve(nice_path, library_config, config_cache)
 }
 
 fn print_differences(existing: &Metadata, incoming: &Metadata) {
@@ -119,47 +118,19 @@ fn print_differences(existing: &Metadata, incoming: &Metadata) {
         .chain(incoming.fields.keys())
         .unique()
     {
-        if let MetadataField::Builtin(BuiltinMetadataField::SimpleLyrics) = key {
-            continue;
-        }
-        if let MetadataField::Builtin(BuiltinMetadataField::Art) = key {
-            continue;
-        }
-        if let MetadataField::Custom(_) = key {
-            continue;
-        }
-        if let Some(new) = incoming.fields.get(key) {
-            let current = existing.fields.get(key).unwrap_or(&blank);
-            if current != new {
-                println!("\t{:?}: {:?} -> {:?}", key, current, new);
+        match key {
+            MetadataField::Builtin(BuiltinMetadataField::SimpleLyrics)
+            | MetadataField::Builtin(BuiltinMetadataField::Art)
+            | MetadataField::Custom(_) => {}
+            _ => {
+                if let Some(new) = incoming.fields.get(key) {
+                    let current = existing.fields.get(key).unwrap_or(&blank);
+                    if current != new {
+                        println!("\t{:?}: {:?} -> {:?}", key, current, new);
+                    }
+                }
             }
         }
-    }
-}
-
-#[derive(Error, Debug)]
-#[error("{0}")]
-pub enum ConfigError {
-    Yaml(#[from] YamlError),
-    Library(#[from] LibraryError),
-}
-
-fn load_config<'a>(
-    path: &Path,
-    library_config: &'a LibraryConfig<'a>,
-) -> Result<SongConfig<'a>, ConfigError> {
-    match load_yaml::<RawSongConfig>(path) {
-        Err(YamlError::Io(error)) if error.kind() == ErrorKind::NotFound => {
-            Err(ConfigError::Yaml(YamlError::Io(error)))
-        }
-        Err(error) => {
-            eprintln!("{}", path.display().to_string().red());
-            eprintln!("{}", error.to_string().red());
-            Err(ConfigError::Yaml(error))
-        }
-        Ok(config) => library_config
-            .resolve_config(config)
-            .map_err(ConfigError::Library),
     }
 }
 

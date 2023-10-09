@@ -1,16 +1,22 @@
-use jwalk::WalkDir;
+use colored::Colorize;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
     borrow::{Borrow, Cow},
     collections::{HashMap, HashSet},
+    ffi::OsStr,
+    io::ErrorKind,
     ops::Deref,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     rc::Rc,
 };
 use strum::{Display, EnumIter, IntoEnumIterator};
+use thiserror::Error;
 
-use crate::library_config::LibraryConfig;
+use crate::{
+    get_metadata,
+    library_config::{load_yaml, LibraryConfig, LibraryError, YamlError},
+};
 
 #[derive(Deserialize, Serialize)]
 pub struct RawSongConfig<'a> {
@@ -93,17 +99,13 @@ pub enum MetadataOperation<'a> {
     Modify {
         modify: HashMap<MetadataField, ValueModifier>,
     },
-    Moded {
-        mode: CombineMode,
-        values: HashMap<MetadataField, ValueGetter>,
-    },
     Sequence(Vec<Borrowable<'a, MetadataOperation<'a>>>),
     Set(HashMap<MetadataField, ValueGetter>),
 }
 impl MetadataOperation<'_> {
     pub fn apply<'a>(
         &'a self,
-        metadata: &mut PendingMetadata<'a>,
+        metadata: &mut PendingMetadata,
         path: &Path,
         config: &LibraryConfig,
     ) {
@@ -149,23 +151,6 @@ impl MetadataOperation<'_> {
                     op.apply(metadata, path, config);
                 }
             }
-            Self::Moded { mode, values } => {
-                for (field, value) in values {
-                    if let Ok(PendingValue::Ready(adding)) = value.get(path, config) {
-                        match metadata.fields.get(field) {
-                            None => {
-                                metadata.fields.insert(field.clone(), adding.into());
-                            }
-                            Some(PendingValue::Ready(existing)) => {
-                                if let Ok(combined) = existing.combine(&adding, mode) {
-                                    metadata.fields.insert(field.clone(), combined.into());
-                                }
-                            }
-                            Some(_) => {}
-                        }
-                    }
-                }
-            }
             Self::Modify { modify } => {
                 for (field, modifier) in modify {
                     if let Some(existing) = metadata.fields.get(field) {
@@ -201,36 +186,11 @@ pub enum ItemSelector {
         select: Box<ItemSelector>,
     },
 }
-pub fn file_path(item: jwalk::Result<jwalk::DirEntry<((), ())>>) -> Option<PathBuf> {
-    match item {
-        Err(_) => None,
-        Ok(entry) => {
-            let path: PathBuf = entry.path();
-            if path.extension().and_then(|x| x.to_str()).is_some() {
-                Some(path)
-            } else {
-                None
-            }
-        }
-    }
-}
-pub fn match_extension(path: &Path, extensions: &HashSet<String>) -> bool {
-    match path.extension().and_then(|x| x.to_str()) {
-        Some(ext) => extensions.contains(ext),
-        None => false,
-    }
-}
-pub fn match_name(path: &Path, name: &str) -> bool {
-    match path.file_name().and_then(|x| x.to_str()) {
-        Some(file_name) => file_name == name,
-        None => false,
-    }
-}
 impl ItemSelector {
-    pub fn matches(&self, start: &Path, check_path: &Path, config: &LibraryConfig) -> bool {
+    pub fn matches(&self, check_path: &Path) -> bool {
         match self {
             Self::All => true,
-            Self::Multi(checks) => checks.iter().any(|x| x.matches(start, check_path, config)),
+            Self::Multi(checks) => checks.iter().any(|x| x.matches(check_path)),
             Self::Path(path) => check_path.starts_with(path),
             Self::Segmented { path } => {
                 let components = check_path.components().collect::<Vec<_>>();
@@ -239,66 +199,35 @@ impl ItemSelector {
                 };
                 path.iter()
                     .zip(components.iter())
-                    .all(|(x, y)| x.matches(&y))
+                    .all(|(x, y)| x.matches(y.as_os_str()))
             }
-            Self::Subpath { subpath, select } => self
-                .find_matches(start, config)
-                .into_iter()
-                .any(|x| x == check_path),
+            Self::Subpath { .. } => !self.consume(check_path).is_empty(),
         }
     }
-    pub fn find_matches(&self, start: &Path, config: &LibraryConfig) -> Vec<PathBuf> {
-        let full_start = config.library_folder.join(start);
+    fn consume<'a>(&self, check_path: &'a Path) -> Vec<&'a Path> {
         match self {
-            Self::All => WalkDir::new(full_start)
-                .into_iter()
-                .filter_map(file_path)
-                .filter(|x| match_extension(x, &config.song_extensions))
-                .filter_map(|x| {
-                    x.strip_prefix(&config.library_folder)
-                        .ok()
-                        .map(|x| x.to_owned())
-                })
-                .collect(),
-            Self::Multi(checks) => checks
-                .iter()
-                .flat_map(|x| x.find_matches(start, config))
-                .collect(),
-            Self::Path(path) => {
-                if let Some(name) = full_start.file_name().and_then(|x| x.to_str()) {
-                    WalkDir::new(full_start.parent().unwrap_or(Path::new("")))
-                        .into_iter()
-                        .filter_map(file_path)
-                        .filter(|x| match_name(x.with_extension("").as_path(), name))
-                        .filter_map(|x| {
-                            x.strip_prefix(&config.library_folder)
-                                .ok()
-                                .map(|x| x.to_owned())
-                        })
-                        .collect()
-                } else {
-                    vec![]
-                }
-            }
+            Self::All => vec![check_path],
+            Self::Path(path) => check_path.strip_prefix(path).into_iter().collect(),
+            Self::Multi(multi) => multi.iter().flat_map(|x| x.consume(check_path)).collect(),
             Self::Segmented { path } => {
-                let mut items = vec![full_start];
-                for segment in path {
-                    items = items
-                        .into_iter()
-                        .flat_map(|x| WalkDir::new(x).into_iter().filter_map(file_path))
-                        .filter_map(|x| {
-                            x.strip_prefix(&config.library_folder)
-                                .ok()
-                                .map(|x| x.to_owned())
-                        })
-                        .collect();
+                let components = check_path.components().collect::<Vec<_>>();
+                if path.len() > components.len() {
+                    return vec![];
                 }
-                items
+                for (segment, component) in path.iter().zip(components.iter()) {
+                    if !segment.matches(component.as_os_str()) {
+                        return vec![];
+                    }
+                }
+                check_path
+                    .strip_prefix(components.into_iter().take(path.len()).collect::<PathBuf>())
+                    .into_iter()
+                    .collect()
             }
             Self::Subpath { subpath, select } => subpath
-                .find_matches(start, config)
+                .consume(check_path)
                 .into_iter()
-                .flat_map(|x| select.find_matches(x.as_path(), config))
+                .flat_map(|x| select.consume(x))
                 .collect(),
         }
     }
@@ -314,9 +243,8 @@ pub enum PathSegment {
     },
 }
 impl PathSegment {
-    fn matches(&self, component: &Component) -> bool {
-        let str = component.as_os_str().to_str();
-        match str {
+    pub fn matches(&self, component: &OsStr) -> bool {
+        match component.to_str() {
             None => false,
             Some(str) => match self {
                 Self::Literal(literal) => str == literal,
@@ -401,7 +329,7 @@ impl LocalItemSelector {
                     .map(|x| x.to_owned())
                     .collect()
             }
-            Self::Selector { selector } => selector.find_matches(start, config),
+            Self::Selector { selector } => crate::file_stuff::find_matches(selector, start, config),
         }
     }
 }
@@ -529,32 +457,40 @@ pub enum OutOfBoundsDecision {
 }
 impl Range {
     pub fn in_range(&self, index: usize, length: usize, decision: OutOfBoundsDecision) -> bool {
-        let (start, stop) = self.wrap_both(length, decision);
-        index >= start && index <= stop
-    }
-    pub fn slice<'a, T>(&self, items: &'a [T], decision: OutOfBoundsDecision) -> &'a [T] {
-        let (start, stop) = self.wrap_both(items.len(), decision);
-        if stop > items.len() {
-            &[]
-        } else {
-            &items[start..=stop]
+        match self.to_range(length, decision) {
+            None => false,
+            Some(range) => range.contains(&index),
         }
     }
-    fn wrap_both(&self, length: usize, decision: OutOfBoundsDecision) -> (usize, usize) {
-        (
+    pub fn slice<'a, T>(&self, items: &'a [T], decision: OutOfBoundsDecision) -> &'a [T] {
+        match self.to_range(items.len(), decision) {
+            Some(range) => &items[range],
+            None => &[],
+        }
+    }
+    fn to_range(
+        &self,
+        length: usize,
+        decision: OutOfBoundsDecision,
+    ) -> Option<std::ops::RangeInclusive<usize>> {
+        self.wrap_both(length, decision)
+            .map(|(start, stop)| start..=stop)
+    }
+    fn wrap_both(&self, length: usize, decision: OutOfBoundsDecision) -> Option<(usize, usize)> {
+        Option::zip(
             Self::wrap(self.start, length, decision),
             Self::wrap(self.stop, length, decision),
         )
     }
-    fn wrap(index: i32, length: usize, decision: OutOfBoundsDecision) -> usize {
+    fn wrap(index: i32, length: usize, decision: OutOfBoundsDecision) -> Option<usize> {
         let result = if index >= 0 {
             index as usize
         } else {
             ((length as i32) + index) as usize
         };
         match decision {
-            OutOfBoundsDecision::Exit => result,
-            OutOfBoundsDecision::Clamp => std::cmp::min(result, length - 1),
+            OutOfBoundsDecision::Exit => (result >= length).then_some(result),
+            OutOfBoundsDecision::Clamp => Some(std::cmp::min(result, length - 1)),
         }
     }
 }
@@ -624,7 +560,7 @@ pub enum ValueGetter {
     Copy {
         from: LocalItemSelector,
         copy: MetadataField,
-        modify: Option<ValueModifier>,
+        modify: Option<Rc<ValueModifier>>,
     },
 }
 #[derive(Deserialize, Serialize)]
@@ -661,7 +597,7 @@ impl ValueGetter {
             }
             Self::Copy { from, copy, modify } => Ok(PendingValue::CopyField {
                 field: copy.clone(),
-                modify: modify.as_ref(),
+                modify: modify.clone(),
                 sources: from.get(path, config),
             }),
         }
@@ -670,13 +606,6 @@ impl ValueGetter {
 
 fn default_value() -> FieldValueGetter {
     FieldValueGetter::CleanName
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum NoSeparatorDecision {
-    Exit,
-    Ignore,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -690,41 +619,51 @@ pub enum ValueModifier {
         append: Box<ValueGetter>,
         index: Option<Range>,
     },
+    InsertBefore {
+        insert: Box<ValueGetter>,
+        before: Range,
+        #[serde(default = "default_oob")]
+        out_of_bounds: OutOfBoundsDecision,
+    },
+    InsertAfter {
+        insert: Box<ValueGetter>,
+        after: Range,
+        #[serde(default = "default_oob")]
+        out_of_bounds: OutOfBoundsDecision,
+    },
     Join {
         join: Box<ValueGetter>,
     },
     Split {
         split: String,
-        #[serde(default = "default_sep")]
-        when_none: NoSeparatorDecision,
     },
     Regex {
         #[serde(with = "serde_regex")]
         regex: Regex,
     },
-    Group {
-        group: String,
+    Replace {
+        replace: String,
     },
     Take {
         take: TakeModifier,
     },
     Sequence(Vec<ValueModifier>),
 }
-fn default_sep() -> NoSeparatorDecision {
-    NoSeparatorDecision::Ignore
-}
 
 #[derive(Clone)]
-pub enum PendingValue<'a> {
+pub enum PendingValue {
     Ready(MetadataValue),
-    RegexMatches(HashMap<String, String>),
+    RegexMatches {
+        source: String,
+        regex: Regex,
+    },
     CopyField {
         field: MetadataField,
         sources: Vec<PathBuf>,
-        modify: Option<&'a ValueModifier>,
+        modify: Option<Rc<ValueModifier>>,
     },
 }
-impl From<MetadataValue> for PendingValue<'_> {
+impl From<MetadataValue> for PendingValue {
     fn from(value: MetadataValue) -> Self {
         PendingValue::Ready(value)
     }
@@ -781,32 +720,61 @@ impl ValueModifier {
         config: &LibraryConfig,
     ) -> Result<PendingValue, ValueError> {
         match self {
-            Self::Group { group } => {
-                if let PendingValue::RegexMatches(matches) = value {
-                    if let Some(capture) = matches.get(group) {
-                        return Ok(MetadataValue::string(capture.to_owned()).into());
-                    }
+            Self::Replace { replace } => {
+                if let PendingValue::RegexMatches { source, regex } = value {
+                    return Ok(
+                        MetadataValue::string(regex.replace(&source, replace).into_owned()).into(),
+                    );
                 }
                 Err(ValueError::UnexpectedType)
             }
             Self::Regex { regex } => {
                 if let PendingValue::Ready(val) = value {
                     if let Some(str) = val.as_string() {
-                        if let Some(captures) = regex.captures(str) {
-                            let values: HashMap<String, String> = regex
-                                .capture_names()
-                                .filter_map(|x| {
-                                    x.and_then(|y| {
-                                        captures
-                                            .name(y)
-                                            .map(|z| (y.to_owned(), z.as_str().to_owned()))
-                                    })
-                                })
-                                .collect();
-                            return Ok(PendingValue::RegexMatches(values));
-                        } else {
-                            return Err(ValueError::NoMatchFound);
-                        }
+                        return Ok(PendingValue::RegexMatches {
+                            source: str.to_owned(),
+                            regex: regex.clone(),
+                        });
+                    } else {
+                        return Err(ValueError::NoMatchFound);
+                    }
+                }
+                Err(ValueError::UnexpectedType)
+            }
+            Self::InsertBefore {
+                insert,
+                before,
+                out_of_bounds,
+            } => {
+                if let PendingValue::Ready(MetadataValue::List(val)) = insert.get(path, config)? {
+                    if let PendingValue::Ready(MetadataValue::List(list)) = value {
+                        return match Range::to_range(before, list.len(), *out_of_bounds) {
+                            None => Err(ValueError::ConditionsNotMet),
+                            Some(range) => {
+                                let mut result = list.clone();
+                                result.splice(range, val);
+                                Ok(MetadataValue::List(result).into())
+                            }
+                        };
+                    }
+                }
+                Err(ValueError::UnexpectedType)
+            }
+            Self::InsertAfter {
+                insert,
+                after,
+                out_of_bounds,
+            } => {
+                if let PendingValue::Ready(MetadataValue::List(val)) = insert.get(path, config)? {
+                    if let PendingValue::Ready(MetadataValue::List(list)) = value {
+                        return match Range::wrap_both(after, list.len(), *out_of_bounds) {
+                            None => Err(ValueError::ConditionsNotMet),
+                            Some((start, stop)) => {
+                                let mut result = list.clone();
+                                result.splice((start + 1)..=(stop + 1), val);
+                                Ok(MetadataValue::List(result).into())
+                            }
+                        };
                     }
                 }
                 Err(ValueError::UnexpectedType)
@@ -862,18 +830,13 @@ impl ValueModifier {
                 }
                 Err(ValueError::UnexpectedType)
             }
-            Self::Split { split, when_none } => {
+            Self::Split { split } => {
                 if let PendingValue::Ready(MetadataValue::List(list)) = value {
                     let vec = list
                         .iter()
                         .flat_map(|x| x.split(split))
                         .map(|x| x.to_owned())
                         .collect::<Vec<_>>();
-                    if let NoSeparatorDecision::Exit = when_none {
-                        if vec.len() == 1 {
-                            return Err(ValueError::ConditionsNotMet);
-                        }
-                    }
                     return Ok(MetadataValue::List(vec).into());
                 }
                 Err(ValueError::UnexpectedType)
@@ -937,37 +900,104 @@ impl FieldValueGetter {
     }
 }
 
-pub struct PendingMetadata<'a> {
-    pub fields: HashMap<MetadataField, PendingValue<'a>>,
+pub struct PendingMetadata {
+    pub fields: HashMap<MetadataField, PendingValue>,
 }
 pub struct Metadata {
     pub fields: HashMap<MetadataField, MetadataValue>,
 }
-impl PendingMetadata<'_> {
+
+pub fn load_config<'a>(
+    path: &Path,
+    library_config: &'a LibraryConfig<'a>,
+) -> Result<SongConfig<'a>, ConfigError> {
+    match load_yaml::<RawSongConfig>(path) {
+        Err(YamlError::Io(error)) if error.kind() == ErrorKind::NotFound => {
+            Err(ConfigError::Yaml(YamlError::Io(error)))
+        }
+        Err(error) => {
+            eprintln!("{}", path.display().to_string().red());
+            eprintln!("{}", error.to_string().red());
+            Err(ConfigError::Yaml(error))
+        }
+        Ok(config) => library_config
+            .resolve_config(config)
+            .map_err(ConfigError::Library),
+    }
+}
+#[derive(Error, Debug)]
+#[error("{0}")]
+pub enum ConfigError {
+    Yaml(#[from] YamlError),
+    Library(#[from] LibraryError),
+}
+impl PendingMetadata {
     pub fn new() -> Self {
         Self {
             fields: HashMap::new(),
         }
     }
-    pub fn resolve(self) -> Metadata {
-        Metadata {
-            fields: self
-                .fields
-                .into_iter()
-                .map(|(k, v)| {
-                    (
-                        k,
-                        match v {
-                            PendingValue::Ready(ready) => ready,
-                            _ => MetadataValue::blank(),
-                        },
-                    )
-                })
-                .collect(),
+    pub fn resolve<'a>(
+        mut self,
+        path: &Path,
+        config: &'a LibraryConfig,
+        cache: &mut HashMap<PathBuf, Option<SongConfig<'a>>>,
+    ) -> Metadata {
+        let mut metadata = Metadata::new();
+        let mut metadata_cache: HashMap<PathBuf, Metadata> = HashMap::new();
+        loop {
+            let mut added_any = false;
+            self.fields.retain(|field, value| {
+                let result = match value {
+                    PendingValue::Ready(ready) => {
+                        metadata.fields.insert(field.clone(), ready.clone());
+                        false
+                    }
+                    PendingValue::RegexMatches { .. } => true,
+                    PendingValue::CopyField {
+                        field,
+                        sources,
+                        modify,
+                    } => {
+                        let source_path = sources[0].clone();
+                        let source_path2 = sources[0].clone();
+                        match {
+                            if path == source_path {
+                                &mut metadata
+                            } else {
+                                metadata_cache
+                                    .entry(source_path)
+                                    .or_insert_with_key(|key| get_metadata(key, config, cache))
+                            }
+                        }
+                        .fields
+                        .get(field)
+                        .cloned()
+                        .and_then(|x| match modify {
+                            Some(modify) => {
+                                modify.modify(x.into(), source_path2.as_path(), config).ok()
+                            }
+                            None => Some(x.into()),
+                        }) {
+                            Some(PendingValue::Ready(ready)) => {
+                                metadata.fields.insert(field.clone(), ready);
+                                false
+                            }
+                            _ => true,
+                        }
+                    }
+                };
+                added_any |= !result;
+                result
+            });
+            if !added_any {
+                break;
+            }
         }
+        metadata
     }
 }
-impl From<Metadata> for PendingMetadata<'_> {
+impl From<Metadata> for PendingMetadata {
     fn from(value: Metadata) -> Self {
         Self {
             fields: value

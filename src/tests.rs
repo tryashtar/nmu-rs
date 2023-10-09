@@ -147,10 +147,7 @@ fn value_from() {
 #[test]
 fn value_get_name() {
     let result = serde_yaml::from_str::<FieldValueGetter>("clean_name").unwrap();
-    assert!(matches!(
-        result,
-        FieldValueGetter::CleanName
-    ));
+    assert!(matches!(result, FieldValueGetter::CleanName));
 }
 
 #[test]
@@ -167,14 +164,6 @@ fn meta_op_context() {
     )
     .unwrap();
     assert!(matches!(result, MetadataOperation::Context { .. }));
-}
-
-#[test]
-fn meta_op_mode() {
-    let result =
-        serde_yaml::from_str::<MetadataOperation>("{mode: append, values: {title: 'test'}}")
-            .unwrap();
-    assert!(matches!(result, MetadataOperation::Moded { .. }));
 }
 
 #[test]
@@ -239,63 +228,145 @@ fn take_struct() {
 
 #[test]
 fn range_int_first() {
-    let range : Range = 0.into();
+    let range: Range = 0.into();
     let values = ['a', 'b', 'c', 'd'];
     assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), ['a'])
 }
 
 #[test]
 fn range_int_last() {
-    let range : Range = 3.into();
+    let range: Range = 3.into();
     let values = ['a', 'b', 'c', 'd'];
     assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), ['d'])
 }
 
 #[test]
 fn range_int_from_back() {
-    let range : Range = (-2).into();
+    let range: Range = (-2).into();
     let values = ['a', 'b', 'c', 'd'];
     assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), ['c'])
 }
 
 #[test]
 fn range_int_too_big() {
-    let range : Range = 5.into();
+    let range: Range = 5.into();
     let values = ['a', 'b', 'c', 'd'];
     assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), [])
 }
 
 #[test]
 fn range_int_too_small() {
-    let range : Range = (-5).into();
+    let range: Range = (-5).into();
     let values = ['a', 'b', 'c', 'd'];
     assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), [])
 }
 
 #[test]
 fn range_mult_all() {
-    let range : Range = Range::new(0, -1);
+    let range: Range = Range::new(0, -1);
     let values = ['a', 'b', 'c', 'd'];
-    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), ['a', 'b', 'c', 'd'])
+    assert_eq!(
+        range.slice(&values, OutOfBoundsDecision::Exit),
+        ['a', 'b', 'c', 'd']
+    )
 }
 
 #[test]
 fn range_mult_backwards() {
-    let range : Range = Range::new(1, 0);
+    let range: Range = Range::new(1, 0);
     let values = ['a', 'b', 'c', 'd'];
     assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), [])
 }
 
 #[test]
 fn range_mult_some() {
-    let range : Range = Range::new(1, 2);
+    let range: Range = Range::new(1, 2);
     let values = ['a', 'b', 'c', 'd'];
     assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), ['b', 'c'])
 }
 
 #[test]
 fn range_mult_clamp() {
-    let range : Range = Range::new(2, 5);
+    let range: Range = Range::new(2, 5);
     let values = ['a', 'b', 'c', 'd'];
     assert_eq!(range.slice(&values, OutOfBoundsDecision::Clamp), ['c', 'd'])
+}
+
+#[test]
+fn select_path_full() {
+    assert!(ItemSelector::Path(PathBuf::from("a/b")).matches(Path::new("a/b")));
+}
+
+#[test]
+fn select_path_partial() {
+    assert!(ItemSelector::Path(PathBuf::from("a/b")).matches(Path::new("a/b/c")));
+}
+
+#[test]
+fn select_path_too_far() {
+    assert!(!ItemSelector::Path(PathBuf::from("a/b")).matches(Path::new("a")));
+}
+
+#[test]
+fn select_segment_full() {
+    assert!(ItemSelector::Segmented {
+        path: vec![
+            PathSegment::Literal("a".to_owned()),
+            PathSegment::Literal("b".to_owned())
+        ]
+    }
+    .matches(Path::new("a/b")));
+}
+
+#[test]
+fn select_segment_partial() {
+    assert!(ItemSelector::Segmented {
+        path: vec![
+            PathSegment::Literal("a".to_owned()),
+            PathSegment::Literal("b".to_owned())
+        ]
+    }
+    .matches(Path::new("a/b/c")));
+}
+
+#[test]
+fn select_segment_too_far() {
+    assert!(!ItemSelector::Segmented {
+        path: vec![
+            PathSegment::Literal("a".to_owned()),
+            PathSegment::Literal("b".to_owned())
+        ]
+    }
+    .matches(Path::new("a")));
+}
+
+#[test]
+fn select_subpath_simple() {
+    assert!(ItemSelector::Subpath {
+        subpath: Box::new(ItemSelector::Path(PathBuf::from("a"))),
+        select: Box::new(ItemSelector::Path(PathBuf::from("b")))
+    }
+    .matches(Path::new("a/b")));
+}
+
+#[test]
+fn select_subpath_complex() {
+    let selector = ItemSelector::Subpath {
+        subpath: Box::new(ItemSelector::Multi(vec![
+            ItemSelector::Path(PathBuf::from("a")),
+            ItemSelector::Path(PathBuf::from("b")),
+        ])),
+        select: Box::new(ItemSelector::Multi(vec![
+            ItemSelector::Path(PathBuf::from("c")),
+            ItemSelector::Path(PathBuf::from("d")),
+        ])),
+    };
+    assert!(selector.matches(Path::new("a/c")));
+    assert!(selector.matches(Path::new("a/d")));
+    assert!(selector.matches(Path::new("b/c")));
+    assert!(selector.matches(Path::new("b/d")));
+    assert!(!selector.matches(Path::new("a")));
+    assert!(!selector.matches(Path::new("b")));
+    assert!(!selector.matches(Path::new("c")));
+    assert!(!selector.matches(Path::new("d")));
 }
