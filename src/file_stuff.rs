@@ -3,6 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use itertools::Itertools;
+
 use crate::{library_config::LibraryConfig, song_config::ItemSelector};
 
 pub fn file_path(item: jwalk::Result<jwalk::DirEntry<((), ())>>) -> Option<PathBuf> {
@@ -37,6 +39,7 @@ pub fn find_matches(selector: &ItemSelector, start: &Path, config: &LibraryConfi
     let full_start = config.library_folder.join(start);
     match selector {
         ItemSelector::All => jwalk::WalkDir::new(&full_start)
+            .sort(true)
             .into_iter()
             .filter_map(file_path)
             .filter(|x| match_extension(x, &config.song_extensions))
@@ -51,12 +54,24 @@ pub fn find_matches(selector: &ItemSelector, start: &Path, config: &LibraryConfi
             .flat_map(|x| find_matches(x, start, config))
             .collect(),
         ItemSelector::Path(path) => match path.file_name().and_then(|x| x.to_str()) {
-            Some(name) => std::fs::read_dir(full_start.parent().unwrap_or(Path::new("")))
-                .unwrap()
-                .map(|x| x.unwrap().path().with_extension(""))
-                .filter(|x| match_name(x, name))
-                .filter_map(|x| x.strip_prefix(&full_start).ok().map(|x| x.to_owned()))
-                .collect(),
+            Some(name) => {
+                match std::fs::read_dir(full_start.join(path).parent().unwrap_or(Path::new(""))) {
+                    Ok(read) => read
+                        .filter_map(|x| x.ok())
+                        .filter_map(|x| {
+                            let path = x.path();
+                            let stripped = path.with_extension("");
+                            (match_name(&stripped, name)
+                                && (x.metadata().map(|x| x.is_dir()).unwrap_or(false)
+                                    || match_extension(&path, &config.song_extensions)))
+                            .then_some(stripped)
+                        })
+                        .filter_map(|x| x.strip_prefix(&full_start).ok().map(|x| x.to_owned()))
+                        .sorted()
+                        .collect(),
+                    Err(_) => vec![],
+                }
+            }
             None => {
                 vec![]
             }
@@ -64,16 +79,22 @@ pub fn find_matches(selector: &ItemSelector, start: &Path, config: &LibraryConfi
         ItemSelector::Segmented { path } => {
             let mut items = vec![full_start.clone()];
             for segment in path {
-                items = items
+                let files = items
                     .into_iter()
-                    .flat_map(|x| {
-                        std::fs::read_dir(x).unwrap().filter_map(|x| {
-                            let val = x.unwrap();
-                            segment
-                                .matches(val.file_name().as_os_str())
-                                .then(|| val.path())
-                        })
+                    .filter_map(|x| std::fs::read_dir(x).ok())
+                    .flatten()
+                    .filter_map(|x| x.ok());
+                items = files
+                    .filter_map(|x| {
+                        let path = x.path();
+                        let stripped = path.with_extension("");
+                        let name = stripped.file_name();
+                        let name_matches = name.map(|x| segment.matches(x)).unwrap_or(false);
+                        let type_matches = x.metadata().unwrap().is_dir()
+                            || match_extension(&path, &config.song_extensions);
+                        (name_matches && type_matches).then_some(path)
                     })
+                    .sorted()
                     .collect();
             }
             items
@@ -85,9 +106,15 @@ pub fn find_matches(selector: &ItemSelector, start: &Path, config: &LibraryConfi
                 })
                 .collect()
         }
-        ItemSelector::Subpath { subpath, select } => find_matches(subpath, start, config)
-            .into_iter()
-            .flat_map(|x| find_matches(select, x.as_path(), config))
-            .collect(),
+        ItemSelector::Subpath { subpath, select } => {
+            let first = find_matches(subpath, start, config);
+            first
+                .into_iter()
+                .flat_map(|path| {
+                    let second = find_matches(select, &start.join(&path), config);
+                    second.into_iter().map(move |x| path.join(x))
+                })
+                .collect()
+        }
     }
 }

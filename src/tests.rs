@@ -445,17 +445,83 @@ fn selector_matches() {
             .join(PathBuf::from(str))
             .with_extension(config.song_extensions.iter().next().unwrap());
         std::fs::create_dir_all(full.parent().unwrap()).unwrap();
-        std::fs::File::create(full).unwrap();
+        std::fs::File::create(&full).unwrap();
+        std::fs::File::create(full.with_extension("fake")).unwrap();
     };
-    let assert_results = |selector: ItemSelector, desired: &[&str]| {
-        let desired = desired.iter().map(PathBuf::from).collect::<HashSet<_>>();
-        let actual = file_stuff::find_matches(&selector, tmp_dir.path(), &config)
-            .into_iter()
-            .collect::<HashSet<_>>();
+    let assert_results = |selector: ItemSelector, start: &str, desired: &[&str]| {
+        let desired = desired.iter().map(PathBuf::from).collect::<Vec<_>>();
+        let actual = file_stuff::find_matches(
+            &selector,
+            &if start.is_empty() {
+                tmp_dir.path().to_owned()
+            } else {
+                tmp_dir.path().join(start)
+            },
+            &config,
+        );
         assert_eq!(actual, desired);
+        assert!(desired.into_iter().all(|x| selector.matches(&x)))
     };
     make_file("a");
     make_file("b");
     make_file("c");
-    assert_results(ItemSelector::All, &["a", "b", "c"]);
+    make_file("sub/a");
+    make_file("sub/e");
+    make_file("sub/f");
+    make_file("sub/deep1/one");
+    make_file("sub/deep2/one");
+    assert_results(
+        ItemSelector::All,
+        "",
+        &[
+            "a",
+            "b",
+            "c",
+            "sub/a",
+            "sub/deep1/one",
+            "sub/deep2/one",
+            "sub/e",
+            "sub/f",
+        ],
+    );
+    assert_results(
+        ItemSelector::All,
+        "sub",
+        &["a", "deep1/one", "deep2/one", "e", "f"],
+    );
+    assert_results(ItemSelector::Path(PathBuf::from("b")), "", &["b"]);
+    assert_results(ItemSelector::Path(PathBuf::from("b")), "sub", &[]);
+    assert_results(ItemSelector::Path(PathBuf::from("sub")), "", &["sub"]);
+    assert_results(
+        ItemSelector::Multi(vec![
+            ItemSelector::Path(PathBuf::from("a")),
+            ItemSelector::Path(PathBuf::from("sub/e")),
+        ]),
+        "",
+        &["a", "sub/e"],
+    );
+    assert_results(
+        ItemSelector::Segmented {
+            path: vec![
+                PathSegment::Literal("sub".to_owned()),
+                PathSegment::Regex {
+                    regex: regex::Regex::new(r"deep\d").unwrap(),
+                },
+                PathSegment::Literal("one".to_owned()),
+            ],
+        },
+        "",
+        &["sub/deep1/one", "sub/deep2/one"],
+    );
+    assert_results(
+        ItemSelector::Subpath {
+            subpath: Box::new(ItemSelector::Path(PathBuf::from("sub"))),
+            select: Box::new(ItemSelector::Multi(vec![
+                ItemSelector::Path(PathBuf::from("a")),
+                ItemSelector::Path(PathBuf::from("deep1/one")),
+            ])),
+        },
+        "",
+        &["sub/a", "sub/deep1/one"],
+    );
 }
