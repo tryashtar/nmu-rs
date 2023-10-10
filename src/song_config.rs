@@ -103,12 +103,7 @@ pub enum MetadataOperation<'a> {
     Set(HashMap<MetadataField, ValueGetter>),
 }
 impl MetadataOperation<'_> {
-    pub fn apply(
-        &self,
-        metadata: &mut PendingMetadata,
-        path: &Path,
-        config: &LibraryConfig,
-    ) {
+    pub fn apply(&self, metadata: &mut PendingMetadata, path: &Path, config: &LibraryConfig) {
         match self {
             Self::Blank { remove } => {
                 for field in &config.custom_fields {
@@ -551,16 +546,16 @@ impl FieldSelector {
 #[serde(untagged)]
 pub enum ValueGetter {
     Direct(MetadataValue),
+    Copy {
+        from: LocalItemSelector,
+        copy: MetadataField,
+        modify: Option<Rc<ValueModifier>>,
+    },
     From {
         from: LocalItemSelector,
         #[serde(default = "default_value")]
         value: FieldValueGetter,
         modify: Option<ValueModifier>,
-    },
-    Copy {
-        from: LocalItemSelector,
-        copy: MetadataField,
-        modify: Option<Rc<ValueModifier>>,
     },
 }
 #[derive(Deserialize, Serialize)]
@@ -674,14 +669,14 @@ impl ValueModifier {
         range: &Range,
         oob: OutOfBoundsDecision,
         min_length: Option<usize>,
-    ) -> MetadataValue {
+    ) -> Result<MetadataValue, ValueError> {
         let result = range.slice(list, oob);
         if let Some(min) = min_length {
-            if result.len() < min {
-                return MetadataValue::blank();
+            if list.len() < min {
+                return Err(ValueError::ConditionsNotMet);
             }
         }
-        MetadataValue::List(result.to_vec())
+        Ok(MetadataValue::List(result.to_vec()))
     }
     fn append(
         value: &MetadataValue,
@@ -786,15 +781,11 @@ impl ValueModifier {
                             index,
                             out_of_bounds,
                             min_length,
-                        } => Ok(Self::take(
-                            &list,
-                            index,
-                            *out_of_bounds,
-                            min_length.as_ref().copied(),
-                        )
-                        .into()),
+                        } => Self::take(&list, index, *out_of_bounds, min_length.as_ref().copied())
+                            .map(|x| x.into()),
                         TakeModifier::Simple(range) => {
-                            Ok(Self::take(&list, range, OutOfBoundsDecision::Exit, None).into())
+                            Self::take(&list, range, OutOfBoundsDecision::Exit, None)
+                                .map(|x| x.into())
                         }
                     };
                 }
