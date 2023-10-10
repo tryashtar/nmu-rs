@@ -6,8 +6,8 @@ use std::env;
 use std::io::{ErrorKind, IsTerminal};
 use std::path::{Path, PathBuf};
 
-mod library_config;
 mod file_stuff;
+mod library_config;
 #[cfg(test)]
 mod tests;
 use library_config::*;
@@ -18,7 +18,7 @@ use song_config::*;
 mod tag_interop;
 use tag_interop::Tags;
 
-use crate::file_stuff::{file_path, match_name, match_extension};
+use crate::file_stuff::{file_path, match_extension, match_name};
 
 fn main() {
     println!("NAIVE MUSIC UPDATER");
@@ -58,7 +58,7 @@ fn do_scan(library_config: LibraryConfig) {
     for song_path in scan_songs {
         let nice_path = song_path
             .strip_prefix(&library_config.library_folder)
-            .unwrap_or(song_path.as_path())
+            .unwrap_or(&song_path)
             .with_extension("");
         println!("{}", nice_path.display());
         let tags = Tags::load(&song_path);
@@ -95,13 +95,10 @@ fn get_metadata<'a>(
             let config_path = config_root.join(ancestor).join("config.yaml");
             if let Some(config) = config_cache
                 .entry(config_path)
-                .or_insert_with_key(|x| load_config(x.as_path(), library_config).ok())
+                .or_insert_with_key(|x| load_config(x, ancestor, library_config).ok())
             {
                 for setter in &config.set {
-                    if setter
-                        .names
-                        .matches(select_song_path)
-                    {
+                    if setter.names.matches(select_song_path) {
                         setter.set.apply(&mut metadata, nice_path, library_config);
                     }
                 }
@@ -193,7 +190,7 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
             if scan_images.contains(image_path)
                 || library_config
                     .date_cache
-                    .changed_recently(image_path.as_path())
+                    .changed_recently(image_path)
             {
                 for song in songs {
                     if scan_songs.insert(song.clone()) && std::io::stdout().is_terminal() {

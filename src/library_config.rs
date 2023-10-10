@@ -9,9 +9,10 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use thiserror::Error;
 
+use crate::file_stuff;
 use crate::song_config::{
-    AllSetter, Borrowable, ItemSelector, MetadataField, MetadataOperation, RawSongConfig,
-    ReferencableOperation, SongConfig,
+    AllSetter, Borrowable, BuiltinMetadataField, ItemSelector, MetadataField, MetadataOperation,
+    MetadataValue, RawSongConfig, ReferencableOperation, SongConfig, ValueGetter,
 };
 
 #[derive(Deserialize)]
@@ -70,15 +71,14 @@ impl<'a> LibraryConfig<'a> {
     pub fn resolve_config(
         &'a self,
         raw_config: RawSongConfig<'a>,
+        folder: &Path,
     ) -> Result<SongConfig<'a>, LibraryError> {
         let songs = raw_config
             .songs
             .map(|x| {
-                self.resolve_operation(x).map(|q| {
-                    vec![AllSetter {
-                        names: ItemSelector::All,
-                        set: q,
-                    }]
+                self.resolve_operation(x).map(|q| AllSetter {
+                    names: ItemSelector::All,
+                    set: q,
                 })
             })
             .transpose()?;
@@ -94,7 +94,8 @@ impl<'a> LibraryConfig<'a> {
                     })
                     .collect::<Result<Vec<_>, _>>()
             })
-            .transpose()?;
+            .transpose()?
+            .unwrap_or(vec![]);
         let set_all = raw_config
             .set_all
             .map(|x| {
@@ -107,16 +108,79 @@ impl<'a> LibraryConfig<'a> {
                     })
                     .collect::<Result<Vec<_>, _>>()
             })
-            .transpose()?;
+            .transpose()?
+            .unwrap_or(vec![]);
+        let order = raw_config
+            .order
+            .map(|x| {
+                let matches = file_stuff::find_matches(&x, folder, self);
+                let total = matches.len();
+                matches
+                    .into_iter()
+                    .enumerate()
+                    .map(|(track, path)| AllSetter {
+                        names: ItemSelector::Path(path),
+                        set: Borrowable::Owned(MetadataOperation::Set(HashMap::from([
+                            (
+                                BuiltinMetadataField::Track.into(),
+                                ValueGetter::Direct(MetadataValue::Number((track + 1) as u32)),
+                            ),
+                            (
+                                BuiltinMetadataField::TrackTotal.into(),
+                                ValueGetter::Direct(MetadataValue::Number(total as u32)),
+                            ),
+                        ]))),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let discs = raw_config
+            .discs
+            .map(|map| {
+                let disc_total = *(map.keys().max().unwrap_or(&1));
+                map.into_iter()
+                    .flat_map(|(disc, sel)| {
+                        let matches = file_stuff::find_matches(&sel, folder, self);
+                        let track_total = matches.len();
+                        matches
+                            .into_iter()
+                            .enumerate()
+                            .map(move |(track, path)| AllSetter {
+                                names: ItemSelector::Path(path),
+                                set: Borrowable::Owned(MetadataOperation::Set(HashMap::from([
+                                    (
+                                        BuiltinMetadataField::Track.into(),
+                                        ValueGetter::Direct(MetadataValue::Number(
+                                            (track + 1) as u32,
+                                        )),
+                                    ),
+                                    (
+                                        BuiltinMetadataField::TrackTotal.into(),
+                                        ValueGetter::Direct(MetadataValue::Number(
+                                            track_total as u32,
+                                        )),
+                                    ),
+                                    (
+                                        BuiltinMetadataField::Disc.into(),
+                                        ValueGetter::Direct(MetadataValue::Number(disc)),
+                                    ),
+                                    (
+                                        BuiltinMetadataField::DiscTotal.into(),
+                                        ValueGetter::Direct(MetadataValue::Number(disc_total)),
+                                    ),
+                                ]))),
+                            })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         let merged = songs
             .into_iter()
+            .chain(discs)
+            .chain(order)
             .chain(set_all)
             .chain(set)
-            .reduce(|mut result, mut more| {
-                result.append(&mut more);
-                result
-            })
-            .unwrap_or(vec![]);
+            .collect::<Vec<_>>();
         Ok(SongConfig { set: merged })
     }
     fn resolve_operation(
@@ -190,7 +254,7 @@ impl ArtCache {
             },
             Some(path) => Self {
                 path: Some(path.clone()),
-                cache: match load_yaml(path.as_path()) {
+                cache: match load_yaml(&path) {
                     Err(_) => HashMap::new(),
                     Ok(map) => map,
                 },
@@ -226,7 +290,7 @@ impl DateCache {
             },
             Some(path) => Self {
                 path: Some(path.clone()),
-                cache: match load_yaml(path.as_path()) {
+                cache: match load_yaml(&path) {
                     Err(_) => HashMap::new(),
                     Ok(map) => map,
                 },

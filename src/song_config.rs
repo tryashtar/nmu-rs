@@ -24,6 +24,8 @@ pub struct RawSongConfig<'a> {
     pub set: Option<HashMap<PathBuf, ReferencableOperation<'a>>>,
     #[serde(rename = "set all")]
     pub set_all: Option<Vec<RawAllSetter<'a>>>,
+    pub order: Option<ItemSelector>,
+    pub discs: Option<HashMap<u32, ItemSelector>>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -581,7 +583,7 @@ impl ValueGetter {
                 let result = MetadataValue::List(
                     items
                         .into_iter()
-                        .map(|x| value.get(x.as_path(), config).to_string())
+                        .map(|x| value.get(&x, config).to_string())
                         .collect(),
                 );
                 if let Some(modify) = modify {
@@ -743,10 +745,11 @@ impl ValueModifier {
             } => {
                 if let PendingValue::Ready(MetadataValue::List(val)) = insert.get(path, config)? {
                     if let PendingValue::Ready(MetadataValue::List(list)) = value {
-                        return match Range::to_range(before, list.len(), *out_of_bounds) {
+                        return match Range::wrap_both(before, list.len(), *out_of_bounds) {
                             None => Err(ValueError::ConditionsNotMet),
-                            Some(range) => {
+                            Some((start, stop)) => {
                                 let mut result = list.clone();
+                                let range = start..stop;
                                 result.splice(range, val);
                                 Ok(MetadataValue::List(result).into())
                             }
@@ -766,7 +769,8 @@ impl ValueModifier {
                             None => Err(ValueError::ConditionsNotMet),
                             Some((start, stop)) => {
                                 let mut result = list.clone();
-                                result.splice((start + 1)..=(stop + 1), val);
+                                let range = (start + 1)..(stop + 1);
+                                result.splice(range, val);
                                 Ok(MetadataValue::List(result).into())
                             }
                         };
@@ -899,20 +903,21 @@ pub struct Metadata {
 }
 
 pub fn load_config<'a>(
-    path: &Path,
+    full_path: &Path,
+    nice_folder: &Path,
     library_config: &'a LibraryConfig<'a>,
 ) -> Result<SongConfig<'a>, ConfigError> {
-    match load_yaml::<RawSongConfig>(path) {
+    match load_yaml::<RawSongConfig>(full_path) {
         Err(YamlError::Io(error)) if error.kind() == ErrorKind::NotFound => {
             Err(ConfigError::Yaml(YamlError::Io(error)))
         }
         Err(error) => {
-            eprintln!("{}", path.display().to_string().red());
+            eprintln!("{}", full_path.display().to_string().red());
             eprintln!("{}", error.to_string().red());
             Err(ConfigError::Yaml(error))
         }
         Ok(config) => library_config
-            .resolve_config(config)
+            .resolve_config(config, nice_folder)
             .map_err(ConfigError::Library),
     }
 }
@@ -965,9 +970,7 @@ impl PendingMetadata {
                         .get(from)
                         .cloned()
                         .and_then(|x| match modify {
-                            Some(modify) => {
-                                modify.modify(x.into(), source_path2.as_path(), config).ok()
-                            }
+                            Some(modify) => modify.modify(x.into(), &source_path2, config).ok(),
                             None => Some(x.into()),
                         }) {
                             Some(PendingValue::Ready(ready)) => {
