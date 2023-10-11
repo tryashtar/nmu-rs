@@ -407,6 +407,7 @@ fn dummy_config<'a>() -> LibraryConfig<'a> {
         art_repo: None,
         named_strategies: HashMap::new(),
         find_replace: HashMap::new(),
+        artist_separator: ";".to_owned(),
     }
 }
 

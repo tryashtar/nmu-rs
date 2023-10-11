@@ -4,7 +4,10 @@ use id3::TagLike;
 use metaflac::{block::VorbisComment, Block};
 use strum::IntoEnumIterator;
 
-use crate::song_config::{BuiltinMetadataField, Metadata, MetadataValue};
+use crate::{
+    library_config::LibraryConfig,
+    song_config::{BuiltinMetadataField, Metadata, MetadataValue},
+};
 
 pub struct Tags {
     flac: Option<metaflac::Tag>,
@@ -16,13 +19,13 @@ impl Tags {
         let id3 = id3::Tag::read_from_path(path).ok();
         Self { flac, id3 }
     }
-    pub fn get_metadata(&self) -> Metadata {
+    pub fn get_metadata(&self, config: &LibraryConfig) -> Metadata {
         let mut metadata = Metadata::new();
         if let Some(flac) = &self.flac {
             for block in flac.blocks() {
                 if let Block::VorbisComment(comment) = block {
                     for field in BuiltinMetadataField::iter() {
-                        if let Some(value) = get_flac(comment, &field) {
+                        if let Some(value) = get_flac(comment, &field, config) {
                             metadata.fields.insert(field.into(), value);
                         }
                     }
@@ -31,7 +34,7 @@ impl Tags {
         }
         if let Some(id3) = &self.id3 {
             for field in BuiltinMetadataField::iter() {
-                if let Some(value) = get_id3(id3, &field) {
+                if let Some(value) = get_id3(id3, &field, config) {
                     metadata.fields.insert(field.into(), value);
                 }
             }
@@ -40,19 +43,29 @@ impl Tags {
     }
 }
 
-fn get_id3(tag: &id3::Tag, field: &BuiltinMetadataField) -> Option<MetadataValue> {
+fn get_id3(
+    tag: &id3::Tag,
+    field: &BuiltinMetadataField,
+    config: &LibraryConfig,
+) -> Option<MetadataValue> {
     match field {
         BuiltinMetadataField::Album => convert_str(tag.album()),
-        BuiltinMetadataField::AlbumArtists => convert_str(tag.album_artist()),
+        BuiltinMetadataField::AlbumArtists => {
+            convert_list_str(tag.album_artist(), &config.artist_separator)
+        }
         BuiltinMetadataField::Arranger => convert_str(tag.text_for_frame_id("TPE4")),
         BuiltinMetadataField::Comment => convert_comments(tag.comments().collect()),
-        BuiltinMetadataField::Composers => convert_list_str(tag.text_values_for_frame_id("TCOM")),
+        BuiltinMetadataField::Composers => {
+            convert_list_str(tag.text_for_frame_id("TCOM"), &config.artist_separator)
+        }
         BuiltinMetadataField::Track => tag.track().map(MetadataValue::Number),
         BuiltinMetadataField::TrackTotal => tag.total_tracks().map(MetadataValue::Number),
         BuiltinMetadataField::Title => convert_str(tag.title()),
         BuiltinMetadataField::Language => convert_str(tag.text_for_frame_id("TLAN")),
-        BuiltinMetadataField::Genres => convert_list_str(tag.genres()),
-        BuiltinMetadataField::Performers => convert_list_str(tag.artists()),
+        BuiltinMetadataField::Genres => convert_list_str(tag.genre(), &config.artist_separator),
+        BuiltinMetadataField::Performers => {
+            convert_list_str(tag.artist(), &config.artist_separator)
+        }
         BuiltinMetadataField::Year => tag.year().map(|x| MetadataValue::Number(x as u32)),
         BuiltinMetadataField::Disc => tag.disc().map(MetadataValue::Number),
         BuiltinMetadataField::DiscTotal => tag.total_discs().map(MetadataValue::Number),
@@ -61,7 +74,11 @@ fn get_id3(tag: &id3::Tag, field: &BuiltinMetadataField) -> Option<MetadataValue
     }
 }
 
-fn get_flac(tag: &VorbisComment, field: &BuiltinMetadataField) -> Option<MetadataValue> {
+fn get_flac(
+    tag: &VorbisComment,
+    field: &BuiltinMetadataField,
+    config: &LibraryConfig,
+) -> Option<MetadataValue> {
     match field {
         BuiltinMetadataField::Album => convert_list(tag.album()),
         BuiltinMetadataField::AlbumArtists => convert_list(tag.album_artist()),
@@ -91,7 +108,7 @@ fn convert_lyrics(item: Vec<&id3::frame::Lyrics>) -> Option<MetadataValue> {
 }
 
 fn convert_str(item: Option<&str>) -> Option<MetadataValue> {
-    item.map(|x| MetadataValue::string(x.to_owned()))
+    item.map(|x| MetadataValue::string(x.replace('\0', "/")))
 }
 
 fn convert_num(item: Option<&Vec<String>>) -> Option<MetadataValue> {
@@ -105,8 +122,8 @@ fn convert_num(item: Option<&Vec<String>>) -> Option<MetadataValue> {
     .map(MetadataValue::Number)
 }
 
-fn convert_list_str(item: Option<Vec<&str>>) -> Option<MetadataValue> {
-    item.map(|x| x.into_iter().map(|y| y.to_owned()).collect())
+fn convert_list_str(item: Option<&str>, separator: &str) -> Option<MetadataValue> {
+    item.map(|x| x.split(separator).map(|y| y.replace('\0', "/")).collect())
         .map(MetadataValue::List)
 }
 

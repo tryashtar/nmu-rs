@@ -62,7 +62,7 @@ fn do_scan(library_config: LibraryConfig) {
             .with_extension("");
         println!("{}", nice_path.display());
         let tags = Tags::load(&song_path);
-        let existing_metadata = tags.get_metadata();
+        let existing_metadata = tags.get_metadata(&library_config);
         let final_metadata = get_metadata(&nice_path, &library_config, &mut cached_configs);
         print_differences(&existing_metadata, &final_metadata);
     }

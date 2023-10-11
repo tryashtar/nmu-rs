@@ -26,6 +26,7 @@ pub struct RawLibraryConfig<'a> {
     art: Option<RawArtRepo>,
     named_strategies: HashMap<String, MetadataOperation<'a>>,
     find_replace: HashMap<String, String>,
+    artist_separator: String,
 }
 
 pub struct LibraryConfig<'a> {
@@ -38,6 +39,7 @@ pub struct LibraryConfig<'a> {
     pub art_repo: Option<ArtRepo>,
     pub named_strategies: HashMap<String, MetadataOperation<'a>>,
     pub find_replace: HashMap<String, String>,
+    pub artist_separator: String,
 }
 impl<'a> LibraryConfig<'a> {
     pub fn new(folder: &Path, raw: RawLibraryConfig<'a>) -> Self {
@@ -66,6 +68,7 @@ impl<'a> LibraryConfig<'a> {
             art_repo: raw.art.map(|x| ArtRepo::new(folder, x)),
             named_strategies: raw.named_strategies,
             find_replace: raw.find_replace,
+            artist_separator: raw.artist_separator,
         }
     }
     pub fn resolve_config(
