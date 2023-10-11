@@ -6,25 +6,30 @@ use std::env;
 use std::io::{ErrorKind, IsTerminal};
 use std::path::{Path, PathBuf};
 
+mod strategy;
+use strategy::*;
 mod file_stuff;
 mod library_config;
-#[cfg(test)]
-mod tests;
 use library_config::*;
-
+mod metadata;
+use metadata::*;
+mod modifier;
+use modifier::*;
+mod util;
+use util::*;
 mod song_config;
 use song_config::*;
-
 mod tag_interop;
-use tag_interop::Tags;
+#[cfg(test)]
+mod tests;
 
-use crate::file_stuff::{file_path, match_extension, match_name};
+use crate::file_stuff::{file_path, match_extension, match_name, YamlError};
 
 fn main() {
     println!("NAIVE MUSIC UPDATER");
     let first_argument = env::args().nth(1);
     let library_config_path = Path::new(first_argument.as_deref().unwrap_or("library.yaml"));
-    let raw_config = load_yaml::<RawLibraryConfig>(library_config_path);
+    let raw_config = file_stuff::load_yaml::<RawLibraryConfig>(library_config_path);
     match raw_config {
         Err(YamlError::Io(error))
             if error.kind() == ErrorKind::NotFound && first_argument.is_none() =>
@@ -61,7 +66,7 @@ fn do_scan(library_config: LibraryConfig) {
             .unwrap_or(&song_path)
             .with_extension("");
         println!("{}", nice_path.display());
-        let tags = Tags::load(&song_path);
+        let tags = tag_interop::Tags::load(&song_path);
         let existing_metadata = tags.get_metadata(&library_config);
         let final_metadata = get_metadata(&nice_path, &library_config, &mut cached_configs);
         print_differences(&existing_metadata, &final_metadata);
@@ -95,7 +100,7 @@ fn get_metadata<'a>(
             let config_path = config_root.join(ancestor).join("config.yaml");
             if let Some(config) = config_cache
                 .entry(config_path)
-                .or_insert_with_key(|x| load_config(x, ancestor, library_config).ok())
+                .or_insert_with_key(|x| file_stuff::load_config(x, ancestor, library_config).ok())
             {
                 for setter in &config.set {
                     if setter.names.matches(select_song_path) {
@@ -188,9 +193,7 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
         // scan all songs that used to use any of these templates
         for (image_path, songs) in &art_repo.used_templates.cache {
             if scan_images.contains(image_path)
-                || library_config
-                    .date_cache
-                    .changed_recently(image_path)
+                || library_config.date_cache.changed_recently(image_path)
             {
                 for song in songs {
                     if scan_songs.insert(song.clone()) && std::io::stdout().is_terminal() {

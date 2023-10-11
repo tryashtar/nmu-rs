@@ -1,11 +1,58 @@
 use std::{
     collections::HashSet,
-    path::{Path, PathBuf},
+    path::{Path, PathBuf}, fs::File, io::{BufReader, ErrorKind},
 };
 
+use colored::Colorize;
 use itertools::Itertools;
+use serde::de::DeserializeOwned;
+use thiserror::Error;
 
-use crate::{library_config::LibraryConfig, song_config::ItemSelector};
+use crate::{library_config::{LibraryConfig, LibraryError}, song_config::{SongConfig, RawSongConfig}, strategy::ItemSelector};
+
+#[derive(Error, Debug)]
+#[error("{0}")]
+pub enum YamlError {
+    Io(#[from] std::io::Error),
+    Yaml(#[from] serde_yaml::Error),
+}
+
+#[derive(Error, Debug)]
+#[error("{0}")]
+pub enum ConfigError {
+    Yaml(#[from] YamlError),
+    Library(#[from] LibraryError),
+}
+
+pub fn load_yaml<T>(path: &Path) -> Result<T, YamlError>
+where
+    T: DeserializeOwned,
+{
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let yaml: T = serde_yaml::from_reader(reader)?;
+    Ok(yaml)
+}
+
+pub fn load_config<'a>(
+    full_path: &Path,
+    nice_folder: &Path,
+    library_config: &'a LibraryConfig<'a>,
+) -> Result<SongConfig<'a>, ConfigError> {
+    match load_yaml::<RawSongConfig>(full_path) {
+        Err(YamlError::Io(error)) if error.kind() == ErrorKind::NotFound => {
+            Err(ConfigError::Yaml(YamlError::Io(error)))
+        }
+        Err(error) => {
+            eprintln!("{}", full_path.display().to_string().red());
+            eprintln!("{}", error.to_string().red());
+            Err(ConfigError::Yaml(error))
+        }
+        Ok(config) => library_config
+            .resolve_config(config, nice_folder)
+            .map_err(ConfigError::Library),
+    }
+}
 
 pub fn file_path(item: jwalk::Result<jwalk::DirEntry<((), ())>>) -> Option<PathBuf> {
     match item {

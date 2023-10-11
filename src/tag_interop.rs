@@ -5,8 +5,7 @@ use metaflac::{block::VorbisComment, Block};
 use strum::IntoEnumIterator;
 
 use crate::{
-    library_config::LibraryConfig,
-    song_config::{BuiltinMetadataField, Metadata, MetadataValue},
+    library_config::LibraryConfig, metadata::{Metadata, BuiltinMetadataField, MetadataValue},
 };
 
 pub struct Tags {

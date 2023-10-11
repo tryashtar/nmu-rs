@@ -1,19 +1,20 @@
 use chrono::{DateTime, Utc};
 use path_absolutize::Absolutize;
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
-use std::io::{BufReader, BufWriter};
+use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use thiserror::Error;
 
-use crate::file_stuff;
+use crate::file_stuff::{self, YamlError};
+use crate::metadata::{BuiltinMetadataField, MetadataValue, MetadataField};
 use crate::song_config::{
-    AllSetter, Borrowable, BuiltinMetadataField, ItemSelector, MetadataField, MetadataOperation,
-    MetadataValue, RawSongConfig, ReferencableOperation, SongConfig, ValueGetter,
+    AllSetter, RawSongConfig, SongConfig, ReferencableOperation
 };
+use crate::strategy::{MetadataOperation, ItemSelector, ValueGetter};
+use crate::util::Borrowable;
 
 #[derive(Deserialize)]
 pub struct RawLibraryConfig<'a> {
@@ -257,7 +258,7 @@ impl ArtCache {
             },
             Some(path) => Self {
                 path: Some(path.clone()),
-                cache: match load_yaml(&path) {
+                cache: match file_stuff::load_yaml(&path) {
                     Err(_) => HashMap::new(),
                     Ok(map) => map,
                 },
@@ -293,7 +294,7 @@ impl DateCache {
             },
             Some(path) => Self {
                 path: Some(path.clone()),
-                cache: match load_yaml(&path) {
+                cache: match file_stuff::load_yaml(&path) {
                     Err(_) => HashMap::new(),
                     Ok(map) => map,
                 },
@@ -323,21 +324,4 @@ impl DateCache {
             },
         }
     }
-}
-
-#[derive(Error, Debug)]
-#[error("{0}")]
-pub enum YamlError {
-    Io(#[from] std::io::Error),
-    Yaml(#[from] serde_yaml::Error),
-}
-
-pub fn load_yaml<T>(path: &Path) -> Result<T, YamlError>
-where
-    T: DeserializeOwned,
-{
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
-    let yaml: T = serde_yaml::from_reader(reader)?;
-    Ok(yaml)
 }
