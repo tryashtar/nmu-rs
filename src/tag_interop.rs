@@ -5,7 +5,8 @@ use metaflac::{block::VorbisComment, Block};
 use strum::IntoEnumIterator;
 
 use crate::{
-    library_config::LibraryConfig, metadata::{Metadata, BuiltinMetadataField, MetadataValue},
+    library_config::LibraryConfig,
+    metadata::{BuiltinMetadataField, Metadata, MetadataValue},
 };
 
 pub struct Tags {
@@ -85,7 +86,16 @@ fn get_flac(
         BuiltinMetadataField::Comment => convert_list(tag.get("COMMENT")),
         BuiltinMetadataField::Composers => convert_list(tag.get("COMPOSER")),
         BuiltinMetadataField::Track => tag.track().map(MetadataValue::Number),
-        BuiltinMetadataField::TrackTotal => tag.total_tracks().map(MetadataValue::Number),
+        BuiltinMetadataField::TrackTotal => tag
+            .get("TRACKTOTAL")
+            .and_then(|s| {
+                if !s.is_empty() {
+                    s[0].parse::<u32>().ok()
+                } else {
+                    None
+                }
+            })
+            .map(MetadataValue::Number),
         BuiltinMetadataField::Title => convert_list(tag.title()),
         BuiltinMetadataField::Language => convert_list(tag.get("LANGUAGE")),
         BuiltinMetadataField::Genres => convert_list(tag.genre()),

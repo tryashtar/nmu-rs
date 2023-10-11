@@ -13,7 +13,7 @@ impl<T> Listable<T> {
             Self::List(list) => list,
         }
     }
-    pub fn as_slice<'a>(&'a self) -> &'a [T] {
+    pub fn as_slice(&self) -> &[T] {
         match self {
             Self::Single(one) => core::slice::from_ref(one),
             Self::List(list) => list,
