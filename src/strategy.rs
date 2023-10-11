@@ -14,7 +14,7 @@ use crate::{
     library_config::LibraryConfig,
     metadata::{BuiltinMetadataField, MetadataField, MetadataValue, PendingMetadata, PendingValue},
     modifier::{ValueError, ValueModifier},
-    util::{OutOfBoundsDecision, Range},
+    util::{Listable, OutOfBoundsDecision, Range},
 };
 
 #[derive(Deserialize, Serialize)]
@@ -28,10 +28,10 @@ pub enum MetadataOperation {
     },
     Context {
         source: ValueGetter,
-        modify: HashMap<MetadataField, Rc<ValueModifier>>,
+        modify: HashMap<MetadataField, Listable<Rc<ValueModifier>>>,
     },
     Modify {
-        modify: HashMap<MetadataField, Rc<ValueModifier>>,
+        modify: HashMap<MetadataField, Listable<Rc<ValueModifier>>>,
     },
     Set(HashMap<MetadataField, ValueGetter>),
 }
@@ -68,7 +68,12 @@ impl MetadataOperation {
             Self::Context { source, modify } => {
                 if let Ok(value) = source.get(path, config) {
                     for (field, modifier) in modify {
-                        if let Ok(modified) = modifier.modify(value.clone(), path, config) {
+                        if let Ok(modified) = ValueModifier::modify_all(
+                            modifier.as_slice(),
+                            value.clone(),
+                            path,
+                            config,
+                        ) {
                             metadata.fields.insert(field.clone(), modified);
                         }
                     }
@@ -77,7 +82,12 @@ impl MetadataOperation {
             Self::Modify { modify } => {
                 for (field, modifier) in modify {
                     if let Some(existing) = metadata.fields.get(field) {
-                        if let Ok(modified) = modifier.modify(existing.clone(), path, config) {
+                        if let Ok(modified) = ValueModifier::modify_all(
+                            modifier.as_slice(),
+                            existing.clone(),
+                            path,
+                            config,
+                        ) {
                             metadata.fields.insert(field.clone(), modified);
                         }
                     }
@@ -307,16 +317,19 @@ pub enum ValueGetter {
     Copy {
         from: LocalItemSelector,
         copy: MetadataField,
-        #[serde(default)]
-        modify: Vec<Rc<ValueModifier>>,
+        #[serde(default = "empty_list")]
+        modify: Listable<Rc<ValueModifier>>,
     },
     From {
         from: LocalItemSelector,
         #[serde(default = "default_value")]
         value: FieldValueGetter,
-        #[serde(default)]
-        modify: Vec<Rc<ValueModifier>>,
+        #[serde(default = "empty_list")]
+        modify: Listable<Rc<ValueModifier>>,
     },
+}
+fn empty_list<T>() -> Listable<T> {
+    Listable::List(vec![])
 }
 impl ValueGetter {
     pub fn get(&self, path: &Path, config: &LibraryConfig) -> Result<PendingValue, ValueError> {
@@ -337,7 +350,7 @@ impl ValueGetter {
                         .map(|x| value.get(&x, config).to_string())
                         .collect(),
                 );
-                ValueModifier::modify_all(modify, result.into(), path, config)
+                ValueModifier::modify_all(modify.as_slice(), result.into(), path, config)
             }
             Self::Copy { from, copy, modify } => Ok(PendingValue::CopyField {
                 field: copy.clone(),

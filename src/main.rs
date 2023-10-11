@@ -81,9 +81,9 @@ fn do_scan(library_config: LibraryConfig) {
     }
 }
 
-fn get_metadata<'a>(
+fn get_metadata(
     nice_path: &Path,
-    library_config: &'a LibraryConfig,
+    library_config: &LibraryConfig,
     config_cache: &mut HashMap<PathBuf, Option<SongConfig>>,
 ) -> Metadata {
     let mut metadata = PendingMetadata::new();

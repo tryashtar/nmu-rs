@@ -7,7 +7,7 @@ use crate::{
     library_config::LibraryConfig,
     metadata::{MetadataValue, PendingValue},
     strategy::ValueGetter,
-    util::{OutOfBoundsDecision, Range},
+    util::{Listable, OutOfBoundsDecision, Range},
 };
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -55,7 +55,6 @@ pub enum ValueError {
     UnexpectedType,
     ItemNotFound,
     NoMatchFound,
-    EmptyList,
     ConditionsNotMet,
 }
 
@@ -121,9 +120,21 @@ impl ValueModifier {
         path: &Path,
         config: &LibraryConfig,
     ) -> Result<PendingValue, ValueError> {
-        if let PendingValue::CopyField { field, sources, mut modify } = value {
-            modify.push(self.clone());
-            return Ok(PendingValue::CopyField { field, sources, modify });
+        if let PendingValue::CopyField {
+            field,
+            sources,
+            mut modify,
+        } = value
+        {
+            match modify {
+                Listable::List(ref mut modify_list) => modify_list.push(self.clone()),
+                Listable::Single(single) => modify = Listable::List(vec![single, self.clone()]),
+            };
+            return Ok(PendingValue::CopyField {
+                field,
+                sources,
+                modify,
+            });
         }
         match Rc::as_ref(self) {
             Self::Replace { replace } => {

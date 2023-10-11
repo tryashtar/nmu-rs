@@ -236,6 +236,18 @@ mod deserialize {
         let result = serde_yaml::from_str::<ValueModifier>("take: {index: first}").unwrap();
         assert!(matches!(result, ValueModifier::Take { .. }));
     }
+
+    #[test]
+    fn listable_single() {
+        let result = serde_yaml::from_str::<Listable<u32>>("5").unwrap();
+        assert!(matches!(result, Listable::Single(5)));
+    }
+
+    #[test]
+    fn listable_list() {
+        let result = serde_yaml::from_str::<Listable<u32>>("[5, 4, 3]").unwrap();
+        assert!(matches!(result, Listable::List(x) if x == vec![5,4,3]));
+    }
 }
 
 #[test]
@@ -412,7 +424,7 @@ fn copy_field_resolution() {
         PendingValue::CopyField {
             field: BuiltinMetadataField::Performers.into(),
             sources: vec![path.clone()],
-            modify: vec![],
+            modify: Listable::List(vec![]),
         },
     );
     let resolved = pending.resolve(&path, &config, &mut HashMap::new());

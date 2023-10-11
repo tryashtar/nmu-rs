@@ -24,7 +24,7 @@ pub struct RawLibraryConfig {
     custom_fields: Vec<String>,
     cache: Option<PathBuf>,
     art: Option<RawArtRepo>,
-    named_strategies: HashMap<String, MetadataOperation>,
+    named_strategies: HashMap<String, Listable<MetadataOperation>>,
     find_replace: HashMap<String, String>,
     artist_separator: String,
 }
@@ -37,7 +37,7 @@ pub struct LibraryConfig {
     pub custom_fields: Vec<MetadataField>,
     pub date_cache: DateCache,
     pub art_repo: Option<ArtRepo>,
-    pub named_strategies: HashMap<String, Rc<MetadataOperation>>,
+    pub named_strategies: HashMap<String, Vec<Rc<MetadataOperation>>>,
     pub find_replace: HashMap<String, String>,
     pub artist_separator: String,
 }
@@ -69,7 +69,7 @@ impl LibraryConfig {
             named_strategies: raw
                 .named_strategies
                 .into_iter()
-                .map(|(k, v)| (k, Rc::new(v)))
+                .map(|(k, v)| (k, v.into_list().into_iter().map(Rc::new).collect()))
                 .collect(),
             find_replace: raw.find_replace,
             artist_separator: raw.artist_separator,
@@ -91,12 +91,12 @@ impl LibraryConfig {
             .transpose()?;
         let set = raw_config
             .set
-            .map(|x| {
-                x.into_iter()
-                    .map(|(y, z)| {
-                        self.resolve_operation(z).map(|q| AllSetter {
-                            names: ItemSelector::Path(y),
-                            set: q,
+            .map(|map| {
+                map.into_iter()
+                    .map(|(path, ops)| {
+                        self.resolve_operation(ops).map(|ops| AllSetter {
+                            names: ItemSelector::Path(path),
+                            set: ops,
                         })
                     })
                     .collect::<Result<Vec<_>, _>>()
@@ -108,9 +108,9 @@ impl LibraryConfig {
             .map(|x| {
                 x.into_iter()
                     .map(|y| {
-                        self.resolve_operation(y.set).map(|q| AllSetter {
+                        self.resolve_operation(y.set).map(|ops| AllSetter {
                             names: y.names,
-                            set: q,
+                            set: ops,
                         })
                     })
                     .collect::<Result<Vec<_>, _>>()
@@ -199,14 +199,15 @@ impl LibraryConfig {
             .into_list()
             .into_iter()
             .map(|x| match x {
-                ReferencableOperation::Direct(direct) => Ok(Rc::new(direct)),
+                ReferencableOperation::Direct(direct) => Ok(vec![Rc::new(direct)]),
                 ReferencableOperation::Reference(reference) => self
                     .named_strategies
                     .get(&reference)
                     .cloned()
-                    .ok_or_else(|| LibraryError::MissingNamedStrategy(reference)),
+                    .ok_or(LibraryError::MissingNamedStrategy(reference)),
             })
-            .collect()
+            .collect::<Result<Vec<_>, _>>()
+            .map(|x| x.into_iter().flatten().collect())
     }
 }
 
