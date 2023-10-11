@@ -8,7 +8,6 @@ use std::{
     io::ErrorKind,
     ops::Deref,
     path::{Path, PathBuf},
-    rc::Rc,
 };
 use strum::{Display, EnumIter, IntoEnumIterator};
 use thiserror::Error;
@@ -76,6 +75,14 @@ impl<B> Deref for Borrowable<'_, B> {
         }
     }
 }
+impl<T> Clone for Borrowable<'_, T>
+where
+    T: Clone,
+{
+    fn clone(&self) -> Self {
+        Self::Owned(self.as_ref().clone())
+    }
+}
 
 #[derive(Deserialize, Serialize)]
 #[serde(untagged)]
@@ -95,17 +102,22 @@ pub enum MetadataOperation<'a> {
         keep: FieldSelector,
     },
     Context {
-        source: ValueGetter,
-        modify: HashMap<MetadataField, ValueModifier>,
+        source: ValueGetter<'a>,
+        modify: HashMap<MetadataField, ValueModifier<'a>>,
     },
     Modify {
-        modify: HashMap<MetadataField, ValueModifier>,
+        modify: HashMap<MetadataField, ValueModifier<'a>>,
     },
     Sequence(Vec<Borrowable<'a, MetadataOperation<'a>>>),
-    Set(HashMap<MetadataField, ValueGetter>),
+    Set(HashMap<MetadataField, ValueGetter<'a>>),
 }
 impl MetadataOperation<'_> {
-    pub fn apply(&self, metadata: &mut PendingMetadata, path: &Path, config: &LibraryConfig) {
+    pub fn apply(
+        &self,
+        metadata: &mut PendingMetadata,
+        path: &Path,
+        config: &LibraryConfig,
+    ) {
         match self {
             Self::Blank { remove } => {
                 for field in &config.custom_fields {
@@ -169,7 +181,7 @@ pub enum CombineMode {
     Prepend,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Clone)]
 #[serde(untagged)]
 pub enum ItemSelector {
     All,
@@ -230,7 +242,7 @@ impl ItemSelector {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Clone)]
 #[serde(untagged)]
 pub enum PathSegment {
     Literal(String),
@@ -251,7 +263,7 @@ impl PathSegment {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Clone)]
 #[serde(rename_all = "lowercase")]
 #[serde(untagged)]
 pub enum LocalItemSelector {
@@ -331,7 +343,7 @@ impl LocalItemSelector {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct Range {
     pub start: i32,
     pub stop: i32,
@@ -492,7 +504,7 @@ impl Range {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum MusicItemType {
     Song,
@@ -544,30 +556,30 @@ impl FieldSelector {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Clone)]
 #[serde(untagged)]
-pub enum ValueGetter {
+pub enum ValueGetter<'a> {
     Direct(MetadataValue),
     Copy {
         from: LocalItemSelector,
         copy: MetadataField,
-        modify: Option<Rc<ValueModifier>>,
+        modify: Option<Borrowable<'a, ValueModifier<'a>>>,
     },
     From {
         from: LocalItemSelector,
         #[serde(default = "default_value")]
         value: FieldValueGetter,
-        modify: Option<ValueModifier>,
+        modify: Option<Borrowable<'a, ValueModifier<'a>>>,
     },
 }
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum FieldValueGetter {
     FileName,
     CleanName,
     Path,
 }
-impl ValueGetter {
+impl ValueGetter<'_> {
     fn get(&self, path: &Path, config: &LibraryConfig) -> Result<PendingValue, ValueError> {
         match self {
             Self::Direct(value) => Ok(value.clone().into()),
@@ -605,31 +617,31 @@ fn default_value() -> FieldValueGetter {
     FieldValueGetter::CleanName
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Clone)]
 #[serde(untagged)]
-pub enum ValueModifier {
+pub enum ValueModifier<'a> {
     Prepend {
-        prepend: Box<ValueGetter>,
+        prepend: Box<ValueGetter<'a>>,
         index: Option<Range>,
     },
     Append {
-        append: Box<ValueGetter>,
+        append: Box<ValueGetter<'a>>,
         index: Option<Range>,
     },
     InsertBefore {
-        insert: Box<ValueGetter>,
+        insert: Box<ValueGetter<'a>>,
         before: Range,
         #[serde(default = "default_oob")]
         out_of_bounds: OutOfBoundsDecision,
     },
     InsertAfter {
-        insert: Box<ValueGetter>,
+        insert: Box<ValueGetter<'a>>,
         after: Range,
         #[serde(default = "default_oob")]
         out_of_bounds: OutOfBoundsDecision,
     },
     Join {
-        join: Box<ValueGetter>,
+        join: Box<ValueGetter<'a>>,
     },
     Split {
         split: String,
@@ -644,11 +656,11 @@ pub enum ValueModifier {
     Take {
         take: TakeModifier,
     },
-    Sequence(Vec<ValueModifier>),
+    Sequence(Vec<Borrowable<'a, ValueModifier<'a>>>),
 }
 
 #[derive(Clone)]
-pub enum PendingValue {
+pub enum PendingValue<'a> {
     Ready(MetadataValue),
     RegexMatches {
         source: String,
@@ -657,15 +669,15 @@ pub enum PendingValue {
     CopyField {
         field: MetadataField,
         sources: Vec<PathBuf>,
-        modify: Option<Rc<ValueModifier>>,
+        modify: Option<Borrowable<'a, ValueModifier<'a>>>,
     },
 }
-impl From<MetadataValue> for PendingValue {
+impl From<MetadataValue> for PendingValue<'_> {
     fn from(value: MetadataValue) -> Self {
         PendingValue::Ready(value)
     }
 }
-impl ValueModifier {
+impl ValueModifier<'_> {
     fn take(
         list: &[String],
         range: &Range,
@@ -710,12 +722,29 @@ impl ValueModifier {
             MetadataValue::Number(_) => Err(ValueError::UnexpectedType),
         }
     }
-    fn modify(
-        &self,
-        value: PendingValue,
+    fn modify<'a>(
+        &'a self,
+        value: PendingValue<'a>,
         path: &Path,
         config: &LibraryConfig,
     ) -> Result<PendingValue, ValueError> {
+        if let PendingValue::CopyField {
+            field,
+            sources,
+            modify,
+        } = value
+        {
+            let mut modifiers = vec![];
+            if let Some(md) = modify {
+                modifiers.push(md);
+            }
+            modifiers.push(Borrowable::Borrowed(self));
+            return Ok(PendingValue::CopyField {
+                field,
+                sources,
+                modify: Some(Borrowable::Owned(ValueModifier::Sequence(modifiers))),
+            });
+        }
         match self {
             Self::Replace { replace } => {
                 if let PendingValue::RegexMatches { source, regex } = value {
@@ -858,7 +887,7 @@ pub enum ValueError {
     ConditionsNotMet,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Clone)]
 #[serde(untagged)]
 pub enum TakeModifier {
     Simple(Range),
@@ -895,8 +924,8 @@ impl FieldValueGetter {
     }
 }
 
-pub struct PendingMetadata {
-    pub fields: HashMap<MetadataField, PendingValue>,
+pub struct PendingMetadata<'a> {
+    pub fields: HashMap<MetadataField, PendingValue<'a>>,
 }
 pub struct Metadata {
     pub fields: HashMap<MetadataField, MetadataValue>,
@@ -927,7 +956,7 @@ pub enum ConfigError {
     Yaml(#[from] YamlError),
     Library(#[from] LibraryError),
 }
-impl PendingMetadata {
+impl PendingMetadata<'_> {
     pub fn new() -> Self {
         Self {
             fields: HashMap::new(),
@@ -991,7 +1020,7 @@ impl PendingMetadata {
         metadata
     }
 }
-impl From<Metadata> for PendingMetadata {
+impl From<Metadata> for PendingMetadata<'_> {
     fn from(value: Metadata) -> Self {
         Self {
             fields: value
