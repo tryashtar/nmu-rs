@@ -34,11 +34,11 @@ where
     Ok(yaml)
 }
 
-pub fn load_config<'a>(
+pub fn load_config(
     full_path: &Path,
     nice_folder: &Path,
-    library_config: &'a LibraryConfig<'a>,
-) -> Result<SongConfig<'a>, ConfigError> {
+    library_config: &LibraryConfig,
+) -> Result<SongConfig, ConfigError> {
     match load_yaml::<RawSongConfig>(full_path) {
         Err(YamlError::Io(error)) if error.kind() == ErrorKind::NotFound => {
             Err(ConfigError::Yaml(YamlError::Io(error)))

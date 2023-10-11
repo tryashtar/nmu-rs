@@ -32,13 +32,6 @@ mod deserialize {
     }
 
     #[test]
-    fn meta_op_seq() {
-        let result =
-            serde_yaml::from_str::<MetadataOperation>("[{title: 'test'},{title: 'test'}]").unwrap();
-        assert!(matches!(result, MetadataOperation::Sequence(_)));
-    }
-
-    #[test]
     fn meta_op_set() {
         let result = serde_yaml::from_str::<MetadataOperation>("{title: 'test'}").unwrap();
         assert!(matches!(result, MetadataOperation::Set { .. }));
@@ -233,12 +226,6 @@ mod deserialize {
     }
 
     #[test]
-    fn modifier_sequence() {
-        let result = serde_yaml::from_str::<ValueModifier>("[{split: ' '},{join: ','}]").unwrap();
-        assert!(matches!(result, ValueModifier::Sequence { .. }));
-    }
-
-    #[test]
     fn take_simple() {
         let result = serde_yaml::from_str::<ValueModifier>("take: first").unwrap();
         assert!(matches!(result, ValueModifier::Take { .. }));
@@ -396,7 +383,7 @@ fn select_subpath_complex() {
     assert!(!selector.matches(Path::new("d")));
 }
 
-fn dummy_config<'a>() -> LibraryConfig<'a> {
+fn dummy_config() -> LibraryConfig {
     LibraryConfig {
         library_folder: PathBuf::from("a/b/c"),
         log_folder: None,
@@ -425,7 +412,7 @@ fn copy_field_resolution() {
         PendingValue::CopyField {
             field: BuiltinMetadataField::Performers.into(),
             sources: vec![path.clone()],
-            modify: None,
+            modify: vec![],
         },
     );
     let resolved = pending.resolve(&path, &config, &mut HashMap::new());

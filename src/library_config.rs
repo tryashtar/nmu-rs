@@ -5,19 +5,18 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::SystemTime;
 use thiserror::Error;
 
 use crate::file_stuff::{self, YamlError};
-use crate::metadata::{BuiltinMetadataField, MetadataValue, MetadataField};
-use crate::song_config::{
-    AllSetter, RawSongConfig, SongConfig, ReferencableOperation
-};
-use crate::strategy::{MetadataOperation, ItemSelector, ValueGetter};
-use crate::util::Borrowable;
+use crate::metadata::{BuiltinMetadataField, MetadataField, MetadataValue};
+use crate::song_config::{AllSetter, RawSongConfig, ReferencableOperation, SongConfig};
+use crate::strategy::{ItemSelector, MetadataOperation, ValueGetter};
+use crate::util::Listable;
 
 #[derive(Deserialize)]
-pub struct RawLibraryConfig<'a> {
+pub struct RawLibraryConfig {
     library: PathBuf,
     logs: Option<PathBuf>,
     config_folders: Vec<PathBuf>,
@@ -25,12 +24,12 @@ pub struct RawLibraryConfig<'a> {
     custom_fields: Vec<String>,
     cache: Option<PathBuf>,
     art: Option<RawArtRepo>,
-    named_strategies: HashMap<String, MetadataOperation<'a>>,
+    named_strategies: HashMap<String, MetadataOperation>,
     find_replace: HashMap<String, String>,
     artist_separator: String,
 }
 
-pub struct LibraryConfig<'a> {
+pub struct LibraryConfig {
     pub library_folder: PathBuf,
     pub log_folder: Option<PathBuf>,
     pub config_folders: Vec<PathBuf>,
@@ -38,12 +37,12 @@ pub struct LibraryConfig<'a> {
     pub custom_fields: Vec<MetadataField>,
     pub date_cache: DateCache,
     pub art_repo: Option<ArtRepo>,
-    pub named_strategies: HashMap<String, MetadataOperation<'a>>,
+    pub named_strategies: HashMap<String, Rc<MetadataOperation>>,
     pub find_replace: HashMap<String, String>,
     pub artist_separator: String,
 }
-impl<'a> LibraryConfig<'a> {
-    pub fn new(folder: &Path, raw: RawLibraryConfig<'a>) -> Self {
+impl LibraryConfig {
+    pub fn new(folder: &Path, raw: RawLibraryConfig) -> Self {
         Self {
             library_folder: folder.join(raw.library),
             log_folder: raw.logs.map(|x| folder.join(x)),
@@ -67,22 +66,26 @@ impl<'a> LibraryConfig<'a> {
                 .collect(),
             date_cache: DateCache::new(raw.cache.map(|x| folder.join(x))),
             art_repo: raw.art.map(|x| ArtRepo::new(folder, x)),
-            named_strategies: raw.named_strategies,
+            named_strategies: raw
+                .named_strategies
+                .into_iter()
+                .map(|(k, v)| (k, Rc::new(v)))
+                .collect(),
             find_replace: raw.find_replace,
             artist_separator: raw.artist_separator,
         }
     }
     pub fn resolve_config(
-        &'a self,
-        raw_config: RawSongConfig<'a>,
+        &self,
+        raw_config: RawSongConfig,
         folder: &Path,
-    ) -> Result<SongConfig<'a>, LibraryError> {
+    ) -> Result<SongConfig, LibraryError> {
         let songs = raw_config
             .songs
             .map(|x| {
-                self.resolve_operation(x).map(|q| AllSetter {
+                self.resolve_operation(x).map(|ops| AllSetter {
                     names: ItemSelector::All,
-                    set: q,
+                    set: ops,
                 })
             })
             .transpose()?;
@@ -122,18 +125,20 @@ impl<'a> LibraryConfig<'a> {
                 matches
                     .into_iter()
                     .enumerate()
-                    .map(|(track, path)| AllSetter {
-                        names: ItemSelector::Path(path),
-                        set: Borrowable::Owned(MetadataOperation::Set(HashMap::from([
-                            (
-                                BuiltinMetadataField::Track.into(),
-                                ValueGetter::Direct(MetadataValue::Number((track + 1) as u32)),
-                            ),
-                            (
-                                BuiltinMetadataField::TrackTotal.into(),
-                                ValueGetter::Direct(MetadataValue::Number(total as u32)),
-                            ),
-                        ]))),
+                    .map(|(track, path)| {
+                        AllSetter::new(
+                            ItemSelector::Path(path),
+                            MetadataOperation::Set(HashMap::from([
+                                (
+                                    BuiltinMetadataField::Track.into(),
+                                    ValueGetter::Direct(MetadataValue::Number((track + 1) as u32)),
+                                ),
+                                (
+                                    BuiltinMetadataField::TrackTotal.into(),
+                                    ValueGetter::Direct(MetadataValue::Number(total as u32)),
+                                ),
+                            ])),
+                        )
                     })
                     .collect::<Vec<_>>()
             })
@@ -146,12 +151,10 @@ impl<'a> LibraryConfig<'a> {
                     .flat_map(|(disc, sel)| {
                         let matches = file_stuff::find_matches(&sel, folder, self);
                         let track_total = matches.len();
-                        matches
-                            .into_iter()
-                            .enumerate()
-                            .map(move |(track, path)| AllSetter {
-                                names: ItemSelector::Path(path),
-                                set: Borrowable::Owned(MetadataOperation::Set(HashMap::from([
+                        matches.into_iter().enumerate().map(move |(track, path)| {
+                            AllSetter::new(
+                                ItemSelector::Path(path),
+                                MetadataOperation::Set(HashMap::from([
                                     (
                                         BuiltinMetadataField::Track.into(),
                                         ValueGetter::Direct(MetadataValue::Number(
@@ -172,8 +175,9 @@ impl<'a> LibraryConfig<'a> {
                                         BuiltinMetadataField::DiscTotal.into(),
                                         ValueGetter::Direct(MetadataValue::Number(disc_total)),
                                     ),
-                                ]))),
-                            })
+                                ])),
+                            )
+                        })
                     })
                     .collect::<Vec<_>>()
             })
@@ -189,22 +193,20 @@ impl<'a> LibraryConfig<'a> {
     }
     fn resolve_operation(
         &self,
-        operation: ReferencableOperation<'a>,
-    ) -> Result<Borrowable<MetadataOperation>, LibraryError> {
-        match operation {
-            ReferencableOperation::Direct(direct) => Ok(Borrowable::Owned(direct)),
-            ReferencableOperation::Reference(reference) => {
-                match self.named_strategies.get(&reference) {
-                    None => Err(LibraryError::MissingNamedStrategy(reference)),
-                    Some(strat) => Ok(Borrowable::Borrowed(strat)),
-                }
-            }
-            ReferencableOperation::Sequence(sequence) => sequence
-                .into_iter()
-                .map(|x| self.resolve_operation(x))
-                .collect::<Result<Vec<_>, _>>()
-                .map(|x| Borrowable::Owned(MetadataOperation::Sequence(x))),
-        }
+        operation: Listable<ReferencableOperation>,
+    ) -> Result<Vec<Rc<MetadataOperation>>, LibraryError> {
+        operation
+            .into_list()
+            .into_iter()
+            .map(|x| match x {
+                ReferencableOperation::Direct(direct) => Ok(Rc::new(direct)),
+                ReferencableOperation::Reference(reference) => self
+                    .named_strategies
+                    .get(&reference)
+                    .cloned()
+                    .ok_or_else(|| LibraryError::MissingNamedStrategy(reference)),
+            })
+            .collect()
     }
 }
 

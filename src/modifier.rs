@@ -1,38 +1,40 @@
-use std::path::Path;
+use std::{path::Path, rc::Rc};
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     library_config::LibraryConfig,
-    metadata::{PendingValue, MetadataValue}, strategy::ValueGetter, util::{Range, OutOfBoundsDecision, Borrowable},
+    metadata::{MetadataValue, PendingValue},
+    strategy::ValueGetter,
+    util::{OutOfBoundsDecision, Range},
 };
 
 #[derive(Deserialize, Serialize, Clone)]
 #[serde(untagged)]
-pub enum ValueModifier<'a> {
+pub enum ValueModifier {
     Prepend {
-        prepend: Box<ValueGetter<'a>>,
+        prepend: Box<ValueGetter>,
         index: Option<Range>,
     },
     Append {
-        append: Box<ValueGetter<'a>>,
+        append: Box<ValueGetter>,
         index: Option<Range>,
     },
     InsertBefore {
-        insert: Box<ValueGetter<'a>>,
+        insert: Box<ValueGetter>,
         before: Range,
         #[serde(default = "default_oob")]
         out_of_bounds: OutOfBoundsDecision,
     },
     InsertAfter {
-        insert: Box<ValueGetter<'a>>,
+        insert: Box<ValueGetter>,
         after: Range,
         #[serde(default = "default_oob")]
         out_of_bounds: OutOfBoundsDecision,
     },
     Join {
-        join: Box<ValueGetter<'a>>,
+        join: Box<ValueGetter>,
     },
     Split {
         split: String,
@@ -47,7 +49,6 @@ pub enum ValueModifier<'a> {
     Take {
         take: TakeModifier,
     },
-    Sequence(Vec<Borrowable<'a, ValueModifier<'a>>>)
 }
 
 pub enum ValueError {
@@ -58,7 +59,7 @@ pub enum ValueError {
     ConditionsNotMet,
 }
 
-impl ValueModifier<'_> {
+impl ValueModifier {
     fn take(
         list: &[String],
         range: &Range,
@@ -103,30 +104,28 @@ impl ValueModifier<'_> {
             MetadataValue::Number(_) => Err(ValueError::UnexpectedType),
         }
     }
-    pub fn modify<'a>(
-        &'a self,
-        value: PendingValue<'a>,
+    pub fn modify_all(
+        items: &[Rc<Self>],
+        mut value: PendingValue,
         path: &Path,
         config: &LibraryConfig,
     ) -> Result<PendingValue, ValueError> {
-        if let PendingValue::CopyField {
-            field,
-            sources,
-            modify,
-        } = value
-        {
-            let mut modifiers = vec![];
-            if let Some(md) = modify {
-                modifiers.push(md);
-            }
-            modifiers.push(Borrowable::Borrowed(self));
-            return Ok(PendingValue::CopyField {
-                field,
-                sources,
-                modify: Some(Borrowable::Owned(ValueModifier::Sequence(modifiers))),
-            });
+        for item in items {
+            value = item.modify(value, path, config)?;
         }
-        match self {
+        Ok(value)
+    }
+    pub fn modify(
+        self: &Rc<Self>,
+        value: PendingValue,
+        path: &Path,
+        config: &LibraryConfig,
+    ) -> Result<PendingValue, ValueError> {
+        if let PendingValue::CopyField { field, sources, mut modify } = value {
+            modify.push(self.clone());
+            return Ok(PendingValue::CopyField { field, sources, modify });
+        }
+        match Rc::as_ref(self) {
             Self::Replace { replace } => {
                 if let PendingValue::RegexMatches { source, regex } = value {
                     return Ok(
@@ -245,16 +244,6 @@ impl ValueModifier<'_> {
                     return Ok(MetadataValue::List(vec).into());
                 }
                 Err(ValueError::UnexpectedType)
-            }
-            Self::Sequence(seq) => {
-                if seq.is_empty() {
-                    Err(ValueError::EmptyList)
-                } else {
-                    let value = seq[0].modify(value, path, config)?;
-                    seq.iter()
-                        .skip(1)
-                        .try_fold(value, |x, y| y.modify(x, path, config))
-                }
             }
         }
     }

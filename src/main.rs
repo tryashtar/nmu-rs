@@ -84,7 +84,7 @@ fn do_scan(library_config: LibraryConfig) {
 fn get_metadata<'a>(
     nice_path: &Path,
     library_config: &'a LibraryConfig,
-    config_cache: &mut HashMap<PathBuf, Option<SongConfig<'a>>>,
+    config_cache: &mut HashMap<PathBuf, Option<SongConfig>>,
 ) -> Metadata {
     let mut metadata = PendingMetadata::new();
     for ancestor in nice_path
@@ -104,7 +104,7 @@ fn get_metadata<'a>(
             {
                 for setter in &config.set {
                     if setter.names.matches(select_song_path) {
-                        setter.set.apply(&mut metadata, nice_path, library_config);
+                        setter.apply(&mut metadata, nice_path, library_config);
                     }
                 }
             }
@@ -129,7 +129,7 @@ fn print_differences(existing: &Metadata, incoming: &Metadata) {
                 if let Some(new) = incoming.fields.get(key) {
                     let current = existing.fields.get(key).unwrap_or(&blank);
                     if current != new {
-                        println!("\t{:?}: {:?} -> {:?}", key, current, new);
+                        println!("\t{key}: {current} -> {new}");
                     }
                 }
             }

@@ -1,19 +1,32 @@
-use std::{collections::HashMap, path::{Path, PathBuf}};
+use core::fmt;
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    rc::Rc,
+};
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use strum::{EnumIter, Display};
+use strum::{Display, EnumIter};
 
-use crate::{library_config::LibraryConfig, song_config::SongConfig, get_metadata, modifier::ValueModifier, util::Borrowable};
+use crate::{
+    get_metadata, library_config::LibraryConfig, modifier::ValueModifier, song_config::SongConfig,
+};
 
-pub struct PendingMetadata<'a> {
-    pub fields: HashMap<MetadataField, PendingValue<'a>>,
-}
 pub struct Metadata {
     pub fields: HashMap<MetadataField, MetadataValue>,
 }
-
-impl PendingMetadata<'_> {
+impl Metadata {
+    pub fn new() -> Self {
+        Self {
+            fields: HashMap::new(),
+        }
+    }
+}
+pub struct PendingMetadata {
+    pub fields: HashMap<MetadataField, PendingValue>,
+}
+impl PendingMetadata {
     pub fn new() -> Self {
         Self {
             fields: HashMap::new(),
@@ -23,61 +36,61 @@ impl PendingMetadata<'_> {
         mut self,
         path: &Path,
         config: &'a LibraryConfig,
-        cache: &mut HashMap<PathBuf, Option<SongConfig<'a>>>,
+        cache: &mut HashMap<PathBuf, Option<SongConfig>>,
     ) -> Metadata {
         let mut metadata = Metadata::new();
         let mut metadata_cache: HashMap<PathBuf, Metadata> = HashMap::new();
         loop {
             let mut added_any = false;
             self.fields.retain(|field, value| {
-                let result = match value {
+                let processed = match value {
                     PendingValue::Ready(ready) => {
                         metadata.fields.insert(field.clone(), ready.clone());
-                        false
+                        true
                     }
-                    PendingValue::RegexMatches { .. } => true,
+                    PendingValue::RegexMatches { .. } => false,
                     PendingValue::CopyField {
                         field: from,
                         sources,
                         modify,
                     } => {
-                        let source_path = sources[0].clone();
-                        let source_path2 = sources[0].clone();
-                        match {
-                            if path == source_path {
+                        let sources0 = sources[0].clone();
+                        let source_metadata = {
+                            if path == sources[0] {
                                 &mut metadata
                             } else {
                                 metadata_cache
-                                    .entry(source_path)
+                                    .entry(sources0)
                                     .or_insert_with_key(|key| get_metadata(key, config, cache))
                             }
-                        }
-                        .fields
-                        .get(from)
-                        .cloned()
-                        .and_then(|x| match modify {
-                            Some(modify) => modify.modify(x.into(), &source_path2, config).ok(),
-                            None => Some(x.into()),
-                        }) {
+                        };
+                        let result = source_metadata.fields.get(from).cloned().and_then(|x| {
+                            ValueModifier::modify_all(modify, x.into(), &sources[0], config).ok()
+                        });
+                        match result {
                             Some(PendingValue::Ready(ready)) => {
                                 metadata.fields.insert(field.clone(), ready);
-                                false
+                                true
                             }
-                            _ => true,
+                            _ => false,
                         }
                     }
                 };
-                added_any |= !result;
-                result
+                added_any |= processed;
+                !processed
             });
             if !added_any {
                 break;
             }
         }
+        // remaining items that couldn't be resolved
+        for (key, _) in self.fields {
+            metadata.fields.insert(key, MetadataValue::blank());
+        }
         metadata
     }
 }
-impl From<Metadata> for PendingMetadata<'_> {
+impl From<Metadata> for PendingMetadata {
     fn from(value: Metadata) -> Self {
         Self {
             fields: value
@@ -88,16 +101,9 @@ impl From<Metadata> for PendingMetadata<'_> {
         }
     }
 }
-impl Metadata {
-    pub fn new() -> Self {
-        Self {
-            fields: HashMap::new(),
-        }
-    }
-}
 
 #[derive(Clone)]
-pub enum PendingValue<'a> {
+pub enum PendingValue {
     Ready(MetadataValue),
     RegexMatches {
         source: String,
@@ -106,15 +112,14 @@ pub enum PendingValue<'a> {
     CopyField {
         field: MetadataField,
         sources: Vec<PathBuf>,
-        modify: Option<Borrowable<'a, ValueModifier<'a>>>,
+        modify: Vec<Rc<ValueModifier>>,
     },
 }
-impl From<MetadataValue> for PendingValue<'_> {
+impl From<MetadataValue> for PendingValue {
     fn from(value: MetadataValue) -> Self {
         PendingValue::Ready(value)
     }
 }
-
 
 #[derive(Deserialize, Serialize, PartialEq, Eq, Debug, Clone)]
 #[serde(untagged)]
@@ -173,12 +178,30 @@ impl MetadataValue {
         }
     }
 }
+impl fmt::Display for MetadataValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Number(n) => write!(f, "{n}"),
+            Self::List(l) if l.is_empty() => write!(f, "[]"),
+            Self::List(l) if l.len() == 1 => write!(f, "{}", l[0]),
+            Self::List(l) => write!(f, "[{}]", l.join("; ")),
+        }
+    }
+}
 
 #[derive(Deserialize, Serialize, Eq, Hash, PartialEq, Debug, Clone)]
 #[serde(untagged)]
 pub enum MetadataField {
     Builtin(BuiltinMetadataField),
     Custom(String),
+}
+impl fmt::Display for MetadataField {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Custom(s) => write!(f, "{s}"),
+            Self::Builtin(b) => write!(f, "{b}"),
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize, Eq, Hash, PartialEq, Debug, Display, EnumIter, Clone, Copy)]

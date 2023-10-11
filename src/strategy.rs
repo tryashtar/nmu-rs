@@ -1,14 +1,25 @@
-use std::{collections::{HashMap, HashSet}, path::{Path, PathBuf}, ffi::OsStr, borrow::Cow};
+use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+    ffi::OsStr,
+    path::{Path, PathBuf},
+    rc::Rc,
+};
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
 
-use crate::{metadata::{MetadataField, PendingMetadata, MetadataValue, BuiltinMetadataField, PendingValue}, modifier::{ValueModifier, ValueError}, util::{Borrowable, Range, OutOfBoundsDecision}, library_config::LibraryConfig};
+use crate::{
+    library_config::LibraryConfig,
+    metadata::{BuiltinMetadataField, MetadataField, MetadataValue, PendingMetadata, PendingValue},
+    modifier::{ValueError, ValueModifier},
+    util::{OutOfBoundsDecision, Range},
+};
 
 #[derive(Deserialize, Serialize)]
 #[serde(untagged)]
-pub enum MetadataOperation<'a> {
+pub enum MetadataOperation {
     Blank {
         remove: FieldSelector,
     },
@@ -16,16 +27,15 @@ pub enum MetadataOperation<'a> {
         keep: FieldSelector,
     },
     Context {
-        source: ValueGetter<'a>,
-        modify: HashMap<MetadataField, ValueModifier<'a>>,
+        source: ValueGetter,
+        modify: HashMap<MetadataField, Rc<ValueModifier>>,
     },
     Modify {
-        modify: HashMap<MetadataField, ValueModifier<'a>>,
+        modify: HashMap<MetadataField, Rc<ValueModifier>>,
     },
-    Sequence(Vec<Borrowable<'a, MetadataOperation<'a>>>),
-    Set(HashMap<MetadataField, ValueGetter<'a>>),
+    Set(HashMap<MetadataField, ValueGetter>),
 }
-impl MetadataOperation<'_> {
+impl MetadataOperation {
     pub fn apply(&self, metadata: &mut PendingMetadata, path: &Path, config: &LibraryConfig) {
         match self {
             Self::Blank { remove } => {
@@ -62,11 +72,6 @@ impl MetadataOperation<'_> {
                             metadata.fields.insert(field.clone(), modified);
                         }
                     }
-                }
-            }
-            Self::Sequence(many) => {
-                for op in many {
-                    op.apply(metadata, path, config);
                 }
             }
             Self::Modify { modify } => {
@@ -297,28 +302,23 @@ impl FieldSelector {
 
 #[derive(Deserialize, Serialize, Clone)]
 #[serde(untagged)]
-pub enum ValueGetter<'a> {
+pub enum ValueGetter {
     Direct(MetadataValue),
     Copy {
         from: LocalItemSelector,
         copy: MetadataField,
-        modify: Option<Borrowable<'a, ValueModifier<'a>>>,
+        #[serde(default)]
+        modify: Vec<Rc<ValueModifier>>,
     },
     From {
         from: LocalItemSelector,
         #[serde(default = "default_value")]
         value: FieldValueGetter,
-        modify: Option<Borrowable<'a, ValueModifier<'a>>>,
+        #[serde(default)]
+        modify: Vec<Rc<ValueModifier>>,
     },
 }
-#[derive(Deserialize, Serialize, Clone, Copy)]
-#[serde(rename_all = "snake_case")]
-pub enum FieldValueGetter {
-    FileName,
-    CleanName,
-    Path,
-}
-impl ValueGetter<'_> {
+impl ValueGetter {
     pub fn get(&self, path: &Path, config: &LibraryConfig) -> Result<PendingValue, ValueError> {
         match self {
             Self::Direct(value) => Ok(value.clone().into()),
@@ -337,11 +337,7 @@ impl ValueGetter<'_> {
                         .map(|x| value.get(&x, config).to_string())
                         .collect(),
                 );
-                if let Some(modify) = modify {
-                    modify.modify(result.into(), path, config)
-                } else {
-                    Ok(result.into())
-                }
+                ValueModifier::modify_all(modify, result.into(), path, config)
             }
             Self::Copy { from, copy, modify } => Ok(PendingValue::CopyField {
                 field: copy.clone(),
@@ -352,6 +348,13 @@ impl ValueGetter<'_> {
     }
 }
 
+#[derive(Deserialize, Serialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldValueGetter {
+    FileName,
+    CleanName,
+    Path,
+}
 impl FieldValueGetter {
     fn file_name(path: &Path) -> Cow<str> {
         path.file_name()

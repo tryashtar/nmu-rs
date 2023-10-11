@@ -1,46 +1,16 @@
-use std::{borrow::Borrow, ops::Deref};
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize)]
-#[serde(untagged)]
-pub enum Borrowable<'a, T>
-where
-    T: 'a,
-{
-    #[serde(skip)]
-    Borrowed(&'a T),
-    Owned(T),
+pub enum Listable<T> {
+    Single(T),
+    List(Vec<T>),
 }
-impl<T> AsRef<T> for Borrowable<'_, T> {
-    fn as_ref(&self) -> &T {
-        self
-    }
-}
-impl<'a, T> Borrow<T> for Borrowable<'a, T>
-where
-    T: ToOwned,
-{
-    fn borrow(&self) -> &T {
-        self
-    }
-}
-impl<B> Deref for Borrowable<'_, B> {
-    type Target = B;
-
-    fn deref(&self) -> &B {
-        match *self {
-            Self::Borrowed(borrowed) => borrowed,
-            Self::Owned(ref owned) => owned,
+impl<T> Listable<T> {
+    pub fn into_list(self) -> Vec<T> {
+        match self {
+            Self::Single(one) => vec![one],
+            Self::List(list) => list,
         }
-    }
-}
-impl<T> Clone for Borrowable<'_, T>
-where
-    T: Clone,
-{
-    fn clone(&self) -> Self {
-        Self::Owned(self.as_ref().clone())
     }
 }
 
@@ -186,7 +156,11 @@ impl Range {
         self.wrap_both(length, decision)
             .map(|(start, stop)| start..=stop)
     }
-    pub fn wrap_both(&self, length: usize, decision: OutOfBoundsDecision) -> Option<(usize, usize)> {
+    pub fn wrap_both(
+        &self,
+        length: usize,
+        decision: OutOfBoundsDecision,
+    ) -> Option<(usize, usize)> {
         Option::zip(
             Self::wrap(self.start, length, decision),
             Self::wrap(self.stop, length, decision),
