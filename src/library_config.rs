@@ -12,7 +12,7 @@ use thiserror::Error;
 use crate::file_stuff::{self, YamlError};
 use crate::metadata::{BuiltinMetadataField, MetadataField, MetadataValue};
 use crate::song_config::{AllSetter, RawSongConfig, ReferencableOperation, SongConfig};
-use crate::strategy::{ItemSelector, MetadataOperation, ValueGetter};
+use crate::strategy::{ItemSelector, MetadataOperation, MusicItemType, ValueGetter};
 use crate::util::Listable;
 
 #[derive(Deserialize)]
@@ -85,71 +85,38 @@ impl LibraryConfig {
             .map(|x| {
                 self.resolve_operation(x).map(|ops| AllSetter {
                     names: ItemSelector::All,
+                    must_be: Some(MusicItemType::Song),
                     set: ops,
                 })
             })
             .transpose()?;
-        let set = raw_config
-            .set
-            .map(|map| {
-                map.into_iter()
-                    .map(|(path, ops)| {
-                        self.resolve_operation(ops).map(|ops| AllSetter {
-                            names: ItemSelector::Path(path),
-                            set: ops,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .transpose()?
-            .unwrap_or(vec![]);
-        let set_all = raw_config
-            .set_all
+        let folders = raw_config
+            .folders
             .map(|x| {
-                x.into_iter()
-                    .map(|y| {
-                        self.resolve_operation(y.set).map(|ops| AllSetter {
-                            names: y.names,
-                            set: ops,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, _>>()
+                self.resolve_operation(x).map(|ops| AllSetter {
+                    names: ItemSelector::All,
+                    must_be: Some(MusicItemType::Folder),
+                    set: ops,
+                })
             })
-            .transpose()?
-            .unwrap_or(vec![]);
-        let order = raw_config
-            .order
+            .transpose()?;
+        let this = raw_config
+            .this
             .map(|x| {
-                let matches = file_stuff::find_matches(&x, folder, self);
-                let total = matches.len();
-                matches
-                    .into_iter()
-                    .enumerate()
-                    .map(|(track, path)| {
-                        AllSetter::new(
-                            ItemSelector::Path(path),
-                            MetadataOperation::Set(HashMap::from([
-                                (
-                                    BuiltinMetadataField::Track.into(),
-                                    ValueGetter::Direct(MetadataValue::Number((track + 1) as u32)),
-                                ),
-                                (
-                                    BuiltinMetadataField::TrackTotal.into(),
-                                    ValueGetter::Direct(MetadataValue::Number(total as u32)),
-                                ),
-                            ])),
-                        )
-                    })
-                    .collect::<Vec<_>>()
+                self.resolve_operation(x).map(|ops| AllSetter {
+                    names: ItemSelector::This,
+                    must_be: None,
+                    set: ops,
+                })
             })
-            .unwrap_or_default();
+            .transpose()?;
         let discs = raw_config
             .discs
             .map(|map| {
                 let disc_total = *(map.keys().max().unwrap_or(&1));
                 map.into_iter()
                     .flat_map(|(disc, sel)| {
-                        let matches = file_stuff::find_matches(&sel, folder, self);
+                        let matches = file_stuff::find_matches(&sel, None, folder, self);
                         let track_total = matches.len();
                         matches.into_iter().enumerate().map(move |(track, path)| {
                             AllSetter::new(
@@ -182,10 +149,91 @@ impl LibraryConfig {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        let order = raw_config
+            .order
+            .map(|x| {
+                let matches = file_stuff::find_matches(&x, None, folder, self);
+                let total = matches.len();
+                matches
+                    .into_iter()
+                    .enumerate()
+                    .map(|(track, path)| {
+                        AllSetter::new(
+                            ItemSelector::Path(path),
+                            MetadataOperation::Set(HashMap::from([
+                                (
+                                    BuiltinMetadataField::Track.into(),
+                                    ValueGetter::Direct(MetadataValue::Number((track + 1) as u32)),
+                                ),
+                                (
+                                    BuiltinMetadataField::TrackTotal.into(),
+                                    ValueGetter::Direct(MetadataValue::Number(total as u32)),
+                                ),
+                            ])),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let set_fields = raw_config
+            .set_fields
+            .map(|sets| {
+                sets.into_iter()
+                    .flat_map(|setter| {
+                        setter
+                            .set
+                            .into_iter()
+                            .map(|(path, getter)| {
+                                AllSetter::new(
+                                    ItemSelector::Path(path),
+                                    MetadataOperation::Set(HashMap::from([(
+                                        setter.field.clone(),
+                                        getter,
+                                    )])),
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let set_all = raw_config
+            .set_all
+            .map(|x| {
+                x.into_iter()
+                    .map(|y| {
+                        self.resolve_operation(y.set).map(|ops| AllSetter {
+                            names: y.names,
+                            must_be: None,
+                            set: ops,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let set = raw_config
+            .set
+            .map(|map| {
+                map.into_iter()
+                    .map(|(path, ops)| {
+                        self.resolve_operation(ops).map(|ops| AllSetter {
+                            names: ItemSelector::Path(path),
+                            must_be: None,
+                            set: ops,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?
+            .unwrap_or(vec![]);
         let merged = songs
             .into_iter()
+            .chain(folders)
+            .chain(this)
             .chain(discs)
             .chain(order)
+            .chain(set_fields)
             .chain(set_all)
             .chain(set)
             .collect::<Vec<_>>();

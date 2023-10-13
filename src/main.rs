@@ -1,6 +1,5 @@
 use colored::Colorize;
 use itertools::Itertools;
-use jwalk::WalkDir;
 use std::collections::{BTreeSet, HashMap};
 use std::env;
 use std::io::{ErrorKind, IsTerminal};
@@ -20,19 +19,20 @@ use util::*;
 mod song_config;
 use song_config::*;
 mod tag_interop;
+use tag_interop::*;
 #[cfg(test)]
 mod tests;
 
-use crate::file_stuff::{file_path, match_extension, match_name, YamlError};
+use crate::file_stuff::{match_extension, YamlError};
 
 fn main() {
     println!("NAIVE MUSIC UPDATER");
-    let first_argument = env::args().nth(1);
-    let library_config_path = Path::new(first_argument.as_deref().unwrap_or("library.yaml"));
+    let library_argument = env::args().nth(1);
+    let library_config_path = Path::new(library_argument.as_deref().unwrap_or("library.yaml"));
     let raw_config = file_stuff::load_yaml::<RawLibraryConfig>(library_config_path);
     match raw_config {
         Err(YamlError::Io(error))
-            if error.kind() == ErrorKind::NotFound && first_argument.is_none() =>
+            if error.kind() == ErrorKind::NotFound && library_argument.is_none() =>
         {
             eprintln!("{}", error.to_string().red());
             if let Ok(dir) = std::env::current_dir() {
@@ -43,6 +43,7 @@ fn main() {
             }
         }
         Err(error) => {
+            eprintln!("{}", "Error loading library config:".red());
             eprintln!("{}", error.to_string().red());
         }
         Ok(raw_config) => {
@@ -55,7 +56,7 @@ fn main() {
 }
 
 fn do_scan(library_config: LibraryConfig) {
-    let mut cached_configs: HashMap<PathBuf, Option<SongConfig>> = HashMap::new();
+    let mut config_cache: HashMap<PathBuf, Option<SongConfig>> = HashMap::new();
     let ScanResults {
         songs: scan_songs,
         images: scan_images,
@@ -67,15 +68,24 @@ fn do_scan(library_config: LibraryConfig) {
             .with_extension("");
         println!("{}", nice_path.display());
         let tags = tag_interop::Tags::load(&song_path);
-        let existing_metadata = tags.get_metadata(&library_config);
-        let final_metadata = get_metadata(&nice_path, &library_config, &mut cached_configs);
-        print_differences(&existing_metadata, &final_metadata);
+        let final_metadata =
+            get_metadata(&nice_path, &item_type, &library_config, &mut config_cache);
+        if let Some(id3) = tags.id3 {
+            let existing_metadata = Tags::get_metadata_id3(&id3, &library_config);
+            print_differences("ID3 Tag", &existing_metadata, &final_metadata);
+        }
+        if let Some(flac) = tags.flac {
+            let existing_metadata = Tags::get_metadata_flac(&flac, &library_config);
+            print_differences("Flac Tag", &existing_metadata, &final_metadata);
+        }
     }
     if let Err(err) = library_config.date_cache.save() {
+        eprintln!("{}", "Error saving date cache:".red());
         eprintln!("{}", err.to_string().red());
     }
     if let Some(repo) = library_config.art_repo {
         if let Err(err) = repo.used_templates.save() {
+            eprintln!("{}", "Error saving art cache:".red());
             eprintln!("{}", err.to_string().red());
         }
     }
@@ -83,6 +93,7 @@ fn do_scan(library_config: LibraryConfig) {
 
 fn get_metadata(
     nice_path: &Path,
+    path_type: &MusicItemType,
     library_config: &LibraryConfig,
     config_cache: &mut HashMap<PathBuf, Option<SongConfig>>,
 ) -> Metadata {
@@ -103,7 +114,9 @@ fn get_metadata(
                 .or_insert_with_key(|x| file_stuff::load_config(x, ancestor, library_config).ok())
             {
                 for setter in &config.set {
-                    if setter.names.matches(select_song_path) {
+                    if setter.names.matches(select_song_path)
+                        && MusicItemType::matches(path_type, setter.must_be.as_ref())
+                    {
                         setter.apply(&mut metadata, nice_path, library_config);
                     }
                 }
@@ -113,7 +126,8 @@ fn get_metadata(
     metadata.resolve(nice_path, library_config, config_cache)
 }
 
-fn print_differences(existing: &Metadata, incoming: &Metadata) {
+fn print_differences(name: &str, existing: &Metadata, incoming: &Metadata) {
+    let mut any = false;
     let blank = MetadataValue::blank();
     for key in existing
         .fields
@@ -129,7 +143,11 @@ fn print_differences(existing: &Metadata, incoming: &Metadata) {
                 if let Some(new) = incoming.fields.get(key) {
                     let current = existing.fields.get(key).unwrap_or(&blank);
                     if current != new {
-                        println!("\t{key}: {current} -> {new}");
+                        if !any {
+                            any = true;
+                            println!("\t{name}:")
+                        }
+                        println!("\t\t{key}: {current} -> {new}");
                     }
                 }
             }
@@ -147,46 +165,64 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
     let mut scan_images = BTreeSet::<PathBuf>::new();
     // for every config that's changed, scan all songs it applies to
     for config_root in &library_config.config_folders {
-        for config_path in WalkDir::new(config_root)
+        for config_folder in walkdir::WalkDir::new(config_root)
             .into_iter()
-            .filter_map(file_path)
-            .filter(|x| {
-                match_name(x, "config.yaml") && library_config.date_cache.changed_recently(x)
-            })
+            .filter_entry(|x| x.file_type().is_dir())
+            .filter_map(|x| x.ok())
         {
-            let config_folder = config_path.parent().unwrap_or(Path::new(""));
-            let corresponding_folder = &library_config.library_folder.join(
-                config_folder
-                    .strip_prefix(config_root)
-                    .unwrap_or(config_folder),
-            );
-            for song in WalkDir::new(corresponding_folder)
-                .into_iter()
-                .filter_map(file_path)
-                .filter(|x| match_extension(x, &library_config.song_extensions))
+            let config_folder_path = config_folder.path();
+            let config_file_path = config_folder_path.join("config.yaml");
+            if config_file_path.exists()
+                && library_config
+                    .date_cache
+                    .changed_recently(&config_file_path)
             {
-                if scan_songs.insert(song) && std::io::stdout().is_terminal() {
-                    print!("\rFound {}", scan_songs.len())
+                let corresponding_folder = &library_config.library_folder.join(
+                    config_folder_path
+                        .strip_prefix(config_root)
+                        .unwrap_or(config_folder_path),
+                );
+                for song in walkdir::WalkDir::new(corresponding_folder)
+                    .into_iter()
+                    .filter_map(|x| x.ok())
+                {
+                    let path = song.into_path();
+                    if (song.file_type().is_dir()
+                        || match_extension(&path, &library_config.song_extensions))
+                        && scan_songs.insert(path)
+                        && std::io::stdout().is_terminal()
+                    {
+                        print!("\rFound {}", scan_songs.len())
+                    }
                 }
             }
         }
     }
     if let Some(art_repo) = &library_config.art_repo {
         // for every config that's changed, find all templates it applies to
-        for config_path in WalkDir::new(&art_repo.templates_folder)
+        for config_folder in walkdir::WalkDir::new(&art_repo.templates_folder)
             .into_iter()
-            .filter_map(file_path)
-            .filter(|x| {
-                match_name(x, "images.yaml") && library_config.date_cache.changed_recently(x)
-            })
+            .filter_entry(|x| x.file_type().is_dir())
+            .filter_map(|x| x.ok())
         {
-            let config_folder = config_path.parent().unwrap_or(Path::new(""));
-            for image in WalkDir::new(config_folder)
-                .into_iter()
-                .filter_map(file_path)
-                .filter(|x| match_extension(x, &art_repo.image_extensions))
+            let config_folder_path = config_folder.path();
+            let config_file_path = config_folder_path.join("images.yaml");
+            if config_file_path.exists()
+                && library_config
+                    .date_cache
+                    .changed_recently(&config_file_path)
             {
-                scan_images.insert(image);
+                for image in walkdir::WalkDir::new(config_folder_path)
+                    .into_iter()
+                    .filter_map(|x| x.ok())
+                {
+                    let path = image.into_path();
+                    if image.file_type().is_file()
+                        && match_extension(&path, &art_repo.image_extensions)
+                    {
+                        scan_images.insert(path);
+                    }
+                }
             }
         }
         // find all templates that have changed
@@ -195,8 +231,8 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
             if scan_images.contains(image_path)
                 || library_config.date_cache.changed_recently(image_path)
             {
-                for song in songs {
-                    if scan_songs.insert(song.clone()) && std::io::stdout().is_terminal() {
+                for song in songs.clone() {
+                    if scan_songs.insert(song) && std::io::stdout().is_terminal() {
                         print!("\rFound {}", scan_songs.len())
                     }
                 }
@@ -205,16 +241,16 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
     }
     // scan all songs that have changed
     let mut skipped = 0;
-    for song in WalkDir::new(&library_config.library_folder)
+    for song in walkdir::WalkDir::new(&library_config.library_folder)
         .into_iter()
-        .filter_map(file_path)
-        .filter(|x| match_extension(x, &library_config.song_extensions))
+        .filter_map(|x| x.ok())
     {
-        if library_config.date_cache.changed_recently(&song) {
-            if scan_songs.insert(song) && std::io::stdout().is_terminal() {
+        let song_path = song.into_path();
+        if library_config.date_cache.changed_recently(&song_path) {
+            if scan_songs.insert(song_path) && std::io::stdout().is_terminal() {
                 print!("\rFound {}, skipped {}", scan_songs.len(), skipped);
             }
-        } else if !scan_songs.contains(&song) {
+        } else if !scan_songs.contains(&song_path) {
             skipped += 1;
             if std::io::stdout().is_terminal() {
                 print!("\rFound {}, skipped {}", scan_songs.len(), skipped);

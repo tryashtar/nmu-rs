@@ -452,6 +452,7 @@ fn selector_matches() {
         let desired = desired.iter().map(PathBuf::from).collect::<Vec<_>>();
         let actual = file_stuff::find_matches(
             &selector,
+            None,
             &if start.is_empty() {
                 tmp_dir.path().to_owned()
             } else {

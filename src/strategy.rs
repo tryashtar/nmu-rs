@@ -101,6 +101,7 @@ impl MetadataOperation {
 #[serde(untagged)]
 pub enum ItemSelector {
     All,
+    This,
     Path(PathBuf),
     Multi(Vec<ItemSelector>),
     Segmented {
@@ -115,6 +116,7 @@ impl ItemSelector {
     pub fn matches(&self, check_path: &Path) -> bool {
         match self {
             Self::All => true,
+            Self::This => check_path.as_os_str().is_empty(),
             Self::Multi(checks) => checks.iter().any(|x| x.matches(check_path)),
             Self::Path(path) => check_path.starts_with(path),
             Self::Segmented { path } => {
@@ -132,6 +134,7 @@ impl ItemSelector {
     fn consume<'a>(&self, check_path: &'a Path) -> Vec<&'a Path> {
         match self {
             Self::All => vec![check_path],
+            Self::This => vec![],
             Self::Path(path) => check_path.strip_prefix(path).into_iter().collect(),
             Self::Multi(multi) => multi.iter().flat_map(|x| x.consume(check_path)).collect(),
             Self::Segmented { path } => {
@@ -189,11 +192,12 @@ pub enum LocalItemSelector {
         up: Range,
     },
     DrillDown {
-        must_be: Option<MusicItemType>,
         from_root: Range,
+        must_be: Option<MusicItemType>,
     },
     Selector {
         selector: ItemSelector,
+        must_be: Option<MusicItemType>,
     },
 }
 fn item_selector_this<'de, D>(deserializer: D) -> Result<(), D::Error>
@@ -254,7 +258,9 @@ impl LocalItemSelector {
                     .map(|x| x.to_owned())
                     .collect()
             }
-            Self::Selector { selector } => crate::file_stuff::find_matches(selector, start, config),
+            Self::Selector { selector, must_be } => {
+                crate::file_stuff::find_matches(selector, must_be.as_ref(), start, config)
+            }
         }
     }
 }
@@ -265,6 +271,15 @@ pub enum MusicItemType {
     Song,
     Folder,
 }
+impl MusicItemType {
+    pub fn matches(check: &MusicItemType, against: Option<&MusicItemType>) -> bool {
+        match against {
+            None => true,
+            Some(required) => matches!(check, required),
+        }
+    }
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum FieldSelector {

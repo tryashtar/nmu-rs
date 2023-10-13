@@ -10,8 +10,8 @@ use crate::{
 };
 
 pub struct Tags {
-    flac: Option<metaflac::Tag>,
-    id3: Option<id3::Tag>,
+    pub flac: Option<metaflac::Tag>,
+    pub id3: Option<id3::Tag>,
 }
 impl Tags {
     pub fn load(path: &Path) -> Self {
@@ -19,24 +19,24 @@ impl Tags {
         let id3 = id3::Tag::read_from_path(path).ok();
         Self { flac, id3 }
     }
-    pub fn get_metadata(&self, config: &LibraryConfig) -> Metadata {
+    pub fn get_metadata_flac(tag: &metaflac::Tag, config: &LibraryConfig) -> Metadata {
         let mut metadata = Metadata::new();
-        if let Some(flac) = &self.flac {
-            for block in flac.blocks() {
-                if let Block::VorbisComment(comment) = block {
-                    for field in BuiltinMetadataField::iter() {
-                        if let Some(value) = get_flac(comment, &field, config) {
-                            metadata.fields.insert(field.into(), value);
-                        }
+        for block in tag.blocks() {
+            if let Block::VorbisComment(comment) = block {
+                for field in BuiltinMetadataField::iter() {
+                    if let Some(value) = get_flac(comment, &field, config) {
+                        metadata.fields.insert(field.into(), value);
                     }
                 }
             }
         }
-        if let Some(id3) = &self.id3 {
-            for field in BuiltinMetadataField::iter() {
-                if let Some(value) = get_id3(id3, &field, config) {
-                    metadata.fields.insert(field.into(), value);
-                }
+        metadata
+    }
+    pub fn get_metadata_id3(tag: &id3::Tag, config: &LibraryConfig) -> Metadata {
+        let mut metadata = Metadata::new();
+        for field in BuiltinMetadataField::iter() {
+            if let Some(value) = get_id3(tag, &field, config) {
+                metadata.fields.insert(field.into(), value);
             }
         }
         metadata
