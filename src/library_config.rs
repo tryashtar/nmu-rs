@@ -13,7 +13,6 @@ use crate::file_stuff::{self, YamlError};
 use crate::metadata::{BuiltinMetadataField, MetadataField, MetadataValue};
 use crate::song_config::{AllSetter, RawSongConfig, ReferencableOperation, SongConfig};
 use crate::strategy::{ItemSelector, MetadataOperation, MusicItemType, ValueGetter};
-use crate::util::Listable;
 
 #[derive(Deserialize)]
 pub struct RawLibraryConfig {
@@ -24,7 +23,7 @@ pub struct RawLibraryConfig {
     custom_fields: Vec<String>,
     cache: Option<PathBuf>,
     art: Option<RawArtRepo>,
-    named_strategies: HashMap<String, Listable<MetadataOperation>>,
+    named_strategies: HashMap<String, MetadataOperation>,
     find_replace: HashMap<String, String>,
     artist_separator: String,
 }
@@ -37,7 +36,7 @@ pub struct LibraryConfig {
     pub custom_fields: Vec<MetadataField>,
     pub date_cache: DateCache,
     pub art_repo: Option<ArtRepo>,
-    pub named_strategies: HashMap<String, Vec<Rc<MetadataOperation>>>,
+    pub named_strategies: HashMap<String, Rc<MetadataOperation>>,
     pub find_replace: HashMap<String, String>,
     pub artist_separator: String,
 }
@@ -69,7 +68,7 @@ impl LibraryConfig {
             named_strategies: raw
                 .named_strategies
                 .into_iter()
-                .map(|(k, v)| (k, v.into_list().into_iter().map(Rc::new).collect()))
+                .map(|(k, v)| (k, Rc::new(v)))
                 .collect(),
             find_replace: raw.find_replace,
             artist_separator: raw.artist_separator,
@@ -241,21 +240,21 @@ impl LibraryConfig {
     }
     fn resolve_operation(
         &self,
-        operation: Listable<ReferencableOperation>,
-    ) -> Result<Vec<Rc<MetadataOperation>>, LibraryError> {
-        operation
-            .into_list()
-            .into_iter()
-            .map(|x| match x {
-                ReferencableOperation::Direct(direct) => Ok(vec![Rc::new(direct)]),
-                ReferencableOperation::Reference(reference) => self
-                    .named_strategies
-                    .get(&reference)
-                    .cloned()
-                    .ok_or(LibraryError::MissingNamedStrategy(reference)),
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map(|x| x.into_iter().flatten().collect())
+        operation: ReferencableOperation,
+    ) -> Result<Rc<MetadataOperation>, LibraryError> {
+        match operation {
+            ReferencableOperation::Direct(direct) => Ok(Rc::new(direct)),
+            ReferencableOperation::Reference(reference) => self
+                .named_strategies
+                .get(&reference)
+                .cloned()
+                .ok_or(LibraryError::MissingNamedStrategy(reference)),
+            ReferencableOperation::Many(many) => many
+                .into_iter()
+                .map(|x| self.resolve_operation(x))
+                .collect::<Result<Vec<_>, _>>()
+                .map(|x| Rc::new(MetadataOperation::Many(x))),
+        }
     }
 }
 

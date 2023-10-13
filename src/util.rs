@@ -1,37 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize, Serialize)]
-#[serde(untagged)]
-pub enum Listable<T> {
-    Single(T),
-    List(Vec<T>),
-}
-impl<T> Listable<T> {
-    pub fn into_list(self) -> Vec<T> {
-        match self {
-            Self::Single(one) => vec![one],
-            Self::List(list) => list,
-        }
-    }
-    pub fn as_slice(&self) -> &[T] {
-        match self {
-            Self::Single(one) => core::slice::from_ref(one),
-            Self::List(list) => list,
-        }
-    }
-}
-impl<T> Clone for Listable<T>
-where
-    T: Clone,
-{
-    fn clone(&self) -> Self {
-        match self {
-            Self::Single(one) => Self::Single(one.clone()),
-            Self::List(list) => Self::List(list.clone()),
-        }
-    }
-}
-
 #[derive(Serialize, Clone)]
 pub struct Range {
     pub start: i32,

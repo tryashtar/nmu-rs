@@ -7,7 +7,7 @@ use crate::{
     library_config::LibraryConfig,
     metadata::{MetadataValue, PendingValue},
     strategy::ValueGetter,
-    util::{Listable, OutOfBoundsDecision, Range},
+    util::{OutOfBoundsDecision, Range},
 };
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -49,6 +49,7 @@ pub enum ValueModifier {
     Take {
         take: TakeModifier,
     },
+    Multiple(Vec<Rc<ValueModifier>>),
 }
 
 pub enum ValueError {
@@ -103,40 +104,35 @@ impl ValueModifier {
             MetadataValue::Number(_) => Err(ValueError::UnexpectedType),
         }
     }
-    pub fn modify_all(
-        items: &[Rc<Self>],
-        mut value: PendingValue,
-        path: &Path,
-        config: &LibraryConfig,
-    ) -> Result<PendingValue, ValueError> {
-        for item in items {
-            value = item.modify(value, path, config)?;
-        }
-        Ok(value)
-    }
     pub fn modify(
         self: &Rc<Self>,
-        value: PendingValue,
+        mut value: PendingValue,
         path: &Path,
         config: &LibraryConfig,
     ) -> Result<PendingValue, ValueError> {
         if let PendingValue::CopyField {
             field,
             sources,
-            mut modify,
+            modify,
         } = value
         {
-            match modify {
-                Listable::List(ref mut modify_list) => modify_list.push(self.clone()),
-                Listable::Single(single) => modify = Listable::List(vec![single, self.clone()]),
+            let new_modify = match modify {
+                None => self.clone(),
+                Some(modify) => Rc::new(ValueModifier::Multiple(vec![modify, self.clone()])),
             };
             return Ok(PendingValue::CopyField {
                 field,
                 sources,
-                modify,
+                modify: Some(new_modify),
             });
         }
         match Rc::as_ref(self) {
+            Self::Multiple(items) => {
+                for item in items {
+                    value = item.modify(value, path, config)?;
+                }
+                Ok(value)
+            }
             Self::Replace { replace } => {
                 if let PendingValue::RegexMatches { source, regex } = value {
                     return Ok(

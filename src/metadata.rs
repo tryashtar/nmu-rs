@@ -11,7 +11,7 @@ use strum::{Display, EnumIter};
 
 use crate::{
     file_stuff::ItemPath, get_metadata, library_config::LibraryConfig, modifier::ValueModifier,
-    song_config::SongConfig, util::Listable,
+    song_config::SongConfig,
 };
 
 pub struct Metadata {
@@ -67,15 +67,16 @@ impl PendingMetadata {
                                         })
                                 }
                             };
-                            source_metadata.fields.get(from).cloned().and_then(|x| {
-                                ValueModifier::modify_all(
-                                    modify.as_slice(),
-                                    x.into(),
-                                    source.as_path(),
-                                    library_config,
-                                )
-                                .ok()
-                            })
+                            source_metadata
+                                .fields
+                                .get(from)
+                                .cloned()
+                                .and_then(|x| match modify {
+                                    None => Some(x.into()),
+                                    Some(modify) => modify
+                                        .modify(x.into(), source.as_path(), library_config)
+                                        .ok(),
+                                })
                         });
                         match results.nth(0) {
                             Some(PendingValue::Ready(ready)) => {
@@ -122,7 +123,7 @@ pub enum PendingValue {
     CopyField {
         field: MetadataField,
         sources: Vec<ItemPath>,
-        modify: Listable<Rc<ValueModifier>>,
+        modify: Option<Rc<ValueModifier>>,
     },
 }
 impl From<MetadataValue> for PendingValue {
