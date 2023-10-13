@@ -1,8 +1,8 @@
 use std::{
     collections::HashSet,
-    fs::File,
+    fs::{DirEntry, File},
     io::{BufReader, ErrorKind},
-    path::{Path, PathBuf},
+    path::{Path, PathBuf}, ffi::OsStr,
 };
 
 use colored::Colorize;
@@ -13,7 +13,7 @@ use thiserror::Error;
 use crate::{
     library_config::{LibraryConfig, LibraryError},
     song_config::{RawSongConfig, SongConfig},
-    strategy::ItemSelector,
+    strategy::{ItemSelector, PathSegment},
     util::ItemPath,
 };
 
@@ -72,6 +72,20 @@ pub fn match_extension(path: &Path, extensions: &HashSet<String>) -> bool {
     }
 }
 
+fn is_dir(entry: &DirEntry) -> bool {
+    entry.file_type().map(|x| x.is_dir()).unwrap_or(false)
+}
+
+fn matches_segment(path: &Path, segment: &PathSegment) -> bool {
+    path.file_name()
+        .map(|x| segment.matches(x))
+        .unwrap_or(false)
+}
+
+fn matches_name(path: &Path, name: &str) -> bool {
+    path.file_name().map(|x| x == name).unwrap_or(false)
+}
+
 pub fn find_matches(
     selector: &ItemSelector,
     start: &Path,
@@ -114,13 +128,13 @@ pub fn find_matches(
                             let path = entry.path();
                             let path = path.strip_prefix(&full_start).ok();
                             path.and_then(|path| {
-                                if entry.file_type().map(|x| x.is_dir()).unwrap_or(false) {
-                                    if path.file_name().map(|x| x == name).unwrap_or(false) {
+                                if is_dir(&entry) {
+                                    if matches_name(path, name) {
                                         return Some(ItemPath::Folder(path.to_owned()));
                                     }
                                 } else if match_extension(path, &config.song_extensions) {
                                     let stripped = path.with_extension("");
-                                    if stripped.file_name().map(|x| x == name).unwrap_or(false) {
+                                    if matches_name(&stripped, name) {
                                         return Some(ItemPath::Song(stripped));
                                     }
                                 }
@@ -142,10 +156,7 @@ pub fn find_matches(
                         .flatten()
                         .filter_map(|x| x.ok());
                     items = files
-                        .filter(|entry| {
-                            entry.file_type().map(|x| x.is_dir()).unwrap_or(false)
-                                && segment.matches(&entry.file_name())
-                        })
+                        .filter(|entry| is_dir(entry) && segment.matches(&entry.file_name()))
                         .map(|x| x.path())
                         .sorted()
                         .collect();
@@ -158,19 +169,14 @@ pub fn find_matches(
                 return files
                     .filter_map(|entry| {
                         let path = entry.path();
-                        let path = path.strip_prefix(&full_start).ok();
-                        path.and_then(|path| {
-                            if entry.file_type().map(|x| x.is_dir()).unwrap_or(false) {
-                                if path.file_name().map(|x| last.matches(x)).unwrap_or(false) {
+                        path.strip_prefix(&full_start).ok().and_then(|path| {
+                            if is_dir(&entry) {
+                                if matches_segment(path, last) {
                                     return Some(ItemPath::Folder(path.to_owned()));
                                 }
                             } else if match_extension(path, &config.song_extensions) {
                                 let stripped = path.with_extension("");
-                                if stripped
-                                    .file_name()
-                                    .map(|x| last.matches(x))
-                                    .unwrap_or(false)
-                                {
+                                if matches_segment(&stripped, last) {
                                     return Some(ItemPath::Song(stripped));
                                 }
                             }
