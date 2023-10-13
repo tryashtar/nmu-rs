@@ -1,10 +1,11 @@
 use colored::Colorize;
-use file_stuff::NicePath;
+use file_stuff::ItemPath;
 use itertools::Itertools;
 use std::collections::{BTreeSet, HashMap};
 use std::env;
 use std::io::{ErrorKind, IsTerminal};
 use std::path::{Path, PathBuf};
+use walkdir::DirEntry;
 
 mod strategy;
 use strategy::*;
@@ -56,6 +57,10 @@ fn main() {
     }
 }
 
+fn make_nice(path: &Path, root: &Path) -> PathBuf {
+    path.strip_prefix(root).unwrap_or(path).with_extension("")
+}
+
 fn do_scan(library_config: LibraryConfig) {
     let mut config_cache: HashMap<PathBuf, Option<SongConfig>> = HashMap::new();
     let ScanResults {
@@ -63,15 +68,24 @@ fn do_scan(library_config: LibraryConfig) {
         folders: scan_folders,
         images: scan_images,
     } = find_scan_songs(&library_config);
+    for folder_path in scan_folders {
+        let nice_path = make_nice(&folder_path, &library_config.library_folder);
+        println!("{}", nice_path.display());
+        let metadata = get_metadata(
+            &ItemPath::Folder(nice_path),
+            &library_config,
+            &mut config_cache,
+        );
+        for (field, value) in metadata.fields {
+            println!("\t{field}: {value}");
+        }
+    }
     for song_path in scan_songs {
-        let nice_path = song_path
-            .strip_prefix(&library_config.library_folder)
-            .unwrap_or(&song_path)
-            .with_extension("");
+        let nice_path = make_nice(&song_path, &library_config.library_folder);
         println!("{}", nice_path.display());
         let tags = tag_interop::Tags::load(&song_path);
         let final_metadata = get_metadata(
-            &NicePath::Song(nice_path),
+            &ItemPath::Song(nice_path),
             &library_config,
             &mut config_cache,
         );
@@ -97,7 +111,7 @@ fn do_scan(library_config: LibraryConfig) {
 }
 
 fn get_metadata(
-    path: &NicePath,
+    path: &ItemPath,
     library_config: &LibraryConfig,
     config_cache: &mut HashMap<PathBuf, Option<SongConfig>>,
 ) -> Metadata {
@@ -111,20 +125,17 @@ fn get_metadata(
         .into_iter()
         .rev()
     {
-        let select_song_path = nice_path.strip_prefix(ancestor).unwrap_or(nice_path);
+        let select_path = nice_path.strip_prefix(ancestor).unwrap_or(nice_path);
         for config_root in &library_config.config_folders {
             let config_path = config_root.join(ancestor).join("config.yaml");
-            if let Some(config) = config_cache
-                .entry(config_path)
-                .or_insert_with_key(|x| file_stuff::load_config(x, ancestor, library_config).ok())
+            if let Some(config) =
+                config_cache
+                    .entry(config_path)
+                    .or_insert_with_key(|config_path| {
+                        file_stuff::load_config(config_path, ancestor, library_config).ok()
+                    })
             {
-                for setter in &config.set {
-                    if setter.names.matches(select_song_path)
-                        && MusicItemType::matches(&path.as_type(), setter.must_be.as_ref())
-                    {
-                        setter.apply(&mut metadata, nice_path, library_config);
-                    }
-                }
+                config.apply(path, select_path, &mut metadata, library_config);
             }
         }
     }
@@ -166,6 +177,14 @@ struct ScanResults {
     images: BTreeSet<PathBuf>,
 }
 
+fn is_hidden(entry: &DirEntry) -> bool {
+    entry
+        .file_name()
+        .to_str()
+        .map(|s| s.starts_with('.'))
+        .unwrap_or(false)
+}
+
 fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
     let mut scan_songs = BTreeSet::<PathBuf>::new();
     let mut scan_folders = BTreeSet::<PathBuf>::new();
@@ -174,7 +193,7 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
     for config_root in &library_config.config_folders {
         for config_folder in walkdir::WalkDir::new(config_root)
             .into_iter()
-            .filter_entry(|x| x.file_type().is_dir())
+            .filter_entry(|entry| entry.file_type().is_dir() && !is_hidden(entry))
             .filter_map(|x| x.ok())
         {
             let config_folder_path = config_folder.path();
@@ -191,6 +210,7 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
                 );
                 for entry in walkdir::WalkDir::new(corresponding_folder)
                     .into_iter()
+                    .filter_entry(|entry| entry.file_type().is_file() || !is_hidden(entry))
                     .filter_map(|x| x.ok())
                 {
                     let is_dir = entry.file_type().is_dir();
@@ -211,7 +231,7 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
         // for every config that's changed, find all templates it applies to
         for config_folder in walkdir::WalkDir::new(&art_repo.templates_folder)
             .into_iter()
-            .filter_entry(|x| x.file_type().is_dir())
+            .filter_entry(|entry| entry.file_type().is_dir() && !is_hidden(entry))
             .filter_map(|x| x.ok())
         {
             let config_folder_path = config_folder.path();
@@ -223,6 +243,7 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
             {
                 for image in walkdir::WalkDir::new(config_folder_path)
                     .into_iter()
+                    .filter_entry(|entry| entry.file_type().is_file() || !is_hidden(entry))
                     .filter_map(|x| x.ok())
                 {
                     let is_file = image.file_type().is_file();
@@ -251,6 +272,7 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
     let mut skipped = 0;
     for entry in walkdir::WalkDir::new(&library_config.library_folder)
         .into_iter()
+        .filter_entry(|entry| entry.file_type().is_file() || !is_hidden(entry))
         .filter_map(|x| x.ok())
     {
         let is_dir = entry.file_type().is_dir();

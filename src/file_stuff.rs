@@ -72,11 +72,11 @@ pub fn match_extension(path: &Path, extensions: &HashSet<String>) -> bool {
 }
 
 #[derive(Clone)]
-pub enum NicePath {
+pub enum ItemPath {
     Song(PathBuf),
     Folder(PathBuf),
 }
-impl NicePath {
+impl ItemPath {
     pub fn into_path(self) -> PathBuf {
         match self {
             Self::Song(path) | Self::Folder(path) => path,
@@ -99,10 +99,10 @@ pub fn find_matches(
     selector: &ItemSelector,
     start: &Path,
     config: &LibraryConfig,
-) -> Vec<NicePath> {
+) -> Vec<ItemPath> {
     let full_start = config.library_folder.join(start);
     match selector {
-        ItemSelector::This => vec![NicePath::Folder(PathBuf::from(""))],
+        ItemSelector::This => vec![ItemPath::Folder(PathBuf::from(""))],
         ItemSelector::All => walkdir::WalkDir::new(&full_start)
             .into_iter()
             .filter_entry(|entry| {
@@ -114,9 +114,9 @@ pub fn find_matches(
                 let path = entry.into_path();
                 let path = path.strip_prefix(&full_start).ok();
                 if is_dir {
-                    path.map(|x| NicePath::Folder(x.to_owned()))
+                    path.map(|x| ItemPath::Folder(x.to_owned()))
                 } else {
-                    path.map(|x| NicePath::Song(x.with_extension("")))
+                    path.map(|x| ItemPath::Song(x.with_extension("")))
                 }
             })
             .sorted_by(|a, b| Ord::cmp(a.as_path(), b.as_path()))
@@ -139,12 +139,12 @@ pub fn find_matches(
                             path.and_then(|path| {
                                 if entry.file_type().map(|x| x.is_dir()).unwrap_or(false) {
                                     if path.file_name().map(|x| x == name).unwrap_or(false) {
-                                        return Some(NicePath::Folder(path.to_owned()));
+                                        return Some(ItemPath::Folder(path.to_owned()));
                                     }
                                 } else if match_extension(path, &config.song_extensions) {
                                     let stripped = path.with_extension("");
                                     if stripped.file_name().map(|x| x == name).unwrap_or(false) {
-                                        return Some(NicePath::Song(stripped));
+                                        return Some(ItemPath::Song(stripped));
                                     }
                                 }
                                 None
@@ -185,7 +185,7 @@ pub fn find_matches(
                         path.and_then(|path| {
                             if entry.file_type().map(|x| x.is_dir()).unwrap_or(false) {
                                 if path.file_name().map(|x| last.matches(x)).unwrap_or(false) {
-                                    return Some(NicePath::Folder(path.to_owned()));
+                                    return Some(ItemPath::Folder(path.to_owned()));
                                 }
                             } else if match_extension(path, &config.song_extensions) {
                                 let stripped = path.with_extension("");
@@ -194,7 +194,7 @@ pub fn find_matches(
                                     .map(|x| last.matches(x))
                                     .unwrap_or(false)
                                 {
-                                    return Some(NicePath::Song(stripped));
+                                    return Some(ItemPath::Song(stripped));
                                 }
                             }
                             None
@@ -209,15 +209,15 @@ pub fn find_matches(
             let first = find_matches(subpath, start, config)
                 .into_iter()
                 .filter_map(|x| match x {
-                    NicePath::Folder(path) => Some(path),
-                    NicePath::Song(_) => None,
+                    ItemPath::Folder(path) => Some(path),
+                    ItemPath::Song(_) => None,
                 });
             first
                 .flat_map(|path| {
                     let second = find_matches(select, &start.join(&path), config);
                     second.into_iter().map(move |x| match x {
-                        NicePath::Folder(p) => NicePath::Folder(path.join(p)),
-                        NicePath::Song(p) => NicePath::Song(path.join(p)),
+                        ItemPath::Folder(p) => ItemPath::Folder(path.join(p)),
+                        ItemPath::Song(p) => ItemPath::Song(path.join(p)),
                     })
                 })
                 .collect()

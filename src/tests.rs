@@ -423,7 +423,7 @@ fn copy_field_resolution() {
         BuiltinMetadataField::Composers.into(),
         PendingValue::CopyField {
             field: BuiltinMetadataField::Performers.into(),
-            sources: vec![NicePath::Song(path.clone())],
+            sources: vec![ItemPath::Song(path.clone())],
             modify: Listable::List(vec![]),
         },
     );

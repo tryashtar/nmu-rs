@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
 
 use crate::{
-    file_stuff::{self, NicePath},
+    file_stuff::{self, ItemPath},
     library_config::LibraryConfig,
     metadata::{BuiltinMetadataField, MetadataField, MetadataValue, PendingMetadata, PendingValue},
     modifier::{ValueError, ValueModifier},
@@ -37,7 +37,7 @@ pub enum MetadataOperation {
     Set(HashMap<MetadataField, ValueGetter>),
 }
 impl MetadataOperation {
-    pub fn apply(&self, metadata: &mut PendingMetadata, path: &Path, config: &LibraryConfig) {
+    pub fn apply(&self, metadata: &mut PendingMetadata, nice_path: &Path, config: &LibraryConfig) {
         match self {
             Self::Blank { remove } => {
                 for field in &config.custom_fields {
@@ -61,18 +61,18 @@ impl MetadataOperation {
             }
             Self::Set(set) => {
                 for (field, value) in set {
-                    if let Ok(value) = value.get(path, config) {
+                    if let Ok(value) = value.get(nice_path, config) {
                         metadata.fields.insert(field.clone(), value);
                     }
                 }
             }
             Self::Context { source, modify } => {
-                if let Ok(value) = source.get(path, config) {
+                if let Ok(value) = source.get(nice_path, config) {
                     for (field, modifier) in modify {
                         if let Ok(modified) = ValueModifier::modify_all(
                             modifier.as_slice(),
                             value.clone(),
-                            path,
+                            nice_path,
                             config,
                         ) {
                             metadata.fields.insert(field.clone(), modified);
@@ -86,7 +86,7 @@ impl MetadataOperation {
                         if let Ok(modified) = ValueModifier::modify_all(
                             modifier.as_slice(),
                             existing.clone(),
-                            path,
+                            nice_path,
                             config,
                         ) {
                             metadata.fields.insert(field.clone(), modified);
@@ -229,14 +229,14 @@ where
     deserializer.deserialize_str(Visitor)
 }
 impl LocalItemSelector {
-    fn get(&self, start: &Path, config: &LibraryConfig) -> Vec<NicePath> {
+    fn get(&self, start: &Path, config: &LibraryConfig) -> Vec<ItemPath> {
         match self {
-            Self::This => vec![NicePath::Folder(start.to_owned())],
+            Self::This => vec![ItemPath::Folder(start.to_owned())],
             Self::DrillUp { up } => {
                 let ancestors = start.ancestors().collect::<Vec<_>>();
                 up.slice(ancestors.as_slice(), OutOfBoundsDecision::Clamp)
                     .iter()
-                    .map(|x| NicePath::Folder((*x).to_owned()))
+                    .map(|x| ItemPath::Folder((*x).to_owned()))
                     .collect()
             }
             Self::DrillDown { must_be, from_root } => {
@@ -248,9 +248,9 @@ impl LocalItemSelector {
                     .enumerate()
                     .map(|(i, x)| {
                         let nice = if i == last {
-                            NicePath::Song(x.to_owned())
+                            ItemPath::Song(x.to_owned())
                         } else {
-                            NicePath::Folder(x.to_owned())
+                            ItemPath::Folder(x.to_owned())
                         };
                         if MusicItemType::matches(&nice.as_type(), must_be.as_ref()) {
                             Some(nice)
@@ -286,7 +286,7 @@ impl MusicItemType {
     pub fn matches(check: &MusicItemType, against: Option<&MusicItemType>) -> bool {
         match against {
             None => true,
-            Some(required) => check == required
+            Some(required) => check == required,
         }
     }
 }

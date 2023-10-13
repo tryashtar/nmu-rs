@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use strum::{Display, EnumIter};
 
 use crate::{
-    file_stuff::NicePath, get_metadata, library_config::LibraryConfig, modifier::ValueModifier,
+    file_stuff::ItemPath, get_metadata, library_config::LibraryConfig, modifier::ValueModifier,
     song_config::SongConfig, util::Listable,
 };
 
@@ -121,7 +121,7 @@ pub enum PendingValue {
     },
     CopyField {
         field: MetadataField,
-        sources: Vec<NicePath>,
+        sources: Vec<ItemPath>,
         modify: Listable<Rc<ValueModifier>>,
     },
 }

@@ -7,6 +7,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    file_stuff::ItemPath,
     library_config::LibraryConfig,
     metadata::{MetadataField, PendingMetadata},
     strategy::{ItemSelector, MetadataOperation, MusicItemType, ValueGetter},
@@ -50,6 +51,23 @@ pub struct RawFieldSetter {
 pub struct SongConfig {
     pub set: Vec<AllSetter>,
 }
+impl SongConfig {
+    pub fn apply(
+        &self,
+        path: &ItemPath,
+        select: &Path,
+        metadata: &mut PendingMetadata,
+        library_config: &LibraryConfig,
+    ) {
+        for setter in &self.set {
+            if setter.names.matches(select)
+                && MusicItemType::matches(&path.as_type(), setter.must_be.as_ref())
+            {
+                setter.apply(metadata, path.as_path(), library_config);
+            }
+        }
+    }
+}
 
 pub struct AllSetter {
     pub names: ItemSelector,
@@ -64,9 +82,9 @@ impl AllSetter {
             set: vec![Rc::new(set)],
         }
     }
-    pub fn apply(&self, metadata: &mut PendingMetadata, path: &Path, config: &LibraryConfig) {
+    pub fn apply(&self, metadata: &mut PendingMetadata, nice_path: &Path, config: &LibraryConfig) {
         for op in &self.set {
-            op.apply(metadata, path, config);
+            op.apply(metadata, nice_path, config);
         }
     }
 }
