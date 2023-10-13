@@ -6,6 +6,7 @@ use std::{
 };
 
 use colored::Colorize;
+use itertools::Itertools;
 use serde::de::DeserializeOwned;
 use thiserror::Error;
 
@@ -118,6 +119,7 @@ pub fn find_matches(
                     path.map(|x| NicePath::Song(x.with_extension("")))
                 }
             })
+            .sorted_by(|a, b| Ord::cmp(a.as_path(), b.as_path()))
             .collect(),
         ItemSelector::Multi(checks) => checks
             .iter()
@@ -131,7 +133,6 @@ pub fn find_matches(
                     return read
                         .into_iter()
                         .filter_map(|x| x.ok())
-                        .filter(|x| x.file_name() == name)
                         .filter_map(|entry| {
                             let path = entry.path();
                             let path = path.strip_prefix(&full_start).ok();
@@ -169,6 +170,7 @@ pub fn find_matches(
                                 && segment.matches(&entry.file_name())
                         })
                         .map(|x| x.path())
+                        .sorted()
                         .collect();
                 }
                 let files = items
@@ -198,6 +200,7 @@ pub fn find_matches(
                             None
                         })
                     })
+                    .sorted_by(|a, b| Ord::cmp(a.as_path(), b.as_path()))
                     .collect();
             }
             vec![]

@@ -462,7 +462,7 @@ fn selector_matches() {
         .into_iter()
         .map(|x| x.into_path())
         .collect::<Vec<_>>();
-        assert!(actual == desired);
+        assert_eq!(actual, desired);
         assert!(desired.into_iter().all(|x| selector.matches(&x)))
     };
     make_file("a");
@@ -477,11 +477,15 @@ fn selector_matches() {
         ItemSelector::All,
         "",
         &[
+            "",
             "a",
             "b",
             "c",
+            "sub",
             "sub/a",
+            "sub/deep1",
             "sub/deep1/one",
+            "sub/deep2",
             "sub/deep2/one",
             "sub/e",
             "sub/f",
@@ -490,7 +494,7 @@ fn selector_matches() {
     assert_results(
         ItemSelector::All,
         "sub",
-        &["a", "deep1/one", "deep2/one", "e", "f"],
+        &["", "a", "deep1", "deep1/one", "deep2", "deep2/one", "e", "f"],
     );
     assert_results(ItemSelector::Path(PathBuf::from("b")), "", &["b"]);
     assert_results(ItemSelector::Path(PathBuf::from("b")), "sub", &[]);
