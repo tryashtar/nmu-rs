@@ -438,7 +438,7 @@ fn selector_matches() {
     };
     let assert_results = |selector: ItemSelector, start: &str, desired: &[&str]| {
         let desired = desired.iter().map(PathBuf::from).collect::<Vec<_>>();
-        let actual = file_stuff::find_matches(
+        let actual: Vec<PathBuf> = file_stuff::find_matches(
             &selector,
             &if start.is_empty() {
                 tmp_dir.path().to_owned()
@@ -448,7 +448,7 @@ fn selector_matches() {
             &config,
         )
         .into_iter()
-        .map(|x| x.into_path())
+        .map(|x| x.into())
         .collect::<Vec<_>>();
         assert_eq!(actual, desired);
         assert!(desired.into_iter().all(|x| selector.matches(&x)))
@@ -482,7 +482,16 @@ fn selector_matches() {
     assert_results(
         ItemSelector::All,
         "sub",
-        &["", "a", "deep1", "deep1/one", "deep2", "deep2/one", "e", "f"],
+        &[
+            "",
+            "a",
+            "deep1",
+            "deep1/one",
+            "deep2",
+            "deep2/one",
+            "e",
+            "f",
+        ],
     );
     assert_results(ItemSelector::Path(PathBuf::from("b")), "", &["b"]);
     assert_results(ItemSelector::Path(PathBuf::from("b")), "sub", &[]);

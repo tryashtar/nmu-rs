@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     library_config::LibraryConfig,
     metadata::{MetadataField, PendingMetadata},
-    strategy::{ItemSelector, MetadataOperation, MusicItemType, ValueGetter}, file_stuff::ItemPath,
+    strategy::{ItemSelector, MetadataOperation, MusicItemType, ValueGetter}, util::ItemPath,
 };
 
 #[derive(Deserialize, Serialize)]
@@ -53,16 +53,18 @@ pub struct SongConfig {
 impl SongConfig {
     pub fn apply(
         &self,
-        path: &ItemPath,
+        nice_path: &ItemPath,
         select: &Path,
         metadata: &mut PendingMetadata,
         library_config: &LibraryConfig,
     ) {
         for setter in &self.set {
             if setter.names.matches(select)
-                && MusicItemType::matches(&path.as_type(), setter.must_be.as_ref())
+                && MusicItemType::matches(&nice_path.as_type(), setter.must_be.as_ref())
             {
-                setter.set.apply(metadata, path.as_path(), library_config);
+                setter
+                    .set
+                    .apply(metadata, nice_path.as_ref(), library_config);
             }
         }
     }

@@ -1,4 +1,8 @@
+use std::path::{PathBuf, Path};
+
 use serde::{Deserialize, Serialize};
+
+use crate::strategy::MusicItemType;
 
 #[derive(Serialize, Clone)]
 pub struct Range {
@@ -161,6 +165,34 @@ impl Range {
         match decision {
             OutOfBoundsDecision::Exit => (result < length).then_some(result),
             OutOfBoundsDecision::Clamp => Some(std::cmp::min(result, length - 1)),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum ItemPath {
+    Song(PathBuf),
+    Folder(PathBuf),
+}
+impl ItemPath {
+    pub fn as_type(&self) -> MusicItemType {
+        match self {
+            Self::Song(_) => MusicItemType::Song,
+            Self::Folder(_) => MusicItemType::Folder,
+        }
+    }
+}
+impl From<ItemPath> for PathBuf {
+    fn from(value: ItemPath) -> Self {
+        match value {
+            ItemPath::Song(path) | ItemPath::Folder(path) => path,
+        }
+    }
+}
+impl AsRef<Path> for ItemPath {
+    fn as_ref(&self) -> &Path {
+        match self {
+            Self::Song(path) | Self::Folder(path) => path,
         }
     }
 }

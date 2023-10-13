@@ -11,11 +11,11 @@ use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
 
 use crate::{
-    file_stuff::{self, ItemPath},
+    file_stuff::{self},
     library_config::LibraryConfig,
     metadata::{BuiltinMetadataField, MetadataField, MetadataValue, PendingMetadata, PendingValue},
     modifier::{ValueError, ValueModifier},
-    util::{OutOfBoundsDecision, Range},
+    util::{OutOfBoundsDecision, Range, ItemPath},
 };
 
 #[derive(Deserialize, Serialize)]
@@ -364,7 +364,7 @@ impl ValueGetter {
                 let result = MetadataValue::List(
                     items
                         .into_iter()
-                        .map(|x| value.get(x.as_path(), config).to_string())
+                        .map(|x| value.get(x.as_ref(), config).to_string())
                         .collect(),
                 );
                 match modify {

@@ -119,7 +119,7 @@ impl LibraryConfig {
                         let track_total = matches.len();
                         matches.into_iter().enumerate().map(move |(track, path)| {
                             AllSetter::new(
-                                ItemSelector::Path(path.into_path()),
+                                ItemSelector::Path(path.into()),
                                 MetadataOperation::Set(HashMap::from([
                                     (
                                         BuiltinMetadataField::Track.into(),
@@ -158,7 +158,7 @@ impl LibraryConfig {
                     .enumerate()
                     .map(|(track, path)| {
                         AllSetter::new(
-                            ItemSelector::Path(path.into_path()),
+                            ItemSelector::Path(path.into()),
                             MetadataOperation::Set(HashMap::from([
                                 (
                                     BuiltinMetadataField::Track.into(),

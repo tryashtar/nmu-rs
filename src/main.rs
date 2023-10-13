@@ -1,5 +1,4 @@
 use colored::Colorize;
-use file_stuff::ItemPath;
 use itertools::Itertools;
 use std::collections::{BTreeSet, HashMap};
 use std::env;
@@ -111,13 +110,13 @@ fn do_scan(library_config: LibraryConfig) {
 }
 
 fn get_metadata(
-    path: &ItemPath,
+    nice_path: &ItemPath,
     library_config: &LibraryConfig,
     config_cache: &mut HashMap<PathBuf, Option<SongConfig>>,
 ) -> Metadata {
-    let nice_path = path.as_path();
+    let path = nice_path.as_ref();
     let mut metadata = PendingMetadata::new();
-    for ancestor in nice_path
+    for ancestor in path
         .parent()
         .unwrap_or(Path::new(""))
         .ancestors()
@@ -125,7 +124,7 @@ fn get_metadata(
         .into_iter()
         .rev()
     {
-        let select_path = nice_path.strip_prefix(ancestor).unwrap_or(nice_path);
+        let select_path = path.strip_prefix(ancestor).unwrap_or(path);
         for config_root in &library_config.config_folders {
             let config_path = config_root.join(ancestor).join("config.yaml");
             if let Some(config) =
@@ -135,11 +134,11 @@ fn get_metadata(
                         file_stuff::load_config(config_path, ancestor, library_config).ok()
                     })
             {
-                config.apply(path, select_path, &mut metadata, library_config);
+                config.apply(nice_path, select_path, &mut metadata, library_config);
             }
         }
     }
-    metadata.resolve(nice_path, library_config, config_cache)
+    metadata.resolve(path, library_config, config_cache)
 }
 
 fn print_differences(name: &str, existing: &Metadata, incoming: &Metadata) {

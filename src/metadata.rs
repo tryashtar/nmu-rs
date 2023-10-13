@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use strum::{Display, EnumIter};
 
 use crate::{
-    file_stuff::ItemPath, get_metadata, library_config::LibraryConfig, modifier::ValueModifier,
-    song_config::SongConfig,
+    get_metadata, library_config::LibraryConfig, modifier::ValueModifier,
+    song_config::SongConfig, util::ItemPath,
 };
 
 pub struct Metadata {
@@ -57,11 +57,11 @@ impl PendingMetadata {
                     } => {
                         let mut results = sources.iter().filter_map(|source| {
                             let source_metadata = {
-                                if nice_path == source.as_path() {
+                                if nice_path == source.as_ref() {
                                     &mut metadata
                                 } else {
                                     metadata_cache
-                                        .entry(source.clone().into_path())
+                                        .entry(source.clone().into())
                                         .or_insert_with(|| {
                                             get_metadata(source, library_config, config_cache)
                                         })
@@ -74,7 +74,7 @@ impl PendingMetadata {
                                 .and_then(|x| match modify {
                                     None => Some(x.into()),
                                     Some(modify) => modify
-                                        .modify(x.into(), source.as_path(), library_config)
+                                        .modify(x.into(), source.as_ref(), library_config)
                                         .ok(),
                                 })
                         });

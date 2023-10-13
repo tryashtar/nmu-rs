@@ -13,7 +13,8 @@ use thiserror::Error;
 use crate::{
     library_config::{LibraryConfig, LibraryError},
     song_config::{RawSongConfig, SongConfig},
-    strategy::{ItemSelector, MusicItemType},
+    strategy::ItemSelector,
+    util::ItemPath,
 };
 
 #[derive(Error, Debug)]
@@ -71,30 +72,6 @@ pub fn match_extension(path: &Path, extensions: &HashSet<String>) -> bool {
     }
 }
 
-#[derive(Clone)]
-pub enum ItemPath {
-    Song(PathBuf),
-    Folder(PathBuf),
-}
-impl ItemPath {
-    pub fn into_path(self) -> PathBuf {
-        match self {
-            Self::Song(path) | Self::Folder(path) => path,
-        }
-    }
-    pub fn as_path(&self) -> &Path {
-        match self {
-            Self::Song(path) | Self::Folder(path) => path,
-        }
-    }
-    pub fn as_type(&self) -> MusicItemType {
-        match self {
-            Self::Song(_) => MusicItemType::Song,
-            Self::Folder(_) => MusicItemType::Folder,
-        }
-    }
-}
-
 pub fn find_matches(
     selector: &ItemSelector,
     start: &Path,
@@ -119,7 +96,7 @@ pub fn find_matches(
                     path.map(|x| ItemPath::Song(x.with_extension("")))
                 }
             })
-            .sorted_by(|a, b| Ord::cmp(a.as_path(), b.as_path()))
+            .sorted_by(|a, b| Ord::cmp(a.as_ref(), b.as_ref()))
             .collect(),
         ItemSelector::Multi(checks) => checks
             .iter()
@@ -200,7 +177,7 @@ pub fn find_matches(
                             None
                         })
                     })
-                    .sorted_by(|a, b| Ord::cmp(a.as_path(), b.as_path()))
+                    .sorted_by(|a, b| Ord::cmp(a.as_ref(), b.as_ref()))
                     .collect();
             }
             vec![]
