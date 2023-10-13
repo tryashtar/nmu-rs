@@ -64,6 +64,8 @@ fn make_nice(path: &Path, root: &Path) -> PathBuf {
 
 fn do_scan(library_config: LibraryConfig) {
     let mut config_cache: ConfigCache = HashMap::new();
+    let mut saved = 0;
+    let mut failed = 0;
     let ScanResults {
         songs: scan_songs,
         folders: scan_folders,
@@ -95,13 +97,24 @@ fn do_scan(library_config: LibraryConfig) {
             println!("{}", display.display());
             if let Some(id3) = tags.id3 {
                 let existing_metadata = Tags::get_metadata_id3(&id3, &library_config);
-                print_differences("ID3 Tag", &existing_metadata, &final_metadata);
+                if print_differences("ID3 Tag", &existing_metadata, &final_metadata) {
+                    saved += 1;
+                }
             }
             if let Some(flac) = tags.flac {
                 let existing_metadata = Tags::get_metadata_flac(&flac, &library_config);
-                print_differences("Flac Tag", &existing_metadata, &final_metadata);
+                if print_differences("Flac Tag", &existing_metadata, &final_metadata) {
+                    saved += 1;
+                }
             }
+        } else {
+            failed += 1;
         }
+    }
+    if failed == 0 {
+        println!("Saved {saved}");
+    } else {
+        println!("Saved {saved}, failed {failed}");
     }
     if let Err(err) = library_config.date_cache.save() {
         eprintln!("{}", "Error saving date cache:".red());
@@ -177,7 +190,7 @@ fn get_metadata(
     Ok(metadata.resolve(path, library_config, config_cache))
 }
 
-fn print_differences(name: &str, existing: &Metadata, incoming: &Metadata) {
+fn print_differences(name: &str, existing: &Metadata, incoming: &Metadata) -> bool {
     let mut any = false;
     let blank = MetadataValue::blank();
     for key in existing
@@ -204,6 +217,7 @@ fn print_differences(name: &str, existing: &Metadata, incoming: &Metadata) {
             }
         }
     }
+    any
 }
 
 struct ScanResults {
