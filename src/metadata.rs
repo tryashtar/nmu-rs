@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use strum::{Display, EnumIter};
 
 use crate::{
-    get_metadata, library_config::LibraryConfig, modifier::ValueModifier,
-    song_config::SongConfig, util::ItemPath,
+    file_stuff::ConfigError, get_metadata, library_config::LibraryConfig, modifier::ValueModifier,
+    song_config::SongConfig, util::ItemPath, ConfigCache,
 };
 
 pub struct Metadata {
@@ -37,10 +37,10 @@ impl PendingMetadata {
         mut self,
         nice_path: &Path,
         library_config: &LibraryConfig,
-        config_cache: &mut HashMap<PathBuf, Option<SongConfig>>,
+        config_cache: &mut ConfigCache,
     ) -> Metadata {
         let mut metadata = Metadata::new();
-        let mut metadata_cache: HashMap<PathBuf, Metadata> = HashMap::new();
+        let mut metadata_cache: HashMap<PathBuf, Result<Metadata, Rc<ConfigError>>> = HashMap::new();
         loop {
             let mut added_any = false;
             self.fields.retain(|field, value| {
@@ -58,25 +58,25 @@ impl PendingMetadata {
                         let mut results = sources.iter().filter_map(|source| {
                             let source_metadata = {
                                 if nice_path == source.as_ref() {
-                                    &mut metadata
+                                    Some(&metadata)
                                 } else {
                                     metadata_cache
                                         .entry(source.clone().into())
                                         .or_insert_with(|| {
                                             get_metadata(source, library_config, config_cache)
                                         })
+                                        .as_ref()
+                                        .ok()
                                 }
                             };
-                            source_metadata
-                                .fields
-                                .get(from)
-                                .cloned()
-                                .and_then(|x| match modify {
+                            source_metadata.and_then(|meta| {
+                                meta.fields.get(from).cloned().and_then(|x| match modify {
                                     None => Some(x.into()),
                                     Some(modify) => modify
                                         .modify(x.into(), source.as_ref(), library_config)
                                         .ok(),
                                 })
+                            })
                         });
                         match results.nth(0) {
                             Some(PendingValue::Ready(ready)) => {

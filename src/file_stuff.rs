@@ -47,18 +47,7 @@ pub fn load_config(
     library_config: &LibraryConfig,
 ) -> Result<SongConfig, ConfigError> {
     match load_yaml::<RawSongConfig>(full_path) {
-        Err(YamlError::Io(error)) if error.kind() == ErrorKind::NotFound => {
-            Err(ConfigError::Yaml(YamlError::Io(error)))
-        }
-        Err(error) => {
-            eprintln!(
-                "{} {}",
-                "Error loading config:".red(),
-                full_path.display().to_string().red()
-            );
-            eprintln!("{}", error.to_string().red());
-            Err(ConfigError::Yaml(error))
-        }
+        Err(error) => Err(ConfigError::Yaml(error)),
         Ok(config) => library_config
             .resolve_config(config, nice_folder)
             .map_err(ConfigError::Library),

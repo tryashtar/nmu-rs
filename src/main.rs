@@ -1,9 +1,11 @@
 use colored::Colorize;
+use file_stuff::ConfigError;
 use itertools::Itertools;
 use std::collections::{BTreeSet, HashMap};
 use std::env;
 use std::io::{ErrorKind, IsTerminal};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use walkdir::DirEntry;
 
 mod strategy;
@@ -61,7 +63,7 @@ fn make_nice(path: &Path, root: &Path) -> PathBuf {
 }
 
 fn do_scan(library_config: LibraryConfig) {
-    let mut config_cache: HashMap<PathBuf, Option<SongConfig>> = HashMap::new();
+    let mut config_cache: ConfigCache = HashMap::new();
     let ScanResults {
         songs: scan_songs,
         folders: scan_folders,
@@ -69,32 +71,36 @@ fn do_scan(library_config: LibraryConfig) {
     } = find_scan_songs(&library_config);
     for folder_path in scan_folders {
         let nice_path = make_nice(&folder_path, &library_config.library_folder);
-        println!("{}", nice_path.display());
-        let metadata = get_metadata(
+        let display = nice_path.clone();
+        if let Ok(metadata) = get_metadata(
             &ItemPath::Folder(nice_path),
             &library_config,
             &mut config_cache,
-        );
-        for (field, value) in metadata.fields {
-            println!("\t{field}: {value}");
+        ) {
+            println!("{}", display.display());
+            for (field, value) in metadata.fields {
+                println!("\t{field}: {value}");
+            }
         }
     }
     for song_path in scan_songs {
         let nice_path = make_nice(&song_path, &library_config.library_folder);
-        println!("{}", nice_path.display());
+        let display = nice_path.clone();
         let tags = tag_interop::Tags::load(&song_path);
-        let final_metadata = get_metadata(
+        if let Ok(final_metadata) = get_metadata(
             &ItemPath::Song(nice_path),
             &library_config,
             &mut config_cache,
-        );
-        if let Some(id3) = tags.id3 {
-            let existing_metadata = Tags::get_metadata_id3(&id3, &library_config);
-            print_differences("ID3 Tag", &existing_metadata, &final_metadata);
-        }
-        if let Some(flac) = tags.flac {
-            let existing_metadata = Tags::get_metadata_flac(&flac, &library_config);
-            print_differences("Flac Tag", &existing_metadata, &final_metadata);
+        ) {
+            println!("{}", display.display());
+            if let Some(id3) = tags.id3 {
+                let existing_metadata = Tags::get_metadata_id3(&id3, &library_config);
+                print_differences("ID3 Tag", &existing_metadata, &final_metadata);
+            }
+            if let Some(flac) = tags.flac {
+                let existing_metadata = Tags::get_metadata_flac(&flac, &library_config);
+                print_differences("Flac Tag", &existing_metadata, &final_metadata);
+            }
         }
     }
     if let Err(err) = library_config.date_cache.save() {
@@ -109,11 +115,38 @@ fn do_scan(library_config: LibraryConfig) {
     }
 }
 
+type ConfigCache = HashMap<PathBuf, Result<SongConfig, Rc<ConfigError>>>;
+
+fn is_not_found(result: &ConfigError) -> bool {
+    matches!(result, ConfigError::Yaml(YamlError::Io(ref error)) if error.kind() == ErrorKind::NotFound)
+}
+
+fn load_new_config(
+    full_path: &Path,
+    nice_folder: &Path,
+    library_config: &LibraryConfig,
+) -> Result<SongConfig, Rc<ConfigError>> {
+    let result = file_stuff::load_config(full_path, nice_folder, library_config);
+    match result {
+        Ok(_) => {}
+        Err(ref error) if is_not_found(error) => {}
+        Err(ref error) => {
+            eprintln!(
+                "{} {}",
+                "Error loading config:".red(),
+                full_path.display().to_string().red()
+            );
+            eprintln!("{}", error.to_string().red());
+        }
+    }
+    result.map_err(Rc::new)
+}
+
 fn get_metadata(
     nice_path: &ItemPath,
     library_config: &LibraryConfig,
-    config_cache: &mut HashMap<PathBuf, Option<SongConfig>>,
-) -> Metadata {
+    config_cache: &mut ConfigCache,
+) -> Result<Metadata, Rc<ConfigError>> {
     let path = nice_path.as_ref();
     let mut metadata = PendingMetadata::new();
     for ancestor in path
@@ -127,18 +160,21 @@ fn get_metadata(
         let select_path = path.strip_prefix(ancestor).unwrap_or(path);
         for config_root in &library_config.config_folders {
             let config_path = config_root.join(ancestor).join("config.yaml");
-            if let Some(config) =
-                config_cache
-                    .entry(config_path)
-                    .or_insert_with_key(|config_path| {
-                        file_stuff::load_config(config_path, ancestor, library_config).ok()
-                    })
-            {
-                config.apply(nice_path, select_path, &mut metadata, library_config);
+            let config_load = config_cache
+                .entry(config_path)
+                .or_insert_with_key(|config_path| {
+                    load_new_config(config_path, ancestor, library_config)
+                });
+            match config_load {
+                Ok(config) => config.apply(nice_path, select_path, &mut metadata, library_config),
+                Err(error) if is_not_found(error) => {}
+                Err(error) => {
+                    return Err(error.clone());
+                }
             }
         }
     }
-    metadata.resolve(path, library_config, config_cache)
+    Ok(metadata.resolve(path, library_config, config_cache))
 }
 
 fn print_differences(name: &str, existing: &Metadata, incoming: &Metadata) {
