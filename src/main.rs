@@ -1,4 +1,5 @@
 use colored::Colorize;
+use file_stuff::NicePath;
 use itertools::Itertools;
 use std::collections::{BTreeSet, HashMap};
 use std::env;
@@ -59,6 +60,7 @@ fn do_scan(library_config: LibraryConfig) {
     let mut config_cache: HashMap<PathBuf, Option<SongConfig>> = HashMap::new();
     let ScanResults {
         songs: scan_songs,
+        folders: scan_folders,
         images: scan_images,
     } = find_scan_songs(&library_config);
     for song_path in scan_songs {
@@ -68,8 +70,11 @@ fn do_scan(library_config: LibraryConfig) {
             .with_extension("");
         println!("{}", nice_path.display());
         let tags = tag_interop::Tags::load(&song_path);
-        let final_metadata =
-            get_metadata(&nice_path, &item_type, &library_config, &mut config_cache);
+        let final_metadata = get_metadata(
+            &NicePath::Song(nice_path),
+            &library_config,
+            &mut config_cache,
+        );
         if let Some(id3) = tags.id3 {
             let existing_metadata = Tags::get_metadata_id3(&id3, &library_config);
             print_differences("ID3 Tag", &existing_metadata, &final_metadata);
@@ -92,11 +97,11 @@ fn do_scan(library_config: LibraryConfig) {
 }
 
 fn get_metadata(
-    nice_path: &Path,
-    path_type: &MusicItemType,
+    path: &NicePath,
     library_config: &LibraryConfig,
     config_cache: &mut HashMap<PathBuf, Option<SongConfig>>,
 ) -> Metadata {
+    let nice_path = path.as_path();
     let mut metadata = PendingMetadata::new();
     for ancestor in nice_path
         .parent()
@@ -115,7 +120,7 @@ fn get_metadata(
             {
                 for setter in &config.set {
                     if setter.names.matches(select_song_path)
-                        && MusicItemType::matches(path_type, setter.must_be.as_ref())
+                        && MusicItemType::matches(&path.as_type(), setter.must_be.as_ref())
                     {
                         setter.apply(&mut metadata, nice_path, library_config);
                     }
@@ -157,11 +162,13 @@ fn print_differences(name: &str, existing: &Metadata, incoming: &Metadata) {
 
 struct ScanResults {
     songs: BTreeSet<PathBuf>,
+    folders: BTreeSet<PathBuf>,
     images: BTreeSet<PathBuf>,
 }
 
 fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
     let mut scan_songs = BTreeSet::<PathBuf>::new();
+    let mut scan_folders = BTreeSet::<PathBuf>::new();
     let mut scan_images = BTreeSet::<PathBuf>::new();
     // for every config that's changed, scan all songs it applies to
     for config_root in &library_config.config_folders {
@@ -182,13 +189,15 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
                         .strip_prefix(config_root)
                         .unwrap_or(config_folder_path),
                 );
-                for song in walkdir::WalkDir::new(corresponding_folder)
+                for entry in walkdir::WalkDir::new(corresponding_folder)
                     .into_iter()
                     .filter_map(|x| x.ok())
                 {
-                    let path = song.into_path();
-                    if (song.file_type().is_dir()
-                        || match_extension(&path, &library_config.song_extensions))
+                    let is_dir = entry.file_type().is_dir();
+                    let path = entry.into_path();
+                    if is_dir {
+                        scan_folders.insert(path);
+                    } else if match_extension(&path, &library_config.song_extensions)
                         && scan_songs.insert(path)
                         && std::io::stdout().is_terminal()
                     {
@@ -216,10 +225,9 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
                     .into_iter()
                     .filter_map(|x| x.ok())
                 {
+                    let is_file = image.file_type().is_file();
                     let path = image.into_path();
-                    if image.file_type().is_file()
-                        && match_extension(&path, &art_repo.image_extensions)
-                    {
+                    if is_file && match_extension(&path, &art_repo.image_extensions) {
                         scan_images.insert(path);
                     }
                 }
@@ -241,16 +249,25 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
     }
     // scan all songs that have changed
     let mut skipped = 0;
-    for song in walkdir::WalkDir::new(&library_config.library_folder)
+    for entry in walkdir::WalkDir::new(&library_config.library_folder)
         .into_iter()
         .filter_map(|x| x.ok())
     {
-        let song_path = song.into_path();
-        if library_config.date_cache.changed_recently(&song_path) {
-            if scan_songs.insert(song_path) && std::io::stdout().is_terminal() {
+        let is_dir = entry.file_type().is_dir();
+        let path = entry.into_path();
+        if library_config.date_cache.changed_recently(&path) {
+            if is_dir {
+                scan_folders.insert(path);
+            } else if match_extension(&path, &library_config.song_extensions)
+                && scan_songs.insert(path)
+                && std::io::stdout().is_terminal()
+            {
                 print!("\rFound {}, skipped {}", scan_songs.len(), skipped);
             }
-        } else if !scan_songs.contains(&song_path) {
+        } else if !is_dir
+            && match_extension(&path, &library_config.song_extensions)
+            && !scan_songs.contains(&path)
+        {
             skipped += 1;
             if std::io::stdout().is_terminal() {
                 print!("\rFound {}, skipped {}", scan_songs.len(), skipped);
@@ -260,10 +277,10 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
     if std::io::stdout().is_terminal() {
         print!("\r")
     }
-    print!("Found {}, skipped {}", scan_songs.len(), skipped);
-    println!();
+    println!("Found {}, skipped {}", scan_songs.len(), skipped);
     ScanResults {
         songs: scan_songs,
+        folders: scan_folders,
         images: scan_images,
     }
 }

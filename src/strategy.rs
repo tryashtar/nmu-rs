@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
 
 use crate::{
+    file_stuff::{self, NicePath},
     library_config::LibraryConfig,
     metadata::{BuiltinMetadataField, MetadataField, MetadataValue, PendingMetadata, PendingValue},
     modifier::{ValueError, ValueModifier},
@@ -228,14 +229,14 @@ where
     deserializer.deserialize_str(Visitor)
 }
 impl LocalItemSelector {
-    fn get(&self, start: &Path, config: &LibraryConfig) -> Vec<PathBuf> {
+    fn get(&self, start: &Path, config: &LibraryConfig) -> Vec<NicePath> {
         match self {
-            Self::This => vec![start.to_owned()],
+            Self::This => vec![NicePath::Folder(start.to_owned())],
             Self::DrillUp { up } => {
                 let ancestors = start.ancestors().collect::<Vec<_>>();
                 up.slice(ancestors.as_slice(), OutOfBoundsDecision::Clamp)
                     .iter()
-                    .map(|x| (*x).to_owned())
+                    .map(|x| NicePath::Folder((*x).to_owned()))
                     .collect()
             }
             Self::DrillDown { must_be, from_root } => {
@@ -245,27 +246,37 @@ impl LocalItemSelector {
                     .into_iter()
                     .rev()
                     .enumerate()
-                    .map(|(i, x)| match must_be {
-                        None => Some(x),
-                        Some(MusicItemType::Song) => (i == last).then_some(x),
-                        Some(MusicItemType::Folder) => (i != last).then_some(x),
+                    .map(|(i, x)| {
+                        let nice = if i == last {
+                            NicePath::Song(x.to_owned())
+                        } else {
+                            NicePath::Folder(x.to_owned())
+                        };
+                        if MusicItemType::matches(&nice.as_type(), must_be.as_ref()) {
+                            Some(nice)
+                        } else {
+                            None
+                        }
                     })
                     .collect::<Vec<_>>();
                 from_root
                     .slice(ancestors.as_slice(), OutOfBoundsDecision::Clamp)
                     .iter()
-                    .filter_map(|x| x.as_deref())
+                    .filter_map(|x| x.as_ref())
                     .map(|x| x.to_owned())
                     .collect()
             }
             Self::Selector { selector, must_be } => {
-                crate::file_stuff::find_matches(selector, must_be.as_ref(), start, config)
+                file_stuff::find_matches(selector, start, config)
+                    .into_iter()
+                    .filter(|x| MusicItemType::matches(&x.as_type(), must_be.as_ref()))
+                    .collect()
             }
         }
     }
 }
 
-#[derive(Deserialize, Serialize, Clone, Copy)]
+#[derive(Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum MusicItemType {
     Song,
@@ -275,7 +286,7 @@ impl MusicItemType {
     pub fn matches(check: &MusicItemType, against: Option<&MusicItemType>) -> bool {
         match against {
             None => true,
-            Some(required) => matches!(check, required),
+            Some(required) => check == required
         }
     }
 }
@@ -362,7 +373,7 @@ impl ValueGetter {
                 let result = MetadataValue::List(
                     items
                         .into_iter()
-                        .map(|x| value.get(&x, config).to_string())
+                        .map(|x| value.get(x.as_path(), config).to_string())
                         .collect(),
                 );
                 ValueModifier::modify_all(modify.as_slice(), result.into(), path, config)

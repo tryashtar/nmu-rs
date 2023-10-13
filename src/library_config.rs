@@ -116,11 +116,11 @@ impl LibraryConfig {
                 let disc_total = *(map.keys().max().unwrap_or(&1));
                 map.into_iter()
                     .flat_map(|(disc, sel)| {
-                        let matches = file_stuff::find_matches(&sel, None, folder, self);
+                        let matches = file_stuff::find_matches(&sel, folder, self);
                         let track_total = matches.len();
                         matches.into_iter().enumerate().map(move |(track, path)| {
                             AllSetter::new(
-                                ItemSelector::Path(path),
+                                ItemSelector::Path(path.into_path()),
                                 MetadataOperation::Set(HashMap::from([
                                     (
                                         BuiltinMetadataField::Track.into(),
@@ -152,14 +152,14 @@ impl LibraryConfig {
         let order = raw_config
             .order
             .map(|x| {
-                let matches = file_stuff::find_matches(&x, None, folder, self);
+                let matches = file_stuff::find_matches(&x, folder, self);
                 let total = matches.len();
                 matches
                     .into_iter()
                     .enumerate()
                     .map(|(track, path)| {
                         AllSetter::new(
-                            ItemSelector::Path(path),
+                            ItemSelector::Path(path.into_path()),
                             MetadataOperation::Set(HashMap::from([
                                 (
                                     BuiltinMetadataField::Track.into(),

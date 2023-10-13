@@ -6,7 +6,6 @@ use std::{
 };
 
 use colored::Colorize;
-use itertools::Itertools;
 use serde::de::DeserializeOwned;
 use thiserror::Error;
 
@@ -71,100 +70,93 @@ pub fn match_extension(path: &Path, extensions: &HashSet<String>) -> bool {
     }
 }
 
-pub fn match_name(path: &Path, name: &str) -> bool {
-    match path.file_name().and_then(|x| x.to_str()) {
-        Some(file_name) => file_name == name,
-        None => false,
-    }
+#[derive(Clone)]
+pub enum NicePath {
+    Song(PathBuf),
+    Folder(PathBuf),
 }
-
-pub struct PathResults {
-    songs: Vec<PathBuf>,
-    folders: Vec<PathBuf>,
+impl NicePath {
+    pub fn into_path(self) -> PathBuf {
+        match self {
+            Self::Song(path) | Self::Folder(path) => path,
+        }
+    }
+    pub fn as_path(&self) -> &Path {
+        match self {
+            Self::Song(path) | Self::Folder(path) => path,
+        }
+    }
+    pub fn as_type(&self) -> MusicItemType {
+        match self {
+            Self::Song(_) => MusicItemType::Song,
+            Self::Folder(_) => MusicItemType::Folder,
+        }
+    }
 }
 
 pub fn find_matches(
     selector: &ItemSelector,
-    must_be: Option<&MusicItemType>,
     start: &Path,
     config: &LibraryConfig,
-) -> PathResults {
+) -> Vec<NicePath> {
     let full_start = config.library_folder.join(start);
     match selector {
-        ItemSelector::This => PathResults {
-            songs: vec![],
-            folders: vec![PathBuf::from("")],
-        },
-        ItemSelector::All => {
-            let folders_and_files = walkdir::WalkDir::new(&full_start)
-                .into_iter()
-                .filter_entry(|x| {
-                    x.file_type().is_dir() || match_extension(x.path(), &config.song_extensions)
-                })
-                .filter_map(|x| x.ok());
-            match must_be {
-                Some(MusicItemType::Folder) => folders_and_files
-                    .filter(|x| x.file_type().is_dir())
-                    .filter_map(|x| x.into_path().strip_prefix(&full_start).ok())
-                    .map(|x| x.to_owned())
-                    .collect(),
-                Some(MusicItemType::Song) => folders_and_files
-                    .filter(|x| x.file_type().is_file())
-                    .filter_map(|x| x.into_path().strip_prefix(&full_start).ok())
-                    .map(|x| x.with_extension(""))
-                    .collect(),
-                None => folders_and_files
-                    .filter_map(|x| {
-                        let path = x.into_path().strip_prefix(&full_start).ok();
-                        if x.file_type().is_dir() {
-                            path.map(|x| x.to_owned())
-                        } else {
-                            path.map(|x| x.with_extension(""))
-                        }
-                    })
-                    .collect(),
-            }
-        }
+        ItemSelector::This => vec![NicePath::Folder(PathBuf::from(""))],
+        ItemSelector::All => walkdir::WalkDir::new(&full_start)
+            .into_iter()
+            .filter_entry(|entry| {
+                entry.file_type().is_dir() || match_extension(entry.path(), &config.song_extensions)
+            })
+            .filter_map(|x| x.ok())
+            .filter_map(|entry| {
+                let is_dir = entry.file_type().is_dir();
+                let path = entry.into_path();
+                let path = path.strip_prefix(&full_start).ok();
+                if is_dir {
+                    path.map(|x| NicePath::Folder(x.to_owned()))
+                } else {
+                    path.map(|x| NicePath::Song(x.with_extension("")))
+                }
+            })
+            .collect(),
         ItemSelector::Multi(checks) => checks
             .iter()
-            .flat_map(|x| find_matches(x, must_be, start, config))
+            .flat_map(|selector| find_matches(selector, start, config))
             .collect(),
-        ItemSelector::Path(path) => match path.file_name().and_then(|x| x.to_str()) {
-            Some(name) => {
-                match std::fs::read_dir(full_start.join(path).parent().unwrap_or(Path::new(""))) {
-                    Ok(read) => read
+        ItemSelector::Path(path) => {
+            if let Some(name) = path.file_name().and_then(|x| x.to_str()) {
+                if let Ok(read) =
+                    std::fs::read_dir(full_start.join(path).parent().unwrap_or(Path::new("")))
+                {
+                    return read
+                        .into_iter()
                         .filter_map(|x| x.ok())
-                        .filter_map(|x| {
-                            if x.file_type().map(|x| x.is_dir()).unwrap_or(false) {
-                                match must_be {
-                                    Some(MusicItemType::Song) => None,
-                                    None | Some(MusicItemType::Folder) => Some(x.path()),
-                                }
-                            } else {
-                                match must_be {
-                                    Some(MusicItemType::Folder) => None,
-                                    None | Some(MusicItemType::Song) => {
-                                        let path = x.path();
-                                        match_extension(&path, &config.song_extensions)
-                                            .then(|| path.with_extension(""))
+                        .filter(|x| x.file_name() == name)
+                        .filter_map(|entry| {
+                            let path = entry.path();
+                            let path = path.strip_prefix(&full_start).ok();
+                            path.and_then(|path| {
+                                if entry.file_type().map(|x| x.is_dir()).unwrap_or(false) {
+                                    if path.file_name().map(|x| x == name).unwrap_or(false) {
+                                        return Some(NicePath::Folder(path.to_owned()));
+                                    }
+                                } else if match_extension(path, &config.song_extensions) {
+                                    let stripped = path.with_extension("");
+                                    if stripped.file_name().map(|x| x == name).unwrap_or(false) {
+                                        return Some(NicePath::Song(stripped));
                                     }
                                 }
-                            }
+                                None
+                            })
                         })
-                        .filter(|x| match_name(&x, name))
-                        .filter_map(|x| x.strip_prefix(&full_start).ok().map(|x| x.to_owned()))
-                        .sorted()
-                        .collect(),
-                    Err(_) => vec![],
+                        .collect();
                 }
             }
-            None => {
-                vec![]
-            }
-        },
+            vec![]
+        }
         ItemSelector::Segmented { path } => {
-            let mut items = vec![full_start.clone()];
             if let Some((last, segments)) = path.split_last() {
+                let mut items = vec![full_start.clone()];
                 for segment in segments {
                     let files = items
                         .into_iter()
@@ -172,9 +164,11 @@ pub fn find_matches(
                         .flatten()
                         .filter_map(|x| x.ok());
                     items = files
-                        .filter(|x| x.file_type().map(|x| x.is_dir()).unwrap_or(false))
+                        .filter(|entry| {
+                            entry.file_type().map(|x| x.is_dir()).unwrap_or(false)
+                                && segment.matches(&entry.file_name())
+                        })
                         .map(|x| x.path())
-                        .filter(|x| x.file_name().map(|y| segment.matches(y)).unwrap_or(false))
                         .collect();
                 }
                 let files = items
@@ -182,40 +176,46 @@ pub fn find_matches(
                     .filter_map(|x| std::fs::read_dir(x).ok())
                     .flatten()
                     .filter_map(|x| x.ok());
-                items = files
-                    .filter_map(|x| {
-                        if x.file_type().map(|x| x.is_dir()).unwrap_or(false) {
-                            match must_be {
-                                Some(MusicItemType::Song) => None,
-                                None | Some(MusicItemType::Folder) => Some(x.path()),
-                            }
-                        } else {
-                            match must_be {
-                                Some(MusicItemType::Folder) => None,
-                                None | Some(MusicItemType::Song) => {
-                                    let path = x.path();
-                                    match_extension(&path, &config.song_extensions)
-                                        .then(|| path.with_extension(""))
+                return files
+                    .filter_map(|entry| {
+                        let path = entry.path();
+                        let path = path.strip_prefix(&full_start).ok();
+                        path.and_then(|path| {
+                            if entry.file_type().map(|x| x.is_dir()).unwrap_or(false) {
+                                if path.file_name().map(|x| last.matches(x)).unwrap_or(false) {
+                                    return Some(NicePath::Folder(path.to_owned()));
+                                }
+                            } else if match_extension(path, &config.song_extensions) {
+                                let stripped = path.with_extension("");
+                                if stripped
+                                    .file_name()
+                                    .map(|x| last.matches(x))
+                                    .unwrap_or(false)
+                                {
+                                    return Some(NicePath::Song(stripped));
                                 }
                             }
-                        }
+                            None
+                        })
                     })
-                    .filter(|x| x.file_name().map(|y| last.matches(y)).unwrap_or(false))
                     .collect();
             }
-            items
-                .into_iter()
-                .filter_map(|x| x.strip_prefix(&full_start).ok().map(|x| x.to_owned()))
-                .sorted()
-                .collect()
+            vec![]
         }
         ItemSelector::Subpath { subpath, select } => {
-            let first = find_matches(subpath, Some(&MusicItemType::Folder), start, config);
-            first
+            let first = find_matches(subpath, start, config)
                 .into_iter()
+                .filter_map(|x| match x {
+                    NicePath::Folder(path) => Some(path),
+                    NicePath::Song(_) => None,
+                });
+            first
                 .flat_map(|path| {
-                    let second = find_matches(select, must_be, &start.join(&path), config);
-                    second.into_iter().map(move |x| path.join(x))
+                    let second = find_matches(select, &start.join(&path), config);
+                    second.into_iter().map(move |x| match x {
+                        NicePath::Folder(p) => NicePath::Folder(path.join(p)),
+                        NicePath::Song(p) => NicePath::Song(path.join(p)),
+                    })
                 })
                 .collect()
         }

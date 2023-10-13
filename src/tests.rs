@@ -423,7 +423,7 @@ fn copy_field_resolution() {
         BuiltinMetadataField::Composers.into(),
         PendingValue::CopyField {
             field: BuiltinMetadataField::Performers.into(),
-            sources: vec![path.clone()],
+            sources: vec![NicePath::Song(path.clone())],
             modify: Listable::List(vec![]),
         },
     );
@@ -452,15 +452,17 @@ fn selector_matches() {
         let desired = desired.iter().map(PathBuf::from).collect::<Vec<_>>();
         let actual = file_stuff::find_matches(
             &selector,
-            None,
             &if start.is_empty() {
                 tmp_dir.path().to_owned()
             } else {
                 tmp_dir.path().join(start)
             },
             &config,
-        );
-        assert_eq!(actual, desired);
+        )
+        .into_iter()
+        .map(|x| x.into_path())
+        .collect::<Vec<_>>();
+        assert!(actual == desired);
         assert!(desired.into_iter().all(|x| selector.matches(&x)))
     };
     make_file("a");

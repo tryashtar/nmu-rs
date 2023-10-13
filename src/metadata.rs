@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use strum::{Display, EnumIter};
 
 use crate::{
-    get_metadata, library_config::LibraryConfig, modifier::ValueModifier, song_config::SongConfig,
-    util::Listable,
+    file_stuff::NicePath, get_metadata, library_config::LibraryConfig, modifier::ValueModifier,
+    song_config::SongConfig, util::Listable,
 };
 
 pub struct Metadata {
@@ -35,9 +35,9 @@ impl PendingMetadata {
     }
     pub fn resolve(
         mut self,
-        path: &Path,
-        config: &LibraryConfig,
-        cache: &mut HashMap<PathBuf, Option<SongConfig>>,
+        nice_path: &Path,
+        library_config: &LibraryConfig,
+        config_cache: &mut HashMap<PathBuf, Option<SongConfig>>,
     ) -> Metadata {
         let mut metadata = Metadata::new();
         let mut metadata_cache: HashMap<PathBuf, Metadata> = HashMap::new();
@@ -55,26 +55,29 @@ impl PendingMetadata {
                         sources,
                         modify,
                     } => {
-                        let sources0 = sources[0].clone();
-                        let source_metadata = {
-                            if path == sources[0] {
-                                &mut metadata
-                            } else {
-                                metadata_cache
-                                    .entry(sources0)
-                                    .or_insert_with_key(|key| get_metadata(key, config, cache))
-                            }
-                        };
-                        let result = source_metadata.fields.get(from).cloned().and_then(|x| {
-                            ValueModifier::modify_all(
-                                modify.as_slice(),
-                                x.into(),
-                                &sources[0],
-                                config,
-                            )
-                            .ok()
+                        let mut results = sources.iter().filter_map(|source| {
+                            let source_metadata = {
+                                if nice_path == source.as_path() {
+                                    &mut metadata
+                                } else {
+                                    metadata_cache
+                                        .entry(source.clone().into_path())
+                                        .or_insert_with(|| {
+                                            get_metadata(source, library_config, config_cache)
+                                        })
+                                }
+                            };
+                            source_metadata.fields.get(from).cloned().and_then(|x| {
+                                ValueModifier::modify_all(
+                                    modify.as_slice(),
+                                    x.into(),
+                                    source.as_path(),
+                                    library_config,
+                                )
+                                .ok()
+                            })
                         });
-                        match result {
+                        match results.nth(0) {
                             Some(PendingValue::Ready(ready)) => {
                                 metadata.fields.insert(field.clone(), ready);
                                 true
@@ -118,7 +121,7 @@ pub enum PendingValue {
     },
     CopyField {
         field: MetadataField,
-        sources: Vec<PathBuf>,
+        sources: Vec<NicePath>,
         modify: Listable<Rc<ValueModifier>>,
     },
 }
