@@ -66,6 +66,7 @@ impl PendingMetadata {
                                         .entry(source.clone().into())
                                         .or_insert_with(|| {
                                             get_metadata(source, library_config, config_cache)
+                                                .map(|x| x.0)
                                         })
                                         .as_ref()
                                         .ok()

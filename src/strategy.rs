@@ -38,11 +38,18 @@ pub enum MetadataOperation {
     Many(Vec<Rc<MetadataOperation>>),
 }
 impl MetadataOperation {
-    pub fn apply(&self, metadata: &mut PendingMetadata, nice_path: &Path, config: &LibraryConfig) {
+    pub fn apply(
+        &self,
+        metadata: &mut PendingMetadata,
+        nice_path: &Path,
+        config: &LibraryConfig,
+    ) -> Vec<ValueError> {
+        let mut errors = vec![];
         match self {
             Self::Many(items) => {
                 for item in items {
-                    item.apply(metadata, nice_path, config);
+                    let mut more_errors = item.apply(metadata, nice_path, config);
+                    errors.append(&mut more_errors);
                 }
             }
             Self::Blank { remove } => {
@@ -67,30 +74,54 @@ impl MetadataOperation {
             }
             Self::Set(set) => {
                 for (field, value) in set {
-                    if let Ok(value) = value.get(nice_path, config) {
-                        metadata.fields.insert(field.clone(), value);
-                    }
-                }
-            }
-            Self::Context { source, modify } => {
-                if let Ok(value) = source.get(nice_path, config) {
-                    for (field, modifier) in modify {
-                        if let Ok(modified) = modifier.modify(value.clone(), nice_path, config) {
-                            metadata.fields.insert(field.clone(), modified);
+                    match value.get(nice_path, config) {
+                        Ok(value) => {
+                            metadata.fields.insert(field.clone(), value);
+                        }
+                        Err(err) => {
+                            errors.push(err);
                         }
                     }
                 }
             }
+            Self::Context { source, modify } => match source.get(nice_path, config) {
+                Ok(value) => {
+                    for (field, modifier) in modify {
+                        match modifier.modify(value.clone(), nice_path, config) {
+                            Ok(modified) => {
+                                metadata.fields.insert(field.clone(), modified);
+                            }
+                            Err(err) => {
+                                errors.push(err);
+                            }
+                        }
+                    }
+                }
+                Err(err) => {
+                    errors.push(err);
+                }
+            },
             Self::Modify { modify } => {
                 for (field, modifier) in modify {
                     if let Some(existing) = metadata.fields.get(field) {
-                        if let Ok(modified) = modifier.modify(existing.clone(), nice_path, config) {
-                            metadata.fields.insert(field.clone(), modified);
-                        }
+                        match modifier.modify(existing.clone(), nice_path, config) {
+                            Ok(modified) => {
+                                metadata.fields.insert(field.clone(), modified);
+                            }
+                            Err(err) => {
+                                errors.push(err);
+                            }
+                        };
+                    } else {
+                        errors.push(ValueError::MissingField {
+                            modifier: modifier.clone(),
+                            field: field.clone(),
+                        });
                     }
                 }
             }
         }
+        errors
     }
 }
 

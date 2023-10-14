@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     library_config::LibraryConfig,
-    metadata::{MetadataValue, PendingValue},
+    metadata::{MetadataField, MetadataValue, PendingValue},
     strategy::ValueGetter,
     util::{OutOfBoundsDecision, Range},
 };
@@ -57,6 +57,10 @@ pub enum ValueError {
         modifier: Rc<ValueModifier>,
         got: PendingValue,
         expected: &'static str,
+    },
+    MissingField {
+        modifier: Rc<ValueModifier>,
+        field: MetadataField,
     },
     ItemNotFound,
     ExitRequested,
@@ -112,9 +116,11 @@ impl ValueModifier {
         };
         for i in 0..list.len() {
             match index {
-                None => list[i] = formatter(&list[i], extra),
+                None => {
+                    list[i] = formatter(&list[i], extra);
+                }
                 Some(index) if index.in_range(i, list.len(), OutOfBoundsDecision::Clamp) => {
-                    list[i] = formatter(&list[i], extra)
+                    list[i] = formatter(&list[i], extra);
                 }
                 Some(_) => {}
             };
