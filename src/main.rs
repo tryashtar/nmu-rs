@@ -64,7 +64,7 @@ fn make_nice(path: &Path, root: &Path) -> PathBuf {
 
 fn do_scan(library_config: LibraryConfig) {
     let mut config_cache: ConfigCache = HashMap::new();
-    let mut saved = 0;
+    let mut changed = 0;
     let mut failed = 0;
     let ScanResults {
         songs: scan_songs,
@@ -72,49 +72,45 @@ fn do_scan(library_config: LibraryConfig) {
         images: scan_images,
     } = find_scan_songs(&library_config);
     for folder_path in scan_folders {
-        let nice_path = make_nice(&folder_path, &library_config.library_folder);
-        let display = nice_path.clone();
-        if let Ok(metadata) = get_metadata(
-            &ItemPath::Folder(nice_path),
-            &library_config,
-            &mut config_cache,
-        ) {
-            println!("{}", display.display());
+        let nice_path = ItemPath::Folder(make_nice(&folder_path, &library_config.library_folder));
+        if let Ok(metadata) = get_metadata(&nice_path, &library_config, &mut config_cache) {
+            println!("{}", nice_path.display());
             for (field, value) in metadata.fields {
                 println!("\t{field}: {value}");
             }
         }
     }
     for song_path in scan_songs {
-        let nice_path = make_nice(&song_path, &library_config.library_folder);
-        let display = nice_path.clone();
-        let tags = tag_interop::Tags::load(&song_path);
-        if let Ok(final_metadata) = get_metadata(
-            &ItemPath::Song(nice_path),
-            &library_config,
-            &mut config_cache,
-        ) {
-            println!("{}", display.display());
-            if let Some(id3) = tags.id3 {
-                let existing_metadata = Tags::get_metadata_id3(&id3, &library_config);
+        let nice_path = ItemPath::Song(make_nice(&song_path, &library_config.library_folder));
+        if let Ok(final_metadata) = get_metadata(&nice_path, &library_config, &mut config_cache) {
+            println!("{}", nice_path.display());
+            let mut any = false;
+            if let Ok(id3) = id3::Tag::read_from_path(&song_path) {
+                any = true;
+                let existing_metadata = get_metadata_id3(&id3, &library_config);
                 if print_differences("ID3 Tag", &existing_metadata, &final_metadata) {
-                    saved += 1;
+                    changed += 1;
                 }
             }
-            if let Some(flac) = tags.flac {
-                let existing_metadata = Tags::get_metadata_flac(&flac, &library_config);
+            if let Ok(flac) = metaflac::Tag::read_from_path(&song_path) {
+                any = true;
+                let existing_metadata = get_metadata_flac(&flac, &library_config);
                 if print_differences("Flac Tag", &existing_metadata, &final_metadata) {
-                    saved += 1;
+                    changed += 1;
                 }
+            }
+            if !any {
+                eprintln!("{}", "No tags found in file".red());
+                failed += 1;
             }
         } else {
             failed += 1;
         }
     }
     if failed == 0 {
-        println!("Saved {saved}");
+        println!("Updated {changed}");
     } else {
-        println!("Saved {saved}, failed {failed}");
+        println!("Updated {changed}, errored {failed}");
     }
     if let Err(err) = library_config.date_cache.save() {
         eprintln!("{}", "Error saving date cache:".red());
@@ -160,9 +156,8 @@ fn get_metadata(
     library_config: &LibraryConfig,
     config_cache: &mut ConfigCache,
 ) -> Result<Metadata, Rc<ConfigError>> {
-    let path = nice_path.as_ref();
     let mut metadata = PendingMetadata::new();
-    for ancestor in path
+    for ancestor in nice_path
         .parent()
         .unwrap_or(Path::new(""))
         .ancestors()
@@ -170,7 +165,7 @@ fn get_metadata(
         .into_iter()
         .rev()
     {
-        let select_path = path.strip_prefix(ancestor).unwrap_or(path);
+        let select_path = nice_path.strip_prefix(ancestor).unwrap_or(nice_path);
         for config_root in &library_config.config_folders {
             let config_path = config_root.join(ancestor).join("config.yaml");
             let config_load = config_cache
@@ -187,7 +182,7 @@ fn get_metadata(
             }
         }
     }
-    Ok(metadata.resolve(path, library_config, config_cache))
+    Ok(metadata.resolve(nice_path, library_config, config_cache))
 }
 
 fn print_differences(name: &str, existing: &Metadata, incoming: &Metadata) -> bool {

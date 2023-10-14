@@ -53,10 +53,13 @@ pub enum ValueModifier {
 }
 
 pub enum ValueError {
-    UnexpectedType,
+    UnexpectedType {
+        modifier: Rc<ValueModifier>,
+        got: PendingValue,
+        expected: &'static str,
+    },
     ItemNotFound,
-    NoMatchFound,
-    ConditionsNotMet,
+    ExitRequested,
 }
 
 impl ValueModifier {
@@ -66,43 +69,84 @@ impl ValueModifier {
         oob: OutOfBoundsDecision,
         min_length: Option<usize>,
     ) -> Result<MetadataValue, ValueError> {
-        let result = range.slice(list, oob);
-        if let Some(min) = min_length {
-            if list.len() < min {
-                return Err(ValueError::ConditionsNotMet);
+        match range.slice(list, oob) {
+            None => Err(ValueError::ExitRequested),
+            Some(slice) => {
+                if let Some(min) = min_length {
+                    if list.len() < min {
+                        return Err(ValueError::ExitRequested);
+                    }
+                }
+                Ok(MetadataValue::List(slice.to_vec()))
             }
         }
-        Ok(MetadataValue::List(result.to_vec()))
     }
-    fn append(
-        value: &MetadataValue,
-        extra: &str,
+    fn checked_append(
+        self: &Rc<ValueModifier>,
+        value: PendingValue,
+        append: &ValueGetter,
+        path: &Path,
+        config: &LibraryConfig,
         index: Option<&Range>,
         appending: bool,
-    ) -> Result<MetadataValue, ValueError> {
+    ) -> Result<PendingValue, ValueError> {
+        if let PendingValue::Ready(val) = append.get(path, config)? {
+            if let Some(str) = val.as_string() {
+                if let PendingValue::Ready(MetadataValue::List(mut list)) = value {
+                    Self::append(&mut list, str, index, appending);
+                    return Ok(MetadataValue::List(list).into());
+                }
+            }
+        }
+        Err(ValueError::UnexpectedType {
+            modifier: self.clone(),
+            got: value,
+            expected: "single string",
+        })
+    }
+    fn append(list: &mut Vec<String>, extra: &str, index: Option<&Range>, appending: bool) {
         let formatter = if appending {
             |str: &str, extra: &str| format!("{str}{extra}")
         } else {
             |str: &str, extra: &str| format!("{extra}{str}")
         };
-        match value {
-            MetadataValue::List(list) => Ok(MetadataValue::List(
-                list.iter()
-                    .enumerate()
-                    .map(|(i, x)| match index {
-                        None => formatter(x, extra),
-                        Some(index) => {
-                            if index.in_range(i, list.len(), OutOfBoundsDecision::Clamp) {
-                                formatter(x, extra)
-                            } else {
-                                x.clone()
-                            }
-                        }
-                    })
-                    .collect(),
-            )),
-            MetadataValue::Number(_) => Err(ValueError::UnexpectedType),
+        for i in 0..list.len() {
+            match index {
+                None => list[i] = formatter(&list[i], extra),
+                Some(index) if index.in_range(i, list.len(), OutOfBoundsDecision::Clamp) => {
+                    list[i] = formatter(&list[i], extra)
+                }
+                Some(_) => {}
+            };
         }
+    }
+    fn checked_insert(
+        self: &Rc<ValueModifier>,
+        value: PendingValue,
+        insert: &ValueGetter,
+        point: &Range,
+        out_of_bounds: OutOfBoundsDecision,
+        add: usize,
+        path: &Path,
+        config: &LibraryConfig,
+    ) -> Result<PendingValue, ValueError> {
+        if let PendingValue::Ready(MetadataValue::List(val)) = insert.get(path, config)? {
+            if let PendingValue::Ready(MetadataValue::List(mut list)) = value {
+                return match Range::wrap_both(point, list.len(), out_of_bounds) {
+                    None => Err(ValueError::ExitRequested),
+                    Some((start, stop)) => {
+                        let range = (start + add)..(stop + add);
+                        list.splice(range, val);
+                        Ok(MetadataValue::List(list).into())
+                    }
+                };
+            }
+        }
+        Err(ValueError::UnexpectedType {
+            modifier: self.clone(),
+            got: value,
+            expected: "list",
+        })
     }
     pub fn modify(
         self: &Rc<Self>,
@@ -139,61 +183,37 @@ impl ValueModifier {
                         MetadataValue::string(regex.replace(&source, replace).into_owned()).into(),
                     );
                 }
-                Err(ValueError::UnexpectedType)
+                Err(ValueError::UnexpectedType {
+                    modifier: self.clone(),
+                    got: value,
+                    expected: "regex",
+                })
             }
             Self::Regex { regex } => {
-                if let PendingValue::Ready(val) = value {
+                if let PendingValue::Ready(val) = &value {
                     if let Some(str) = val.as_string() {
                         return Ok(PendingValue::RegexMatches {
                             source: str.to_owned(),
                             regex: regex.clone(),
                         });
-                    } else {
-                        return Err(ValueError::NoMatchFound);
                     }
                 }
-                Err(ValueError::UnexpectedType)
+                Err(ValueError::UnexpectedType {
+                    modifier: self.clone(),
+                    got: value,
+                    expected: "single string",
+                })
             }
             Self::InsertBefore {
                 insert,
                 before,
                 out_of_bounds,
-            } => {
-                if let PendingValue::Ready(MetadataValue::List(val)) = insert.get(path, config)? {
-                    if let PendingValue::Ready(MetadataValue::List(list)) = value {
-                        return match Range::wrap_both(before, list.len(), *out_of_bounds) {
-                            None => Err(ValueError::ConditionsNotMet),
-                            Some((start, stop)) => {
-                                let mut result = list.clone();
-                                let range = start..stop;
-                                result.splice(range, val);
-                                Ok(MetadataValue::List(result).into())
-                            }
-                        };
-                    }
-                }
-                Err(ValueError::UnexpectedType)
-            }
+            } => self.checked_insert(value, insert, before, *out_of_bounds, 0, path, config),
             Self::InsertAfter {
                 insert,
                 after,
                 out_of_bounds,
-            } => {
-                if let PendingValue::Ready(MetadataValue::List(val)) = insert.get(path, config)? {
-                    if let PendingValue::Ready(MetadataValue::List(list)) = value {
-                        return match Range::wrap_both(after, list.len(), *out_of_bounds) {
-                            None => Err(ValueError::ConditionsNotMet),
-                            Some((start, stop)) => {
-                                let mut result = list.clone();
-                                let range = (start + 1)..(stop + 1);
-                                result.splice(range, val);
-                                Ok(MetadataValue::List(result).into())
-                            }
-                        };
-                    }
-                }
-                Err(ValueError::UnexpectedType)
-            }
+            } => self.checked_insert(value, insert, after, *out_of_bounds, 1, path, config),
             Self::Take { take } => {
                 if let PendingValue::Ready(MetadataValue::List(list)) = value {
                     return match take {
@@ -209,27 +229,17 @@ impl ValueModifier {
                         }
                     };
                 }
-                Err(ValueError::UnexpectedType)
+                Err(ValueError::UnexpectedType {
+                    modifier: self.clone(),
+                    got: value,
+                    expected: "list",
+                })
             }
             Self::Append { append, index } => {
-                if let PendingValue::Ready(val) = append.get(path, config)? {
-                    if let Some(str) = val.as_string() {
-                        if let PendingValue::Ready(value) = value {
-                            return Ok(Self::append(&value, str, index.as_ref(), true)?.into());
-                        }
-                    }
-                }
-                Err(ValueError::UnexpectedType)
+                self.checked_append(value, append, path, config, index.as_ref(), true)
             }
             Self::Prepend { prepend, index } => {
-                if let PendingValue::Ready(val) = prepend.get(path, config)? {
-                    if let Some(str) = val.as_string() {
-                        if let PendingValue::Ready(value) = value {
-                            return Ok(Self::append(&value, str, index.as_ref(), false)?.into());
-                        }
-                    }
-                }
-                Err(ValueError::UnexpectedType)
+                self.checked_append(value, prepend, path, config, index.as_ref(), false)
             }
             Self::Join { join } => {
                 if let PendingValue::Ready(extra) = join.get(path, config)? {
@@ -239,7 +249,11 @@ impl ValueModifier {
                         }
                     }
                 }
-                Err(ValueError::UnexpectedType)
+                Err(ValueError::UnexpectedType {
+                    modifier: self.clone(),
+                    got: value,
+                    expected: "list",
+                })
             }
             Self::Split { split } => {
                 if let PendingValue::Ready(MetadataValue::List(list)) = value {
@@ -250,7 +264,11 @@ impl ValueModifier {
                         .collect::<Vec<_>>();
                     return Ok(MetadataValue::List(vec).into());
                 }
-                Err(ValueError::UnexpectedType)
+                Err(ValueError::UnexpectedType {
+                    modifier: self.clone(),
+                    got: value,
+                    expected: "list",
+                })
             }
         }
     }

@@ -1,4 +1,7 @@
-use std::path::{PathBuf, Path};
+use std::{
+    ops::Deref,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -132,11 +135,9 @@ impl Range {
             Some(range) => range.contains(&index),
         }
     }
-    pub fn slice<'a, T>(&self, items: &'a [T], decision: OutOfBoundsDecision) -> &'a [T] {
-        match self.to_range(items.len(), decision) {
-            Some(range) => &items[range],
-            None => &[],
-        }
+    pub fn slice<'a, T>(&self, items: &'a [T], decision: OutOfBoundsDecision) -> Option<&'a [T]> {
+        self.to_range(items.len(), decision)
+            .map(|range| &items[range])
     }
     pub fn to_range(
         &self,
@@ -189,8 +190,10 @@ impl From<ItemPath> for PathBuf {
         }
     }
 }
-impl AsRef<Path> for ItemPath {
-    fn as_ref(&self) -> &Path {
+impl Deref for ItemPath {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
         match self {
             Self::Song(path) | Self::Folder(path) => path,
         }

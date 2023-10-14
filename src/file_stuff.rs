@@ -1,11 +1,11 @@
 use std::{
     collections::HashSet,
     fs::{DirEntry, File},
-    io::{BufReader, ErrorKind},
-    path::{Path, PathBuf}, ffi::OsStr,
+    io::BufReader,
+    ops::Deref,
+    path::{Path, PathBuf},
 };
 
-use colored::Colorize;
 use itertools::Itertools;
 use serde::de::DeserializeOwned;
 use thiserror::Error;
@@ -99,7 +99,7 @@ pub fn find_matches(
                     path.map(|x| ItemPath::Song(x.with_extension("")))
                 }
             })
-            .sorted_by(|a, b| Ord::cmp(a.as_ref(), b.as_ref()))
+            .sorted_by(|a, b| Ord::cmp(a.deref(), b.deref()))
             .collect(),
         ItemSelector::Multi(checks) => checks
             .iter()
@@ -172,7 +172,7 @@ pub fn find_matches(
                             None
                         })
                     })
-                    .sorted_by(|a, b| Ord::cmp(a.as_ref(), b.as_ref()))
+                    .sorted_by(|a, b| Ord::cmp(a.deref(), b.deref()))
                     .collect();
             }
             vec![]

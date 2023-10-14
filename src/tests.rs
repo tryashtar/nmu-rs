@@ -15,7 +15,7 @@ mod deserialize {
             MetadataOperation::Blank {
                 remove: FieldSelector::Multiple(x)
             }
-            if x == HashSet::from_iter([BuiltinMetadataField::Title.into()])
+            if x == HashSet::from([BuiltinMetadataField::Title.into()])
         ));
     }
 
@@ -27,7 +27,7 @@ mod deserialize {
             MetadataOperation::Keep {
                 keep: FieldSelector::Multiple(x)
             }
-            if x == HashSet::from_iter([BuiltinMetadataField::Title.into()])
+            if x == HashSet::from([BuiltinMetadataField::Title.into()])
         ));
     }
 
@@ -242,35 +242,35 @@ mod deserialize {
 fn range_int_first() {
     let range: Range = 0.into();
     let values = ['a', 'b', 'c', 'd'];
-    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), ['a'])
+    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit).unwrap(), ['a'])
 }
 
 #[test]
 fn range_int_last() {
     let range: Range = 3.into();
     let values = ['a', 'b', 'c', 'd'];
-    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), ['d'])
+    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit).unwrap(), ['d'])
 }
 
 #[test]
 fn range_int_from_back() {
     let range: Range = (-2).into();
     let values = ['a', 'b', 'c', 'd'];
-    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), ['c'])
+    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit).unwrap(), ['c'])
 }
 
 #[test]
 fn range_int_too_big() {
     let range: Range = 5.into();
     let values = ['a', 'b', 'c', 'd'];
-    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), [])
+    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), None)
 }
 
 #[test]
 fn range_int_too_small() {
     let range: Range = (-5).into();
     let values = ['a', 'b', 'c', 'd'];
-    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), [])
+    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), None)
 }
 
 #[test]
@@ -278,7 +278,7 @@ fn range_mult_all() {
     let range: Range = Range::new(0, -1);
     let values = ['a', 'b', 'c', 'd'];
     assert_eq!(
-        range.slice(&values, OutOfBoundsDecision::Exit),
+        range.slice(&values, OutOfBoundsDecision::Exit).unwrap(),
         ['a', 'b', 'c', 'd']
     )
 }
@@ -287,21 +287,21 @@ fn range_mult_all() {
 fn range_mult_backwards() {
     let range: Range = Range::new(1, 0);
     let values = ['a', 'b', 'c', 'd'];
-    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), [])
+    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit).unwrap(), [])
 }
 
 #[test]
 fn range_mult_some() {
     let range: Range = Range::new(1, 2);
     let values = ['a', 'b', 'c', 'd'];
-    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), ['b', 'c'])
+    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit).unwrap(), ['b', 'c'])
 }
 
 #[test]
 fn range_mult_clamp() {
     let range: Range = Range::new(2, 5);
     let values = ['a', 'b', 'c', 'd'];
-    assert_eq!(range.slice(&values, OutOfBoundsDecision::Clamp), ['c', 'd'])
+    assert_eq!(range.slice(&values, OutOfBoundsDecision::Clamp).unwrap(), ['c', 'd'])
 }
 
 #[test]
@@ -388,7 +388,7 @@ fn dummy_config() -> LibraryConfig {
         library_folder: PathBuf::from("a/b/c"),
         log_folder: None,
         config_folders: vec![],
-        song_extensions: HashSet::from_iter(["a".to_owned()]),
+        song_extensions: HashSet::from(["a".to_owned()]),
         custom_fields: vec![],
         date_cache: DateCache::new(None),
         art_repo: None,
@@ -421,6 +421,35 @@ fn copy_field_resolution() {
         .get(&BuiltinMetadataField::Composers.into())
         .unwrap();
     assert!(matches!(result, MetadataValue::List(x) if x.as_slice() == ["item"]));
+}
+
+#[test]
+fn copy_field_loop() {
+    let path = PathBuf::from("a/b/c");
+    let config = dummy_config();
+    let mut pending = PendingMetadata::new();
+    pending.fields.insert(
+        BuiltinMetadataField::Performers.into(),
+        PendingValue::CopyField {
+            field: BuiltinMetadataField::Composers.into(),
+            sources: vec![ItemPath::Song(path.clone())],
+            modify: None,
+        },
+    );
+    pending.fields.insert(
+        BuiltinMetadataField::Composers.into(),
+        PendingValue::CopyField {
+            field: BuiltinMetadataField::Performers.into(),
+            sources: vec![ItemPath::Song(path.clone())],
+            modify: None,
+        },
+    );
+    let resolved = pending.resolve(&path, &config, &mut HashMap::new());
+    let result = resolved
+        .fields
+        .get(&BuiltinMetadataField::Composers.into())
+        .unwrap();
+    assert!(matches!(result, MetadataValue::List(x) if x.is_empty()));
 }
 
 #[test]

@@ -15,7 +15,7 @@ use crate::{
     library_config::LibraryConfig,
     metadata::{BuiltinMetadataField, MetadataField, MetadataValue, PendingMetadata, PendingValue},
     modifier::{ValueError, ValueModifier},
-    util::{OutOfBoundsDecision, Range, ItemPath},
+    util::{ItemPath, OutOfBoundsDecision, Range},
 };
 
 #[derive(Deserialize, Serialize)]
@@ -230,10 +230,13 @@ impl LocalItemSelector {
             Self::This => vec![ItemPath::Folder(start.to_owned())],
             Self::DrillUp { up } => {
                 let ancestors = start.ancestors().collect::<Vec<_>>();
-                up.slice(ancestors.as_slice(), OutOfBoundsDecision::Clamp)
-                    .iter()
-                    .map(|x| ItemPath::Folder((*x).to_owned()))
-                    .collect()
+                match up.slice(ancestors.as_slice(), OutOfBoundsDecision::Clamp) {
+                    None => vec![],
+                    Some(slice) => slice
+                        .iter()
+                        .map(|x| ItemPath::Folder((*x).to_owned()))
+                        .collect(),
+                }
             }
             Self::DrillDown { must_be, from_root } => {
                 let ancestors = start.ancestors().collect::<Vec<_>>();
@@ -255,12 +258,14 @@ impl LocalItemSelector {
                         }
                     })
                     .collect::<Vec<_>>();
-                from_root
-                    .slice(ancestors.as_slice(), OutOfBoundsDecision::Clamp)
-                    .iter()
-                    .filter_map(|x| x.as_ref())
-                    .map(|x| x.to_owned())
-                    .collect()
+                match from_root.slice(ancestors.as_slice(), OutOfBoundsDecision::Clamp) {
+                    None => vec![],
+                    Some(slice) => slice
+                        .iter()
+                        .filter_map(|x| x.as_ref())
+                        .map(|x| x.to_owned())
+                        .collect(),
+                }
             }
             Self::Selector { selector, must_be } => {
                 file_stuff::find_matches(selector, start, config)

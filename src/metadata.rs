@@ -1,6 +1,7 @@
 use core::fmt;
 use std::{
     collections::HashMap,
+    ops::Deref,
     path::{Path, PathBuf},
     rc::Rc,
 };
@@ -11,7 +12,7 @@ use strum::{Display, EnumIter};
 
 use crate::{
     file_stuff::ConfigError, get_metadata, library_config::LibraryConfig, modifier::ValueModifier,
-    song_config::SongConfig, util::ItemPath, ConfigCache,
+    util::ItemPath, ConfigCache,
 };
 
 pub struct Metadata {
@@ -40,7 +41,8 @@ impl PendingMetadata {
         config_cache: &mut ConfigCache,
     ) -> Metadata {
         let mut metadata = Metadata::new();
-        let mut metadata_cache: HashMap<PathBuf, Result<Metadata, Rc<ConfigError>>> = HashMap::new();
+        let mut metadata_cache: HashMap<PathBuf, Result<Metadata, Rc<ConfigError>>> =
+            HashMap::new();
         loop {
             let mut added_any = false;
             self.fields.retain(|field, value| {
@@ -57,7 +59,7 @@ impl PendingMetadata {
                     } => {
                         let mut results = sources.iter().filter_map(|source| {
                             let source_metadata = {
-                                if nice_path == source.as_ref() {
+                                if nice_path == source.deref() {
                                     Some(&metadata)
                                 } else {
                                     metadata_cache
@@ -107,7 +109,7 @@ impl From<Metadata> for PendingMetadata {
             fields: value
                 .fields
                 .into_iter()
-                .map(|(k, v)| (k, PendingValue::Ready(v)))
+                .map(|(k, v)| (k, v.into()))
                 .collect(),
         }
     }
@@ -180,10 +182,10 @@ impl MetadataValue {
         match self {
             Self::Number(_) => None,
             Self::List(list) => {
-                if list.is_empty() {
-                    None
-                } else {
+                if list.len() == 1 {
                     Some(list[0].as_ref())
+                } else {
+                    None
                 }
             }
         }
