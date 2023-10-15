@@ -27,6 +27,14 @@ pub enum MetadataOperation {
     Keep {
         keep: FieldSelector,
     },
+    Shared {
+        fields: FieldSelector,
+        set: ValueGetter,
+    },
+    SharedModify {
+        fields: FieldSelector,
+        modify: Rc<ValueModifier>,
+    },
     Context {
         source: ValueGetter,
         modify: HashMap<MetadataField, Rc<ValueModifier>>,
@@ -53,24 +61,58 @@ impl MetadataOperation {
                 }
             }
             Self::Blank { remove } => {
-                for field in &config.custom_fields {
+                let builtin = BuiltinMetadataField::iter()
+                    .map(|x| x.into())
+                    .collect::<Vec<_>>();
+                for field in config.custom_fields.iter().chain(builtin.iter()) {
                     if remove.is_match(field) {
                         metadata
                             .fields
                             .insert(field.clone(), MetadataValue::blank().into());
                     }
                 }
-                for field in BuiltinMetadataField::iter() {
-                    let builtin = field.into();
-                    if remove.is_match(&builtin) {
-                        metadata
-                            .fields
-                            .insert(builtin, MetadataValue::blank().into());
-                    }
-                }
             }
             Self::Keep { keep } => {
                 metadata.fields.retain(|k, _| !keep.is_match(k));
+            }
+            Self::Shared { fields, set } => match set.get(nice_path, config) {
+                Ok(value) => {
+                    let builtin = BuiltinMetadataField::iter()
+                        .map(|x| x.into())
+                        .collect::<Vec<_>>();
+                    for field in config.custom_fields.iter().chain(builtin.iter()) {
+                        if fields.is_match(field) {
+                            metadata.fields.insert(field.clone(), value.clone());
+                        }
+                    }
+                }
+                Err(err) => {
+                    errors.push(err);
+                }
+            },
+            Self::SharedModify { fields, modify } => {
+                let builtin = BuiltinMetadataField::iter()
+                    .map(|x| x.into())
+                    .collect::<Vec<_>>();
+                for field in config.custom_fields.iter().chain(builtin.iter()) {
+                    if fields.is_match(field) {
+                        if let Some(existing) = metadata.fields.get(field) {
+                            match modify.modify(existing.clone(), nice_path, config) {
+                                Ok(modified) => {
+                                    metadata.fields.insert(field.clone(), modified);
+                                }
+                                Err(err) => {
+                                    errors.push(err);
+                                }
+                            };
+                        } else {
+                            errors.push(ValueError::MissingField {
+                                modifier: modify.clone(),
+                                field: field.clone(),
+                            });
+                        }
+                    }
+                }
             }
             Self::Set(set) => {
                 for (field, value) in set {
