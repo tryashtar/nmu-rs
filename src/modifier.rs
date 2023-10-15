@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     library_config::LibraryConfig,
     metadata::{MetadataField, MetadataValue, PendingValue},
-    strategy::{ValueGetter, LocalItemSelector},
+    strategy::{LocalItemSelector, ValueGetter},
     util::{OutOfBoundsDecision, Range},
 };
 
@@ -96,19 +96,55 @@ impl ValueModifier {
         index: Option<&Range>,
         appending: bool,
     ) -> Result<PendingValue, ValueError> {
-        if let PendingValue::Ready(val) = append.get(path, config)? {
-            if let Some(str) = val.as_string() {
-                if let PendingValue::Ready(MetadataValue::List(mut list)) = value {
-                    Self::append(&mut list, str, index, appending);
-                    return Ok(MetadataValue::List(list).into());
+        if let PendingValue::Ready(MetadataValue::List(mut list)) = value {
+            let extra = append.get(path, config)?;
+            match extra {
+                PendingValue::Ready(ref val) => {
+                    if let Some(str) = val.as_string() {
+                        Self::append(&mut list, str, index, appending);
+                        return Ok(MetadataValue::List(list).into());
+                    }
                 }
+                PendingValue::CopyField {
+                    field,
+                    sources,
+                    modify,
+                } => {
+                    let switched = Rc::new(if appending {
+                        ValueModifier::Prepend {
+                            prepend: Box::new(ValueGetter::Direct(MetadataValue::List(list))),
+                            index: None,
+                        }
+                    } else {
+                        ValueModifier::Append {
+                            append: Box::new(ValueGetter::Direct(MetadataValue::List(list))),
+                            index: None,
+                        }
+                    });
+                    let new_modify = match modify {
+                        None => switched,
+                        Some(modify) => Rc::new(ValueModifier::Multiple(vec![modify, switched])),
+                    };
+                    return Ok(PendingValue::CopyField {
+                        field,
+                        sources,
+                        modify: Some(new_modify),
+                    });
+                }
+                _ => {}
             }
+            Err(ValueError::UnexpectedType {
+                modifier: self.clone(),
+                got: extra,
+                expected: "single string",
+            })
+        } else {
+            Err(ValueError::UnexpectedType {
+                modifier: self.clone(),
+                got: value,
+                expected: "list",
+            })
         }
-        Err(ValueError::UnexpectedType {
-            modifier: self.clone(),
-            got: value,
-            expected: "single string",
-        })
     }
     fn append(list: &mut Vec<String>, extra: &str, index: Option<&Range>, appending: bool) {
         let formatter = if appending {
