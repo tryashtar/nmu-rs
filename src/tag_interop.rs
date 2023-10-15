@@ -1,128 +1,146 @@
 use id3::TagLike;
-use metaflac::{block::VorbisComment, Block};
-use strum::IntoEnumIterator;
+use itertools::Itertools;
+use metaflac::Block;
 
 use crate::{
     library_config::LibraryConfig,
-    metadata::{BuiltinMetadataField, Metadata, MetadataValue},
+    metadata::{FinalMetadata, SetValue},
 };
 
-pub fn get_metadata_flac(tag: &metaflac::Tag, config: &LibraryConfig) -> Metadata {
-    let mut metadata = Metadata::new();
+pub fn get_metadata_flac(tag: &metaflac::Tag, config: &LibraryConfig) -> FinalMetadata {
+    let mut metadata = FinalMetadata {
+        title: SetValue::Skip,
+        album: SetValue::Skip,
+        performers: SetValue::Skip,
+        album_artist: SetValue::Skip,
+        composers: SetValue::Skip,
+        arranger: SetValue::Skip,
+        comments: SetValue::Skip,
+        track: SetValue::Skip,
+        track_total: SetValue::Skip,
+        disc: SetValue::Skip,
+        disc_total: SetValue::Skip,
+        year: SetValue::Skip,
+        language: SetValue::Skip,
+        genres: SetValue::Skip,
+        art: SetValue::Skip,
+        simple_lyrics: SetValue::Skip,
+    };
     for block in tag.blocks() {
         if let Block::VorbisComment(comment) = block {
-            for field in BuiltinMetadataField::iter() {
-                if let Some(value) = get_flac(comment, &field, config) {
-                    metadata.insert(field.into(), value);
-                }
+            if let SetValue::Set(v) = flac_str(comment.title()) {
+                metadata.title = SetValue::Set(v);
+            }
+            if let SetValue::Set(v) = flac_str(comment.album()) {
+                metadata.album = SetValue::Set(v);
+            }
+            if let SetValue::Set(v) = flac_list(comment.artist()) {
+                metadata.performers = SetValue::Set(v);
+            }
+            if let SetValue::Set(v) = flac_str(comment.album_artist()) {
+                metadata.album_artist = SetValue::Set(v);
+            }
+            if let SetValue::Set(v) = flac_list(comment.get("COMPOSER")) {
+                metadata.composers = SetValue::Set(v);
+            }
+            if let SetValue::Set(v) = flac_str(comment.get("REMIXEDBY")) {
+                metadata.arranger = SetValue::Set(v);
+            }
+            if let SetValue::Set(v) = flac_list(comment.get("COMMENT")) {
+                metadata.comments = SetValue::Set(v);
+            }
+            if let SetValue::Set(v) = flac_num(comment.track()) {
+                metadata.track = SetValue::Set(v);
+            }
+            if let SetValue::Set(v) = flac_num_str(comment.get("TRACKTOTAL")) {
+                metadata.track_total = SetValue::Set(v);
+            }
+            if let SetValue::Set(v) = flac_num_str(comment.get("DISCNUMBER")) {
+                metadata.disc = SetValue::Set(v);
+            }
+            if let SetValue::Set(v) = flac_num_str(comment.get("DISCTOTAL")) {
+                metadata.disc_total = SetValue::Set(v);
+            }
+            if let SetValue::Set(v) = flac_num_str(comment.get("YEAR")) {
+                metadata.year = SetValue::Set(v);
+            }
+            if let SetValue::Set(v) = flac_str(comment.get("LANGUAGE")) {
+                metadata.language = SetValue::Set(v);
+            }
+            if let SetValue::Set(v) = flac_list(comment.genre()) {
+                metadata.genres = SetValue::Set(v);
             }
         }
     }
     metadata
 }
-pub fn get_metadata_id3(tag: &id3::Tag, config: &LibraryConfig) -> Metadata {
-    let mut metadata = Metadata::new();
-    for field in BuiltinMetadataField::iter() {
-        if let Some(value) = get_id3(tag, &field, config) {
-            metadata.insert(field.into(), value);
-        }
-    }
-    metadata
-}
-
-fn get_id3(
-    tag: &id3::Tag,
-    field: &BuiltinMetadataField,
-    config: &LibraryConfig,
-) -> Option<MetadataValue> {
-    match field {
-        BuiltinMetadataField::Album => convert_str(tag.album()),
-        BuiltinMetadataField::AlbumArtist => {
-            convert_list_str(tag.album_artist(), &config.artist_separator)
-        }
-        BuiltinMetadataField::Arranger => convert_str(tag.text_for_frame_id("TPE4")),
-        BuiltinMetadataField::Comment => convert_comments(tag.comments().collect()),
-        BuiltinMetadataField::Composers => {
-            convert_list_str(tag.text_for_frame_id("TCOM"), &config.artist_separator)
-        }
-        BuiltinMetadataField::Track => tag.track().map(MetadataValue::Number),
-        BuiltinMetadataField::TrackTotal => tag.total_tracks().map(MetadataValue::Number),
-        BuiltinMetadataField::Title => convert_str(tag.title()),
-        BuiltinMetadataField::Language => convert_str(tag.text_for_frame_id("TLAN")),
-        BuiltinMetadataField::Genres => convert_list_str(tag.genre(), &config.artist_separator),
-        BuiltinMetadataField::Performers => {
-            convert_list_str(tag.artist(), &config.artist_separator)
-        }
-        BuiltinMetadataField::Year => tag.year().map(|x| MetadataValue::Number(x as u32)),
-        BuiltinMetadataField::Disc => tag.disc().map(MetadataValue::Number),
-        BuiltinMetadataField::DiscTotal => tag.total_discs().map(MetadataValue::Number),
-        BuiltinMetadataField::SimpleLyrics => convert_lyrics(tag.lyrics().collect()),
-        BuiltinMetadataField::Art => None,
+pub fn get_metadata_id3(tag: &id3::Tag, config: &LibraryConfig) -> FinalMetadata {
+    FinalMetadata {
+        title: SetValue::Set(id3_str(tag.title())),
+        album: SetValue::Set(id3_str(tag.album())),
+        performers: SetValue::Set(id3_str_sep(tag.artist(), &config.artist_separator)),
+        album_artist: SetValue::Set(id3_str(tag.album_artist())),
+        composers: SetValue::Set(id3_str_sep(
+            tag.text_for_frame_id("TCOM"),
+            &config.artist_separator,
+        )),
+        arranger: SetValue::Set(id3_str(tag.text_for_frame_id("TPE4"))),
+        comments: SetValue::Set(id3_comments(tag.comments().collect())),
+        track: SetValue::Set(tag.track()),
+        track_total: SetValue::Set(tag.total_tracks()),
+        disc: SetValue::Set(tag.disc()),
+        disc_total: SetValue::Set(tag.total_discs()),
+        year: SetValue::Set(tag.year().map(|x| x as u32)),
+        language: SetValue::Set(id3_str(tag.text_for_frame_id("TLAN"))),
+        genres: SetValue::Set(id3_str_sep(tag.genre(), &config.artist_separator)),
+        art: SetValue::Skip,
+        simple_lyrics: SetValue::Set(id3_lyrics(tag.lyrics().collect())),
     }
 }
 
-fn get_flac(
-    tag: &VorbisComment,
-    field: &BuiltinMetadataField,
-    config: &LibraryConfig,
-) -> Option<MetadataValue> {
-    match field {
-        BuiltinMetadataField::Album => convert_list(tag.album()),
-        BuiltinMetadataField::AlbumArtist => convert_list(tag.album_artist()),
-        BuiltinMetadataField::Arranger => convert_list(tag.get("REMIXEDBY")),
-        BuiltinMetadataField::Comment => convert_list(tag.get("COMMENT")),
-        BuiltinMetadataField::Composers => convert_list(tag.get("COMPOSER")),
-        BuiltinMetadataField::Track => tag.track().map(MetadataValue::Number),
-        BuiltinMetadataField::TrackTotal => tag
-            .get("TRACKTOTAL")
-            .and_then(|s| {
-                if !s.is_empty() {
-                    s[0].parse::<u32>().ok()
-                } else {
-                    None
-                }
-            })
-            .map(MetadataValue::Number),
-        BuiltinMetadataField::Title => convert_list(tag.title()),
-        BuiltinMetadataField::Language => convert_list(tag.get("LANGUAGE")),
-        BuiltinMetadataField::Genres => convert_list(tag.genre()),
-        BuiltinMetadataField::Performers => convert_list(tag.artist()),
-        BuiltinMetadataField::Year => convert_num(tag.get("YEAR")),
-        BuiltinMetadataField::Disc => convert_num(tag.get("DISCNUMBER")),
-        BuiltinMetadataField::DiscTotal => convert_num(tag.get("DISCTOTAL")),
-        BuiltinMetadataField::SimpleLyrics => convert_list(tag.lyrics()),
-        BuiltinMetadataField::Art => None,
-    }
+fn id3_comments(item: Vec<&id3::frame::Comment>) -> Vec<String> {
+    item.into_iter().map(|x| x.text.clone()).collect()
 }
 
-fn convert_comments(item: Vec<&id3::frame::Comment>) -> Option<MetadataValue> {
-    Some(item.into_iter().map(|x| x.text.clone()).collect::<Vec<_>>()).map(MetadataValue::List)
+fn id3_lyrics(item: Vec<&id3::frame::Lyrics>) -> Option<String> {
+    Some(item.into_iter().map(|x| x.text.to_owned()).join("\n"))
 }
 
-fn convert_lyrics(item: Vec<&id3::frame::Lyrics>) -> Option<MetadataValue> {
-    Some(item.into_iter().map(|x| x.text.clone()).collect::<Vec<_>>()).map(MetadataValue::List)
+fn id3_str(item: Option<&str>) -> Option<String> {
+    item.map(|x| x.replace('\0', "/"))
 }
 
-fn convert_str(item: Option<&str>) -> Option<MetadataValue> {
-    item.map(|x| MetadataValue::string(x.replace('\0', "/")))
-}
-
-fn convert_num(item: Option<&Vec<String>>) -> Option<MetadataValue> {
-    item.and_then(|s| {
-        if !s.is_empty() {
-            s[0].parse::<u32>().ok()
-        } else {
-            None
-        }
-    })
-    .map(MetadataValue::Number)
-}
-
-fn convert_list_str(item: Option<&str>, separator: &str) -> Option<MetadataValue> {
+fn id3_str_sep(item: Option<&str>, separator: &str) -> Vec<String> {
     item.map(|x| x.split(separator).map(|y| y.replace('\0', "/")).collect())
-        .map(MetadataValue::List)
+        .unwrap_or_default()
 }
 
-fn convert_list(item: Option<&Vec<String>>) -> Option<MetadataValue> {
-    item.map(|x| MetadataValue::List(x.clone()))
+fn flac_num(item: Option<u32>) -> SetValue<Option<u32>> {
+    match item {
+        None => SetValue::Skip,
+        Some(value) => SetValue::Set(Some(value)),
+    }
+}
+
+fn flac_num_str(item: Option<&Vec<String>>) -> SetValue<Option<u32>> {
+    match item {
+        None => SetValue::Skip,
+        Some(list) if list.is_empty() => SetValue::Set(None),
+        Some(list) => SetValue::Set(list[0].parse::<u32>().ok()),
+    }
+}
+
+fn flac_str(item: Option<&Vec<String>>) -> SetValue<Option<String>> {
+    match item {
+        None => SetValue::Skip,
+        Some(list) if list.is_empty() => SetValue::Set(None),
+        Some(list) => SetValue::Set(Some(list[0].clone())),
+    }
+}
+
+fn flac_list(item: Option<&Vec<String>>) -> SetValue<Vec<String>> {
+    match item {
+        None => SetValue::Skip,
+        Some(list) => SetValue::Set(list.clone()),
+    }
 }

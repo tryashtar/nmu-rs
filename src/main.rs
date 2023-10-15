@@ -86,7 +86,7 @@ fn add_to_song(
     match id3::Tag::read_from_path(path) {
         Ok(id3) => {
             any = true;
-            let existing_metadata = get_metadata_id3(&id3, config);
+            let existing_metadata = get_metadata_id3(&id3, config).into();
             if print_differences("ID3 Tag", &existing_metadata, &metadata) {
                 progress.changed += 1;
             }
@@ -103,7 +103,7 @@ fn add_to_song(
     match metaflac::Tag::read_from_path(path) {
         Ok(flac) => {
             any = true;
-            let existing_metadata = get_metadata_flac(&flac, config);
+            let existing_metadata = get_metadata_flac(&flac, config).into();
             if print_differences("Flac Tag", &existing_metadata, &metadata) {
                 progress.changed += 1;
             }

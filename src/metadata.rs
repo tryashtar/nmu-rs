@@ -192,6 +192,18 @@ impl MetadataValue {
     pub fn string(single: String) -> MetadataValue {
         MetadataValue::List(vec![single])
     }
+    pub fn option(value: Option<String>) -> MetadataValue {
+        match value {
+            None => Self::blank(),
+            Some(val) => Self::string(val),
+        }
+    }
+    pub fn option_num(value: Option<u32>) -> MetadataValue {
+        match value {
+            None => Self::blank(),
+            Some(val) => Self::Number(val),
+        }
+    }
     pub fn as_string(&self) -> Option<&str> {
         match self {
             Self::Number(_) => None,
@@ -242,7 +254,7 @@ pub struct FinalMetadata {
     pub album_artist: SetValue<Option<String>>,
     pub composers: SetValue<Vec<String>>,
     pub arranger: SetValue<Option<String>>,
-    pub comment: SetValue<Option<String>>,
+    pub comments: SetValue<Vec<String>>,
     pub track: SetValue<Option<u32>>,
     pub track_total: SetValue<Option<u32>>,
     pub disc: SetValue<Option<u32>>,
@@ -278,7 +290,6 @@ impl FinalMetadata {
         let album = convert_string(BuiltinMetadataField::Album);
         let album_artist = convert_string(BuiltinMetadataField::AlbumArtist);
         let arranger = convert_string(BuiltinMetadataField::Arranger);
-        let comment = convert_string(BuiltinMetadataField::Comment);
         let language = convert_string(BuiltinMetadataField::Language);
         let simple_lyrics = convert_string(BuiltinMetadataField::SimpleLyrics);
         let mut convert_vec = |field: BuiltinMetadataField| {
@@ -300,6 +311,7 @@ impl FinalMetadata {
         };
         let performers = convert_vec(BuiltinMetadataField::Performers);
         let composers = convert_vec(BuiltinMetadataField::Composers);
+        let comments = convert_vec(BuiltinMetadataField::Comment);
         let genres = convert_vec(BuiltinMetadataField::Genres);
         let art = match convert_vec(BuiltinMetadataField::Art) {
             SetValue::Skip => SetValue::Skip,
@@ -336,7 +348,7 @@ impl FinalMetadata {
                 album_artist,
                 composers,
                 arranger,
-                comment,
+                comments,
                 track,
                 track_total,
                 disc,
@@ -349,6 +361,103 @@ impl FinalMetadata {
             },
             errors,
         }
+    }
+}
+impl From<FinalMetadata> for Metadata {
+    fn from(value: FinalMetadata) -> Self {
+        let mut metadata = Self::new();
+        if let SetValue::Set(val) = value.title {
+            metadata.insert(
+                BuiltinMetadataField::Title.into(),
+                MetadataValue::option(val),
+            );
+        }
+        if let SetValue::Set(val) = value.album {
+            metadata.insert(
+                BuiltinMetadataField::Album.into(),
+                MetadataValue::option(val),
+            );
+        }
+        if let SetValue::Set(val) = value.performers {
+            metadata.insert(
+                BuiltinMetadataField::Performers.into(),
+                MetadataValue::List(val),
+            );
+        }
+        if let SetValue::Set(val) = value.album_artist {
+            metadata.insert(
+                BuiltinMetadataField::AlbumArtist.into(),
+                MetadataValue::option(val),
+            );
+        }
+        if let SetValue::Set(val) = value.composers {
+            metadata.insert(
+                BuiltinMetadataField::Composers.into(),
+                MetadataValue::List(val),
+            );
+        }
+        if let SetValue::Set(val) = value.arranger {
+            metadata.insert(
+                BuiltinMetadataField::Arranger.into(),
+                MetadataValue::option(val),
+            );
+        }
+        if let SetValue::Set(val) = value.comments {
+            metadata.insert(
+                BuiltinMetadataField::Comment.into(),
+                MetadataValue::List(val),
+            );
+        }
+        if let SetValue::Set(val) = value.track {
+            metadata.insert(
+                BuiltinMetadataField::Track.into(),
+                MetadataValue::option_num(val),
+            );
+        }
+        if let SetValue::Set(val) = value.track_total {
+            metadata.insert(
+                BuiltinMetadataField::TrackTotal.into(),
+                MetadataValue::option_num(val),
+            );
+        }
+        if let SetValue::Set(val) = value.disc {
+            metadata.insert(
+                BuiltinMetadataField::Disc.into(),
+                MetadataValue::option_num(val),
+            );
+        }
+        if let SetValue::Set(val) = value.disc_total {
+            metadata.insert(
+                BuiltinMetadataField::DiscTotal.into(),
+                MetadataValue::option_num(val),
+            );
+        }
+        if let SetValue::Set(val) = value.year {
+            metadata.insert(
+                BuiltinMetadataField::Year.into(),
+                MetadataValue::option_num(val),
+            );
+        }
+        if let SetValue::Set(val) = value.language {
+            metadata.insert(
+                BuiltinMetadataField::Language.into(),
+                MetadataValue::option(val),
+            );
+        }
+        if let SetValue::Set(val) = value.genres {
+            metadata.insert(
+                BuiltinMetadataField::Genres.into(),
+                MetadataValue::List(val),
+            );
+        }
+        if let SetValue::Set(val) = value.simple_lyrics {
+            metadata.insert(
+                BuiltinMetadataField::SimpleLyrics.into(),
+                MetadataValue::option(val),
+            );
+        }
+
+        metadata
     }
 }
 
@@ -364,6 +473,7 @@ pub enum BuiltinMetadataField {
     #[serde(alias = "composer")]
     Composers,
     Arranger,
+    #[serde(alias = "comments")]
     Comment,
     Track,
     #[serde(rename = "track total")]
