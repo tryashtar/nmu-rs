@@ -19,19 +19,10 @@ use crate::{
     ConfigCache, Results,
 };
 
-pub struct Metadata {
-    pub fields: HashMap<MetadataField, MetadataValue>,
-}
-impl Metadata {
-    pub fn new() -> Self {
-        Self {
-            fields: HashMap::new(),
-        }
-    }
-}
 pub struct PendingMetadata {
     pub fields: HashMap<MetadataField, PendingValue>,
 }
+pub type Metadata = HashMap<MetadataField, MetadataValue>;
 type MetadataCache = HashMap<PathBuf, Result<Metadata, Rc<ConfigError>>>;
 impl PendingMetadata {
     pub fn new() -> Self {
@@ -71,7 +62,7 @@ impl PendingMetadata {
                         }
                     };
                     source_metadata.and_then(|meta| {
-                        meta.fields.get(from).cloned().and_then(|x| match modify {
+                        meta.get(from).cloned().and_then(|x| match modify {
                             None => Some(x.into()),
                             Some(modify) => modify
                                 .modify(x.into(), source.as_ref(), library_config)
@@ -105,7 +96,7 @@ impl PendingMetadata {
                     config_cache,
                     library_config,
                 ) {
-                    metadata.fields.insert(field.clone(), resolved);
+                    metadata.insert(field.clone(), resolved);
                     added_any = true;
                     return false;
                 }
@@ -123,17 +114,6 @@ impl PendingMetadata {
         Results {
             result: metadata,
             errors,
-        }
-    }
-}
-impl From<Metadata> for PendingMetadata {
-    fn from(value: Metadata) -> Self {
-        Self {
-            fields: value
-                .fields
-                .into_iter()
-                .map(|(k, v)| (k, v.into()))
-                .collect(),
         }
     }
 }
@@ -251,6 +231,123 @@ impl fmt::Display for MetadataField {
     }
 }
 
+pub struct FinalMetadata {
+    pub title: Option<String>,
+    pub album: Option<String>,
+    pub performers: Vec<String>,
+    pub album_artist: Option<String>,
+    pub composers: Vec<String>,
+    pub arranger: Option<String>,
+    pub comment: Option<String>,
+    pub track: Option<u32>,
+    pub track_total: Option<u32>,
+    pub disc: Option<u32>,
+    pub disc_total: Option<u32>,
+    pub year: Option<u32>,
+    pub language: Option<String>,
+    pub genres: Vec<String>,
+    pub art: Vec<PathBuf>,
+    pub simple_lyrics: Option<String>,
+}
+impl FinalMetadata {
+    pub fn create(mut metadata: Metadata) -> Results<FinalMetadata, ValueError> {
+        let mut errors = vec![];
+        let mut convert_string = |field: BuiltinMetadataField| {
+            let field = field.into();
+            match metadata.remove(&field) {
+                None => None,
+                Some(MetadataValue::List(list)) if list.is_empty() => None,
+                Some(value) => match value.as_string() {
+                    Some(val) => Some(val.to_owned()),
+                    None => {
+                        errors.push(ValueError::WrongFieldType {
+                            field,
+                            got: value,
+                            expected: "single string",
+                        });
+                        None
+                    }
+                },
+            }
+        };
+        let title = convert_string(BuiltinMetadataField::Title);
+        let album = convert_string(BuiltinMetadataField::Album);
+        let album_artist = convert_string(BuiltinMetadataField::AlbumArtist);
+        let arranger = convert_string(BuiltinMetadataField::Arranger);
+        let comment = convert_string(BuiltinMetadataField::Comment);
+        let language = convert_string(BuiltinMetadataField::Language);
+        let simple_lyrics = convert_string(BuiltinMetadataField::SimpleLyrics);
+        let mut convert_vec = |field: BuiltinMetadataField| {
+            let field = field.into();
+            match metadata.remove(&field) {
+                None => vec![],
+                Some(value) => match value {
+                    MetadataValue::List(list) => list,
+                    MetadataValue::Number(_) => {
+                        errors.push(ValueError::WrongFieldType {
+                            field,
+                            got: value,
+                            expected: "list",
+                        });
+                        vec![]
+                    }
+                },
+            }
+        };
+        let performers = convert_vec(BuiltinMetadataField::Performers);
+        let composers = convert_vec(BuiltinMetadataField::Composers);
+        let genres = convert_vec(BuiltinMetadataField::Genres);
+        let art = convert_vec(BuiltinMetadataField::Art)
+            .into_iter()
+            .map(PathBuf::from)
+            .collect();
+        let mut convert_num = |field: BuiltinMetadataField| {
+            let field = field.into();
+            match metadata.remove(&field) {
+                None => None,
+                Some(MetadataValue::List(list)) if list.is_empty() => None,
+                Some(value) => match value {
+                    MetadataValue::Number(num) => Some(num),
+                    MetadataValue::List(_) => {
+                        errors.push(ValueError::WrongFieldType {
+                            field,
+                            got: value,
+                            expected: "number",
+                        });
+                        None
+                    }
+                },
+            }
+        };
+        let track = convert_num(BuiltinMetadataField::Track);
+        let track_total = convert_num(BuiltinMetadataField::TrackTotal);
+        let disc = convert_num(BuiltinMetadataField::Disc);
+        let disc_total = convert_num(BuiltinMetadataField::DiscTotal);
+        let year = convert_num(BuiltinMetadataField::Year);
+        Results {
+            result: FinalMetadata {
+                title,
+                album,
+                performers,
+                album_artist,
+                composers,
+                arranger,
+                comment,
+                track,
+                track_total,
+                disc,
+                disc_total,
+                year,
+                language,
+                genres,
+                art,
+                simple_lyrics,
+            },
+            errors,
+        }
+    }
+}
+
 #[derive(Deserialize, Serialize, Eq, Hash, PartialEq, Debug, Display, EnumIter, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum BuiltinMetadataField {
@@ -258,9 +355,8 @@ pub enum BuiltinMetadataField {
     Album,
     #[serde(alias = "performer")]
     Performers,
-    #[serde(rename = "album artists")]
     #[serde(alias = "album artist")]
-    AlbumArtists,
+    AlbumArtist,
     #[serde(alias = "composer")]
     Composers,
     Arranger,

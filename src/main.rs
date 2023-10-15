@@ -64,7 +64,7 @@ fn make_nice(path: &Path, root: &Path) -> PathBuf {
     path.strip_prefix(root).unwrap_or(path).with_extension("")
 }
 
-fn print_errors(results: Results<Metadata, ValueError>) -> Metadata {
+fn print_errors<T>(results: Results<T, ValueError>) -> T {
     for err in results.errors {
         match err {
             ValueError::ExitRequested => {}
@@ -90,7 +90,7 @@ fn do_scan(library_config: LibraryConfig) {
         if let Ok(results) = get_metadata(&nice_path, &library_config, &mut config_cache) {
             println!("{}", nice_path.display());
             let metadata = print_errors(results);
-            for (field, value) in metadata.fields {
+            for (field, value) in metadata {
                 println!("\t{field}: {value}");
             }
         }
@@ -115,6 +115,7 @@ fn do_scan(library_config: LibraryConfig) {
                     changed += 1;
                 }
             }
+            print_errors(FinalMetadata::create(final_metadata));
             if !any {
                 eprintln!("{}", cformat!("<red>No tags found in file</>"));
                 failed += 1;
@@ -219,19 +220,14 @@ fn get_metadata(
 fn print_differences(name: &str, existing: &Metadata, incoming: &Metadata) -> bool {
     let mut any = false;
     let blank = MetadataValue::blank();
-    for key in existing
-        .fields
-        .keys()
-        .chain(incoming.fields.keys())
-        .unique()
-    {
+    for key in existing.keys().chain(incoming.keys()).unique() {
         match key {
             MetadataField::Builtin(BuiltinMetadataField::SimpleLyrics)
             | MetadataField::Builtin(BuiltinMetadataField::Art)
             | MetadataField::Custom(_) => {}
             _ => {
-                if let Some(new) = incoming.fields.get(key) {
-                    let current = existing.fields.get(key).unwrap_or(&blank);
+                if let Some(new) = incoming.get(key) {
+                    let current = existing.get(key).unwrap_or(&blank);
                     if current != new {
                         if !any {
                             any = true;

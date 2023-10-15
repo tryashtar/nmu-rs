@@ -70,12 +70,17 @@ pub enum ValueError {
         field: MetadataField,
         value: PendingValue,
     },
+    WrongFieldType {
+        field: MetadataField,
+        got: MetadataValue,
+        expected: &'static str,
+    },
 }
 fn inline_data<T>(item: &T) -> String
 where
     T: serde::Serialize,
 {
-    serde_json::to_string(item).unwrap_or(String::from("???"))
+    serde_json::to_string(item).unwrap_or_else(|_| String::from("???"))
 }
 impl std::fmt::Display for ValueError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -91,6 +96,13 @@ impl std::fmt::Display for ValueError {
                     "Modifier {} expected {}, but got {}",
                     mod_str, expected, got
                 )
+            }
+            ValueError::WrongFieldType {
+                field,
+                expected,
+                got,
+            } => {
+                write!(f, "Field {} expected {}, but got {}", field, expected, got)
             }
             ValueError::MissingField { modifier, field } => {
                 let mod_str = inline_data(&modifier);

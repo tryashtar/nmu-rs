@@ -13,7 +13,7 @@ pub fn get_metadata_flac(tag: &metaflac::Tag, config: &LibraryConfig) -> Metadat
         if let Block::VorbisComment(comment) = block {
             for field in BuiltinMetadataField::iter() {
                 if let Some(value) = get_flac(comment, &field, config) {
-                    metadata.fields.insert(field.into(), value);
+                    metadata.insert(field.into(), value);
                 }
             }
         }
@@ -24,7 +24,7 @@ pub fn get_metadata_id3(tag: &id3::Tag, config: &LibraryConfig) -> Metadata {
     let mut metadata = Metadata::new();
     for field in BuiltinMetadataField::iter() {
         if let Some(value) = get_id3(tag, &field, config) {
-            metadata.fields.insert(field.into(), value);
+            metadata.insert(field.into(), value);
         }
     }
     metadata
@@ -37,7 +37,7 @@ fn get_id3(
 ) -> Option<MetadataValue> {
     match field {
         BuiltinMetadataField::Album => convert_str(tag.album()),
-        BuiltinMetadataField::AlbumArtists => {
+        BuiltinMetadataField::AlbumArtist => {
             convert_list_str(tag.album_artist(), &config.artist_separator)
         }
         BuiltinMetadataField::Arranger => convert_str(tag.text_for_frame_id("TPE4")),
@@ -68,7 +68,7 @@ fn get_flac(
 ) -> Option<MetadataValue> {
     match field {
         BuiltinMetadataField::Album => convert_list(tag.album()),
-        BuiltinMetadataField::AlbumArtists => convert_list(tag.album_artist()),
+        BuiltinMetadataField::AlbumArtist => convert_list(tag.album_artist()),
         BuiltinMetadataField::Arranger => convert_list(tag.get("REMIXEDBY")),
         BuiltinMetadataField::Comment => convert_list(tag.get("COMMENT")),
         BuiltinMetadataField::Composers => convert_list(tag.get("COMPOSER")),

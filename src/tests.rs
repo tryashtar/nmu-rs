@@ -433,7 +433,6 @@ fn copy_field_resolution() {
     let resolved = pending.resolve(&path, &config, &mut HashMap::new());
     let result = resolved
         .result
-        .fields
         .get(&BuiltinMetadataField::Composers.into())
         .unwrap();
     assert!(matches!(result, MetadataValue::List(x) if x.as_slice() == ["item"]));
