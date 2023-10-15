@@ -3,14 +3,29 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use serde::{Deserialize, Serialize};
+use serde::{ser::SerializeTuple, Deserialize, Serialize};
 
 use crate::strategy::MusicItemType;
 
-#[derive(Serialize, Clone)]
+#[derive(Clone)]
 pub struct Range {
     pub start: i32,
     pub stop: i32,
+}
+impl Serialize for Range {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        if self.start == self.stop {
+            serializer.serialize_i32(self.stop)
+        } else {
+            let mut seq = serializer.serialize_tuple(2)?;
+            seq.serialize_element(&self.start)?;
+            seq.serialize_element(&self.stop)?;
+            seq.end()
+        }
+    }
 }
 impl<'de> Deserialize<'de> for Range {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
