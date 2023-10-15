@@ -231,23 +231,27 @@ impl fmt::Display for MetadataField {
     }
 }
 
+pub enum SetValue<T> {
+    Skip,
+    Set(T),
+}
 pub struct FinalMetadata {
-    pub title: Option<String>,
-    pub album: Option<String>,
-    pub performers: Vec<String>,
-    pub album_artist: Option<String>,
-    pub composers: Vec<String>,
-    pub arranger: Option<String>,
-    pub comment: Option<String>,
-    pub track: Option<u32>,
-    pub track_total: Option<u32>,
-    pub disc: Option<u32>,
-    pub disc_total: Option<u32>,
-    pub year: Option<u32>,
-    pub language: Option<String>,
-    pub genres: Vec<String>,
-    pub art: Vec<PathBuf>,
-    pub simple_lyrics: Option<String>,
+    pub title: SetValue<Option<String>>,
+    pub album: SetValue<Option<String>>,
+    pub performers: SetValue<Vec<String>>,
+    pub album_artist: SetValue<Option<String>>,
+    pub composers: SetValue<Vec<String>>,
+    pub arranger: SetValue<Option<String>>,
+    pub comment: SetValue<Option<String>>,
+    pub track: SetValue<Option<u32>>,
+    pub track_total: SetValue<Option<u32>>,
+    pub disc: SetValue<Option<u32>>,
+    pub disc_total: SetValue<Option<u32>>,
+    pub year: SetValue<Option<u32>>,
+    pub language: SetValue<Option<String>>,
+    pub genres: SetValue<Vec<String>>,
+    pub art: SetValue<Vec<PathBuf>>,
+    pub simple_lyrics: SetValue<Option<String>>,
 }
 impl FinalMetadata {
     pub fn create(mut metadata: Metadata) -> Results<FinalMetadata, ValueError> {
@@ -255,17 +259,17 @@ impl FinalMetadata {
         let mut convert_string = |field: BuiltinMetadataField| {
             let field = field.into();
             match metadata.remove(&field) {
-                None => None,
-                Some(MetadataValue::List(list)) if list.is_empty() => None,
+                None => SetValue::Skip,
+                Some(MetadataValue::List(list)) if list.is_empty() => SetValue::Set(None),
                 Some(value) => match value.as_string() {
-                    Some(val) => Some(val.to_owned()),
+                    Some(val) => SetValue::Set(Some(val.to_owned())),
                     None => {
                         errors.push(ValueError::WrongFieldType {
                             field,
                             got: value,
                             expected: "single string",
                         });
-                        None
+                        SetValue::Skip
                     }
                 },
             }
@@ -280,16 +284,16 @@ impl FinalMetadata {
         let mut convert_vec = |field: BuiltinMetadataField| {
             let field = field.into();
             match metadata.remove(&field) {
-                None => vec![],
+                None => SetValue::Skip,
                 Some(value) => match value {
-                    MetadataValue::List(list) => list,
+                    MetadataValue::List(list) => SetValue::Set(list),
                     MetadataValue::Number(_) => {
                         errors.push(ValueError::WrongFieldType {
                             field,
                             got: value,
                             expected: "list",
                         });
-                        vec![]
+                        SetValue::Skip
                     }
                 },
             }
@@ -297,24 +301,24 @@ impl FinalMetadata {
         let performers = convert_vec(BuiltinMetadataField::Performers);
         let composers = convert_vec(BuiltinMetadataField::Composers);
         let genres = convert_vec(BuiltinMetadataField::Genres);
-        let art = convert_vec(BuiltinMetadataField::Art)
-            .into_iter()
-            .map(PathBuf::from)
-            .collect();
+        let art = match convert_vec(BuiltinMetadataField::Art) {
+            SetValue::Skip => SetValue::Skip,
+            SetValue::Set(list) => SetValue::Set(list.into_iter().map(PathBuf::from).collect()),
+        };
         let mut convert_num = |field: BuiltinMetadataField| {
             let field = field.into();
             match metadata.remove(&field) {
-                None => None,
-                Some(MetadataValue::List(list)) if list.is_empty() => None,
+                None => SetValue::Skip,
+                Some(MetadataValue::List(list)) if list.is_empty() => SetValue::Set(None),
                 Some(value) => match value {
-                    MetadataValue::Number(num) => Some(num),
+                    MetadataValue::Number(num) => SetValue::Set(Some(num)),
                     MetadataValue::List(_) => {
                         errors.push(ValueError::WrongFieldType {
                             field,
                             got: value,
                             expected: "number",
                         });
-                        None
+                        SetValue::Skip
                     }
                 },
             }

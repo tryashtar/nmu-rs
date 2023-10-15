@@ -76,10 +76,65 @@ fn print_errors<T>(results: Results<T, ValueError>) -> T {
     results.result
 }
 
+fn add_to_song(
+    path: &Path,
+    metadata: Metadata,
+    config: &LibraryConfig,
+    progress: &mut WorkProgress,
+) {
+    let mut any = false;
+    match id3::Tag::read_from_path(path) {
+        Ok(id3) => {
+            any = true;
+            let existing_metadata = get_metadata_id3(&id3, config);
+            if print_differences("ID3 Tag", &existing_metadata, &metadata) {
+                progress.changed += 1;
+            }
+        }
+        Err(err) if matches!(err.kind, id3::ErrorKind::NoTag) => {}
+        Err(err) => {
+            if !any {
+                any = true;
+                progress.failed += 1;
+            }
+            eprintln!("{}", cformat!("<red>ID3 Tag error: {}</>", err));
+        }
+    }
+    match metaflac::Tag::read_from_path(path) {
+        Ok(flac) => {
+            any = true;
+            let existing_metadata = get_metadata_flac(&flac, config);
+            if print_differences("Flac Tag", &existing_metadata, &metadata) {
+                progress.changed += 1;
+            }
+        }
+        Err(err) if matches!(err.kind, metaflac::ErrorKind::InvalidInput) => {}
+        Err(err) => {
+            if !any {
+                any = true;
+                progress.failed += 1;
+            }
+            eprintln!("{}", cformat!("<red>Flac Tag error: {}</>", err));
+        }
+    }
+    print_errors(FinalMetadata::create(metadata));
+    if !any {
+        eprintln!("{}", cformat!("<red>No tags found in file</>"));
+        progress.failed += 1;
+    }
+}
+
+struct WorkProgress {
+    changed: u32,
+    failed: u32,
+}
+
 fn do_scan(library_config: LibraryConfig) {
     let mut config_cache: ConfigCache = HashMap::new();
-    let mut changed = 0;
-    let mut failed = 0;
+    let mut progress = WorkProgress {
+        changed: 0,
+        failed: 0,
+    };
     let ScanResults {
         songs: scan_songs,
         folders: scan_folders,
@@ -100,34 +155,15 @@ fn do_scan(library_config: LibraryConfig) {
         if let Ok(results) = get_metadata(&nice_path, &library_config, &mut config_cache) {
             println!("{}", nice_path.display());
             let final_metadata = print_errors(results);
-            let mut any = false;
-            if let Ok(id3) = id3::Tag::read_from_path(&song_path) {
-                any = true;
-                let existing_metadata = get_metadata_id3(&id3, &library_config);
-                if print_differences("ID3 Tag", &existing_metadata, &final_metadata) {
-                    changed += 1;
-                }
-            }
-            if let Ok(flac) = metaflac::Tag::read_from_path(&song_path) {
-                any = true;
-                let existing_metadata = get_metadata_flac(&flac, &library_config);
-                if print_differences("Flac Tag", &existing_metadata, &final_metadata) {
-                    changed += 1;
-                }
-            }
-            print_errors(FinalMetadata::create(final_metadata));
-            if !any {
-                eprintln!("{}", cformat!("<red>No tags found in file</>"));
-                failed += 1;
-            }
+            add_to_song(&song_path, final_metadata, &library_config, &mut progress);
         } else {
-            failed += 1;
+            progress.failed += 1;
         }
     }
-    if failed == 0 {
-        println!("Updated {changed}");
+    if progress.failed == 0 {
+        println!("Updated {}", progress.changed);
     } else {
-        println!("Updated {changed}, errored {failed}");
+        println!("Updated {}, errored {}", progress.changed, progress.failed);
     }
     if let Err(err) = library_config.date_cache.save() {
         eprintln!("{}", cformat!("<red>Error saving date cache:\n{}</>", err));
