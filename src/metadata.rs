@@ -134,6 +134,19 @@ impl From<MetadataValue> for PendingValue {
         PendingValue::Ready(value)
     }
 }
+impl fmt::Display for PendingValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ready(r) => r.fmt(f),
+            Self::RegexMatches { source, regex } => write!(f, "regex {} on {}", source, regex),
+            Self::CopyField {
+                field,
+                sources,
+                modify,
+            } => write!(f, "copy {} from {} sources", field, sources.len()),
+        }
+    }
+}
 
 #[derive(Deserialize, Serialize, PartialEq, Eq, Debug, Clone)]
 #[serde(untagged)]

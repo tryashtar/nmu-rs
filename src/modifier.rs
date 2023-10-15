@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     library_config::LibraryConfig,
     metadata::{MetadataField, MetadataValue, PendingValue},
-    strategy::ValueGetter,
+    strategy::{ValueGetter, LocalItemSelector},
     util::{OutOfBoundsDecision, Range},
 };
 
@@ -62,7 +62,9 @@ pub enum ValueError {
         modifier: Rc<ValueModifier>,
         field: MetadataField,
     },
-    ItemNotFound,
+    ItemNotFound {
+        selector: Rc<LocalItemSelector>,
+    },
     ExitRequested,
 }
 

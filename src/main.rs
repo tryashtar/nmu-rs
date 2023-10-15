@@ -1,4 +1,4 @@
-use colored::Colorize;
+use color_print::cformat;
 use file_stuff::ConfigError;
 use itertools::Itertools;
 use std::collections::{BTreeSet, HashMap};
@@ -37,7 +37,7 @@ fn main() {
         Err(YamlError::Io(error))
             if error.kind() == ErrorKind::NotFound && library_argument.is_none() =>
         {
-            eprintln!("{}", error.to_string().red());
+            eprintln!("{}", cformat!("<red>{}</>", error.to_string()));
             if let Ok(dir) = std::env::current_dir() {
                 eprintln!(
                     "Provide the path to a library.yaml or add one to '{}'",
@@ -46,8 +46,10 @@ fn main() {
             }
         }
         Err(error) => {
-            eprintln!("{}", "Error loading library config:".red());
-            eprintln!("{}", error.to_string().red());
+            eprintln!(
+                "{}",
+                cformat!("<red>Error loading library config:\n{}</>", error)
+            );
         }
         Ok(raw_config) => {
             let library_config_folder = library_config_path.parent().unwrap_or(Path::new(""));
@@ -62,6 +64,13 @@ fn make_nice(path: &Path, root: &Path) -> PathBuf {
     path.strip_prefix(root).unwrap_or(path).with_extension("")
 }
 
+fn inline_data<T>(item: &T) -> String
+where
+    T: serde::Serialize,
+{
+    serde_json::to_string(item).unwrap_or(String::from("???"))
+}
+
 fn print_errors(results: MetadataResults) -> Metadata {
     let MetadataResults(metadata, errors) = results;
     for err in errors {
@@ -70,14 +79,36 @@ fn print_errors(results: MetadataResults) -> Metadata {
                 modifier,
                 got,
                 expected,
-            } => eprintln!("{} {}", "Modifier expected".red(), expected.red()),
-            ValueError::MissingField { modifier, field } => eprintln!(
-                "{} {} {}",
-                "Field".red(),
-                field.to_string().red(),
-                "had no value".red()
-            ),
-            ValueError::ItemNotFound => eprintln!("{}", "No item was found".red()),
+            } => {
+                let mod_str = inline_data(&modifier);
+                eprintln!(
+                    "{}",
+                    cformat!(
+                        "<yellow>Modifier {} expected {}, but got {}</>",
+                        mod_str,
+                        expected,
+                        got
+                    )
+                );
+            }
+            ValueError::MissingField { modifier, field } => {
+                let mod_str = inline_data(&modifier);
+                eprintln!(
+                    "{}",
+                    cformat!(
+                        "<yellow>Modifier {} tried to modify {}, but no value was found",
+                        mod_str,
+                        field,
+                    )
+                );
+            }
+            ValueError::ItemNotFound { selector } => {
+                let sel_str = inline_data(&selector);
+                eprintln!(
+                    "{}",
+                    cformat!("<yellow>Selector {} didn't find anything", sel_str)
+                );
+            }
             ValueError::ExitRequested => {}
         }
     }
@@ -124,7 +155,7 @@ fn do_scan(library_config: LibraryConfig) {
                 }
             }
             if !any {
-                eprintln!("{}", "No tags found in file".red());
+                eprintln!("{}", cformat!("<red>No tags found in file</>"));
                 failed += 1;
             }
         } else {
@@ -137,13 +168,11 @@ fn do_scan(library_config: LibraryConfig) {
         println!("Updated {changed}, errored {failed}");
     }
     if let Err(err) = library_config.date_cache.save() {
-        eprintln!("{}", "Error saving date cache:".red());
-        eprintln!("{}", err.to_string().red());
+        eprintln!("{}", cformat!("<red>Error saving date cache:\n{}</>", err));
     }
     if let Some(repo) = library_config.art_repo {
         if let Err(err) = repo.used_templates.save() {
-            eprintln!("{}", "Error saving art cache:".red());
-            eprintln!("{}", err.to_string().red());
+            eprintln!("{}", cformat!("<red>Error saving art cache:\n{}</>", err));
         }
     }
 }
@@ -165,11 +194,13 @@ fn load_new_config(
         Err(ref error) if is_not_found(error) => {}
         Err(ref error) => {
             eprintln!(
-                "{} {}",
-                "Error loading config:".red(),
-                full_path.display().to_string().red()
+                "{}",
+                cformat!(
+                    "<red>Error loading config: {}\n{}</>",
+                    full_path.display(),
+                    error
+                )
             );
-            eprintln!("{}", error.to_string().red());
         }
     }
     result.map_err(Rc::new)

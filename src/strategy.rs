@@ -378,11 +378,22 @@ pub enum ValueGetter {
         modify: Option<Rc<ValueModifier>>,
     },
     From {
-        from: LocalItemSelector,
+        from: Rc<LocalItemSelector>,
         #[serde(default = "default_value")]
         value: FieldValueGetter,
+        #[serde(default = "default_missing")]
+        if_missing: WarnBehavior,
         modify: Option<Rc<ValueModifier>>,
     },
+}
+#[derive(Deserialize, Serialize, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+pub enum WarnBehavior {
+    Warn,
+    Exit,
+}
+fn default_missing() -> WarnBehavior {
+    WarnBehavior::Warn
 }
 impl ValueGetter {
     pub fn get(&self, path: &Path, config: &LibraryConfig) -> Result<PendingValue, ValueError> {
@@ -391,11 +402,17 @@ impl ValueGetter {
             Self::From {
                 from,
                 value,
+                if_missing,
                 modify,
             } => {
                 let items = from.get(path, config);
                 if items.is_empty() {
-                    return Err(ValueError::ItemNotFound);
+                    return match if_missing {
+                        WarnBehavior::Warn => Err(ValueError::ItemNotFound {
+                            selector: from.clone(),
+                        }),
+                        WarnBehavior::Exit => Err(ValueError::ExitRequested),
+                    };
                 }
                 let result = MetadataValue::List(
                     items
