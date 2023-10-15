@@ -242,21 +242,30 @@ mod deserialize {
 fn range_int_first() {
     let range: Range = 0.into();
     let values = ['a', 'b', 'c', 'd'];
-    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit).unwrap(), ['a'])
+    assert_eq!(
+        range.slice(&values, OutOfBoundsDecision::Exit).unwrap(),
+        ['a']
+    )
 }
 
 #[test]
 fn range_int_last() {
     let range: Range = 3.into();
     let values = ['a', 'b', 'c', 'd'];
-    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit).unwrap(), ['d'])
+    assert_eq!(
+        range.slice(&values, OutOfBoundsDecision::Exit).unwrap(),
+        ['d']
+    )
 }
 
 #[test]
 fn range_int_from_back() {
     let range: Range = (-2).into();
     let values = ['a', 'b', 'c', 'd'];
-    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit).unwrap(), ['c'])
+    assert_eq!(
+        range.slice(&values, OutOfBoundsDecision::Exit).unwrap(),
+        ['c']
+    )
 }
 
 #[test]
@@ -294,14 +303,20 @@ fn range_mult_backwards() {
 fn range_mult_some() {
     let range: Range = Range::new(1, 2);
     let values = ['a', 'b', 'c', 'd'];
-    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit).unwrap(), ['b', 'c'])
+    assert_eq!(
+        range.slice(&values, OutOfBoundsDecision::Exit).unwrap(),
+        ['b', 'c']
+    )
 }
 
 #[test]
 fn range_mult_clamp() {
     let range: Range = Range::new(2, 5);
     let values = ['a', 'b', 'c', 'd'];
-    assert_eq!(range.slice(&values, OutOfBoundsDecision::Clamp).unwrap(), ['c', 'd'])
+    assert_eq!(
+        range.slice(&values, OutOfBoundsDecision::Clamp).unwrap(),
+        ['c', 'd']
+    )
 }
 
 #[test]
@@ -417,6 +432,7 @@ fn copy_field_resolution() {
     );
     let resolved = pending.resolve(&path, &config, &mut HashMap::new());
     let result = resolved
+        .result
         .fields
         .get(&BuiltinMetadataField::Composers.into())
         .unwrap();
@@ -445,11 +461,13 @@ fn copy_field_loop() {
         },
     );
     let resolved = pending.resolve(&path, &config, &mut HashMap::new());
-    let result = resolved
-        .fields
-        .get(&BuiltinMetadataField::Composers.into())
-        .unwrap();
-    assert!(matches!(result, MetadataValue::List(x) if x.is_empty()));
+    assert!(matches!(
+        resolved.errors.as_slice(),
+        [
+            ValueError::ResolutionFailed { .. },
+            ValueError::ResolutionFailed { .. }
+        ]
+    ));
 }
 
 #[test]

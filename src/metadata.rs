@@ -11,8 +11,12 @@ use serde::{Deserialize, Serialize};
 use strum::{Display, EnumIter};
 
 use crate::{
-    file_stuff::ConfigError, get_metadata, library_config::LibraryConfig, modifier::ValueModifier,
-    util::ItemPath, ConfigCache,
+    file_stuff::ConfigError,
+    get_metadata,
+    library_config::LibraryConfig,
+    modifier::{ValueError, ValueModifier},
+    util::ItemPath,
+    ConfigCache, Results,
 };
 
 pub struct Metadata {
@@ -28,10 +32,58 @@ impl Metadata {
 pub struct PendingMetadata {
     pub fields: HashMap<MetadataField, PendingValue>,
 }
+type MetadataCache = HashMap<PathBuf, Result<Metadata, Rc<ConfigError>>>;
 impl PendingMetadata {
     pub fn new() -> Self {
         Self {
             fields: HashMap::new(),
+        }
+    }
+    fn try_resolve_value(
+        value: &mut PendingValue,
+        nice_path: &Path,
+        metadata: &Metadata,
+        metadata_cache: &mut MetadataCache,
+        config_cache: &mut ConfigCache,
+        library_config: &LibraryConfig,
+    ) -> Option<MetadataValue> {
+        match value {
+            PendingValue::Ready(ready) => Some(ready.clone()),
+            PendingValue::RegexMatches { .. } => None,
+            PendingValue::CopyField {
+                field: from,
+                sources,
+                modify,
+            } => {
+                let mut results = sources.iter().filter_map(|source| {
+                    let source_metadata = {
+                        if nice_path == source.deref() {
+                            Some(metadata)
+                        } else {
+                            metadata_cache
+                                .entry(source.clone().into())
+                                .or_insert_with(|| {
+                                    get_metadata(source, library_config, config_cache)
+                                        .map(|x| x.result)
+                                })
+                                .as_ref()
+                                .ok()
+                        }
+                    };
+                    source_metadata.and_then(|meta| {
+                        meta.fields.get(from).cloned().and_then(|x| match modify {
+                            None => Some(x.into()),
+                            Some(modify) => modify
+                                .modify(x.into(), source.as_ref(), library_config)
+                                .ok(),
+                        })
+                    })
+                });
+                match results.nth(0) {
+                    Some(PendingValue::Ready(ready)) => Some(ready),
+                    _ => None,
+                }
+            }
         }
     }
     pub fn resolve(
@@ -39,69 +91,39 @@ impl PendingMetadata {
         nice_path: &Path,
         library_config: &LibraryConfig,
         config_cache: &mut ConfigCache,
-    ) -> Metadata {
+    ) -> Results<Metadata, ValueError> {
         let mut metadata = Metadata::new();
-        let mut metadata_cache: HashMap<PathBuf, Result<Metadata, Rc<ConfigError>>> =
-            HashMap::new();
+        let mut metadata_cache: MetadataCache = HashMap::new();
         loop {
             let mut added_any = false;
             self.fields.retain(|field, value| {
-                let processed = match value {
-                    PendingValue::Ready(ready) => {
-                        metadata.fields.insert(field.clone(), ready.clone());
-                        true
-                    }
-                    PendingValue::RegexMatches { .. } => false,
-                    PendingValue::CopyField {
-                        field: from,
-                        sources,
-                        modify,
-                    } => {
-                        let mut results = sources.iter().filter_map(|source| {
-                            let source_metadata = {
-                                if nice_path == source.deref() {
-                                    Some(&metadata)
-                                } else {
-                                    metadata_cache
-                                        .entry(source.clone().into())
-                                        .or_insert_with(|| {
-                                            get_metadata(source, library_config, config_cache)
-                                                .map(|x| x.0)
-                                        })
-                                        .as_ref()
-                                        .ok()
-                                }
-                            };
-                            source_metadata.and_then(|meta| {
-                                meta.fields.get(from).cloned().and_then(|x| match modify {
-                                    None => Some(x.into()),
-                                    Some(modify) => modify
-                                        .modify(x.into(), source.as_ref(), library_config)
-                                        .ok(),
-                                })
-                            })
-                        });
-                        match results.nth(0) {
-                            Some(PendingValue::Ready(ready)) => {
-                                metadata.fields.insert(field.clone(), ready);
-                                true
-                            }
-                            _ => false,
-                        }
-                    }
-                };
-                added_any |= processed;
-                !processed
+                if let Some(resolved) = Self::try_resolve_value(
+                    value,
+                    nice_path,
+                    &metadata,
+                    &mut metadata_cache,
+                    config_cache,
+                    library_config,
+                ) {
+                    metadata.fields.insert(field.clone(), resolved);
+                    added_any = true;
+                    return false;
+                }
+                true
             });
             if !added_any {
                 break;
             }
         }
+        let mut errors = vec![];
         // remaining items that couldn't be resolved
-        for (key, _) in self.fields {
-            metadata.fields.insert(key, MetadataValue::blank());
+        for (field, value) in self.fields {
+            errors.push(ValueError::ResolutionFailed { field, value })
         }
-        metadata
+        Results {
+            result: metadata,
+            errors,
+        }
     }
 }
 impl From<Metadata> for PendingMetadata {
@@ -139,11 +161,9 @@ impl fmt::Display for PendingValue {
         match self {
             Self::Ready(r) => r.fmt(f),
             Self::RegexMatches { source, regex } => write!(f, "regex {} on {}", source, regex),
-            Self::CopyField {
-                field,
-                sources,
-                modify,
-            } => write!(f, "copy {} from {} sources", field, sources.len()),
+            Self::CopyField { field, sources, .. } => {
+                write!(f, "copy {} from {} sources", field, sources.len())
+            }
         }
     }
 }

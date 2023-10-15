@@ -66,6 +66,10 @@ pub enum ValueError {
         selector: Rc<LocalItemSelector>,
     },
     ExitRequested,
+    ResolutionFailed {
+        field: MetadataField,
+        value: PendingValue,
+    },
 }
 
 impl ValueModifier {

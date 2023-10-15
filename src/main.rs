@@ -71,9 +71,8 @@ where
     serde_json::to_string(item).unwrap_or(String::from("???"))
 }
 
-fn print_errors(results: MetadataResults) -> Metadata {
-    let MetadataResults(metadata, errors) = results;
-    for err in errors {
+fn print_errors(results: Results<Metadata, ValueError>) -> Metadata {
+    for err in results.errors {
         match err {
             ValueError::UnexpectedType {
                 modifier,
@@ -96,7 +95,7 @@ fn print_errors(results: MetadataResults) -> Metadata {
                 eprintln!(
                     "{}",
                     cformat!(
-                        "<yellow>Modifier {} tried to modify {}, but no value was found",
+                        "<yellow>Modifier {} tried to modify {}, but no value was found</>",
                         mod_str,
                         field,
                     )
@@ -106,13 +105,23 @@ fn print_errors(results: MetadataResults) -> Metadata {
                 let sel_str = inline_data(&selector);
                 eprintln!(
                     "{}",
-                    cformat!("<yellow>Selector {} didn't find anything", sel_str)
+                    cformat!("<yellow>Selector {} didn't find anything</>", sel_str)
+                );
+            }
+            ValueError::ResolutionFailed { field, value } => {
+                eprintln!(
+                    "{}",
+                    cformat!(
+                        "<yellow>{} value {} couldn't be resolved</>",
+                        field,
+                        value
+                    )
                 );
             }
             ValueError::ExitRequested => {}
         }
     }
-    metadata
+    results.result
 }
 
 fn do_scan(library_config: LibraryConfig) {
@@ -206,13 +215,16 @@ fn load_new_config(
     result.map_err(Rc::new)
 }
 
-struct MetadataResults(Metadata, Vec<ValueError>);
+pub struct Results<T, E> {
+    result: T,
+    errors: Vec<E>,
+}
 
 fn get_metadata(
     nice_path: &ItemPath,
     library_config: &LibraryConfig,
     config_cache: &mut ConfigCache,
-) -> Result<MetadataResults, Rc<ConfigError>> {
+) -> Result<Results<Metadata, ValueError>, Rc<ConfigError>> {
     let mut metadata = PendingMetadata::new();
     let mut errors = vec![];
     for ancestor in nice_path
@@ -244,10 +256,12 @@ fn get_metadata(
             }
         }
     }
-    Ok(MetadataResults(
-        metadata.resolve(nice_path, library_config, config_cache),
+    let mut resolved = metadata.resolve(nice_path, library_config, config_cache);
+    errors.append(&mut resolved.errors);
+    Ok(Results {
+        result: resolved.result,
         errors,
-    ))
+    })
 }
 
 fn print_differences(name: &str, existing: &Metadata, incoming: &Metadata) -> bool {
