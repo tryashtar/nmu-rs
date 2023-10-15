@@ -64,61 +64,13 @@ fn make_nice(path: &Path, root: &Path) -> PathBuf {
     path.strip_prefix(root).unwrap_or(path).with_extension("")
 }
 
-fn inline_data<T>(item: &T) -> String
-where
-    T: serde::Serialize,
-{
-    serde_json::to_string(item).unwrap_or(String::from("???"))
-}
-
 fn print_errors(results: Results<Metadata, ValueError>) -> Metadata {
     for err in results.errors {
         match err {
-            ValueError::UnexpectedType {
-                modifier,
-                got,
-                expected,
-            } => {
-                let mod_str = inline_data(&modifier);
-                eprintln!(
-                    "{}",
-                    cformat!(
-                        "<yellow>Modifier {} expected {}, but got {}</>",
-                        mod_str,
-                        expected,
-                        got
-                    )
-                );
-            }
-            ValueError::MissingField { modifier, field } => {
-                let mod_str = inline_data(&modifier);
-                eprintln!(
-                    "{}",
-                    cformat!(
-                        "<yellow>Modifier {} tried to modify {}, but no value was found</>",
-                        mod_str,
-                        field,
-                    )
-                );
-            }
-            ValueError::ItemNotFound { selector } => {
-                let sel_str = inline_data(&selector);
-                eprintln!(
-                    "{}",
-                    cformat!("<yellow>Selector {} didn't find anything</>", sel_str)
-                );
-            }
-            ValueError::ResolutionFailed { field, value } => {
-                eprintln!(
-                    "{}",
-                    cformat!(
-                        "<yellow>{} value {} couldn't be resolved</>",
-                        field,
-                        value
-                    )
-                );
-            }
             ValueError::ExitRequested => {}
+            other => {
+                eprintln!("{}", cformat!("<yellow>{}</>", other));
+            }
         }
     }
     results.result

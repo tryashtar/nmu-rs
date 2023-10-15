@@ -71,6 +71,48 @@ pub enum ValueError {
         value: PendingValue,
     },
 }
+fn inline_data<T>(item: &T) -> String
+where
+    T: serde::Serialize,
+{
+    serde_json::to_string(item).unwrap_or(String::from("???"))
+}
+impl std::fmt::Display for ValueError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ValueError::UnexpectedType {
+                modifier,
+                got,
+                expected,
+            } => {
+                let mod_str = inline_data(&modifier);
+                write!(
+                    f,
+                    "Modifier {} expected {}, but got {}",
+                    mod_str, expected, got
+                )
+            }
+            ValueError::MissingField { modifier, field } => {
+                let mod_str = inline_data(&modifier);
+                write!(
+                    f,
+                    "Modifier {} tried to modify {}, but no value was found",
+                    mod_str, field,
+                )
+            }
+            ValueError::ItemNotFound { selector } => {
+                let sel_str = inline_data(&selector);
+                write!(f, "Selector {} didn't find anything", sel_str)
+            }
+            ValueError::ResolutionFailed { field, value } => {
+                write!(f, "{} value {} couldn't be resolved", field, value)
+            }
+            ValueError::ExitRequested => {
+                write!(f, "Conditions not met, skipping")
+            }
+        }
+    }
+}
 
 impl ValueModifier {
     fn take(
