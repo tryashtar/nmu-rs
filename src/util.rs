@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     ops::Deref,
     path::{Path, PathBuf},
 };
@@ -213,4 +214,66 @@ impl Deref for ItemPath {
             Self::Song(path) | Self::Folder(path) => path,
         }
     }
+}
+
+pub fn string_or_seq_string<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::de::Deserializer<'de>,
+{
+    struct StringOrVec(std::marker::PhantomData<Vec<String>>);
+
+    impl<'de> serde::de::Visitor<'de> for StringOrVec {
+        type Value = Vec<String>;
+
+        fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
+            formatter.write_str("string or list of strings")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(vec![value.to_owned()])
+        }
+
+        fn visit_seq<S>(self, visitor: S) -> Result<Self::Value, S::Error>
+        where
+            S: serde::de::SeqAccess<'de>,
+        {
+            Deserialize::deserialize(serde::de::value::SeqAccessDeserializer::new(visitor))
+        }
+    }
+
+    deserializer.deserialize_any(StringOrVec(std::marker::PhantomData))
+}
+
+pub fn path_or_seq_path<'de, D>(deserializer: D) -> Result<BTreeSet<PathBuf>, D::Error>
+where
+    D: serde::de::Deserializer<'de>,
+{
+    struct PathOrList(std::marker::PhantomData<BTreeSet<PathBuf>>);
+
+    impl<'de> serde::de::Visitor<'de> for PathOrList {
+        type Value = BTreeSet<PathBuf>;
+
+        fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
+            formatter.write_str("string or list of strings")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(BTreeSet::from([PathBuf::from(value)]))
+        }
+
+        fn visit_seq<S>(self, visitor: S) -> Result<Self::Value, S::Error>
+        where
+            S: serde::de::SeqAccess<'de>,
+        {
+            Deserialize::deserialize(serde::de::value::SeqAccessDeserializer::new(visitor))
+        }
+    }
+
+    deserializer.deserialize_any(PathOrList(std::marker::PhantomData))
 }

@@ -148,43 +148,25 @@ impl fmt::Display for PendingValue {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(untagged)]
 pub enum MetadataValue {
     Number(u32),
-    #[serde(deserialize_with = "string_or_seq_string")]
+    #[serde(deserialize_with = "crate::util::string_or_seq_string")]
     List(Vec<String>),
 }
 pub static BLANK_VALUE: MetadataValue = MetadataValue::List(vec![]);
-fn string_or_seq_string<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
-where
-    D: serde::de::Deserializer<'de>,
-{
-    struct StringOrVec(std::marker::PhantomData<Vec<String>>);
-
-    impl<'de> serde::de::Visitor<'de> for StringOrVec {
-        type Value = Vec<String>;
-
-        fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
-            formatter.write_str("string or list of strings")
-        }
-
-        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            Ok(vec![value.to_owned()])
-        }
-
-        fn visit_seq<S>(self, visitor: S) -> Result<Self::Value, S::Error>
-        where
-            S: serde::de::SeqAccess<'de>,
-        {
-            Deserialize::deserialize(serde::de::value::SeqAccessDeserializer::new(visitor))
+impl Serialize for MetadataValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            MetadataValue::Number(num) => serializer.serialize_u32(*num),
+            MetadataValue::List(list) if list.len() == 1 => serializer.serialize_str(&list[0]),
+            MetadataValue::List(list) => list.serialize(serializer),
         }
     }
-
-    deserializer.deserialize_any(StringOrVec(std::marker::PhantomData))
 }
 impl MetadataValue {
     pub fn blank() -> MetadataValue {
@@ -462,7 +444,20 @@ impl From<FinalMetadata> for Metadata {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug, Display, EnumIter, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+#[derive(
+    Deserialize,
+    Serialize,
+    Debug,
+    Display,
+    EnumIter,
+    Hash,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Clone,
+    Copy,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum BuiltinMetadataField {
     Title,

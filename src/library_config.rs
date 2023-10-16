@@ -58,31 +58,37 @@ pub enum LibraryReport {
         path: PathBuf,
         key: MetadataField,
         include_blanks: bool,
-        map: BTreeMap<Option<String>, BTreeSet<PathBuf>>,
+        map: BTreeMap<Option<String>, PathList>,
     },
     MergedFields {
         path: PathBuf,
         key: MetadataField,
         include_blanks: bool,
-        map: BTreeMap<Option<String>, BTreeSet<PathBuf>>,
+        map: BTreeMap<Option<String>, PathList>,
     },
     ItemData {
         path: PathBuf,
         values: FieldSelector,
         embedded: bool,
         include_blanks: bool,
-        map: BTreeMap<PathBuf, BTreeMap<MetadataField, ReportValue>>,
+        map: BTreeMap<PathBuf, BTreeMap<MetadataField, Option<MetadataValue>>>,
     },
 }
 
-#[derive(Deserialize, Serialize)]
-#[serde(untagged)]
-pub enum ReportValue {
-    String(String),
-    List(Vec<String>),
-    Number(u32),
-    None,
+#[derive(Deserialize, Default)]
+pub struct PathList(#[serde(deserialize_with = "crate::util::path_or_seq_path")] BTreeSet<PathBuf>);
+impl Serialize for PathList {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self.0.first() {
+            Some(item) if self.0.len() == 1 => item.serialize(serializer),
+            _ => self.0.serialize(serializer)
+        }
+    }
 }
+
 impl LibraryReport {
     pub fn save(&self) -> Result<(), YamlError> {
         match self {
@@ -169,14 +175,6 @@ impl LibraryReport {
             MetadataValue::List(l) => l.is_empty(),
         }
     }
-    fn to_value(value: &MetadataValue) -> ReportValue {
-        match value {
-            MetadataValue::Number(n) => ReportValue::Number(*n),
-            MetadataValue::List(l) if l.is_empty() => ReportValue::None,
-            MetadataValue::List(l) if l.len() == 1 => ReportValue::String(l[0].clone()),
-            MetadataValue::List(l) => ReportValue::List(l.clone()),
-        }
-    }
     pub fn record(
         &mut self,
         item_path: &Path,
@@ -191,10 +189,13 @@ impl LibraryReport {
                 map,
                 ..
             } => {
+                for list in map.values_mut() {
+                    list.0.remove(item_path);
+                }
                 let value = metadata.get(key).unwrap_or(&BLANK_VALUE);
                 if *include_blanks || !Self::is_blank(value) {
                     let list = map.entry(Self::val_to_str(value, sep)).or_default();
-                    list.insert(item_path.to_owned());
+                    list.0.insert(item_path.to_owned());
                 }
             }
             Self::SplitFields {
@@ -206,11 +207,11 @@ impl LibraryReport {
                 let value = metadata.get(key).unwrap_or(&BLANK_VALUE);
                 if *include_blanks && Self::is_blank(value) {
                     let list = map.entry(None).or_default();
-                    list.insert(item_path.to_owned());
+                    list.0.insert(item_path.to_owned());
                 } else {
                     for entry in Self::val_to_strs(value) {
                         let list = map.entry(Some(entry)).or_default();
-                        list.insert(item_path.to_owned());
+                        list.0.insert(item_path.to_owned());
                     }
                 }
             }
@@ -231,7 +232,13 @@ impl LibraryReport {
                 } {
                     for (field, value) in save {
                         if values.is_match(field) && (*include_blanks || !Self::is_blank(value)) {
-                            results.insert(field.clone(), Self::to_value(value));
+                            results.insert(
+                                field.clone(),
+                                match value {
+                                    MetadataValue::List(list) if list.is_empty() => None,
+                                    _ => Some(value.clone()),
+                                },
+                            );
                         }
                     }
                     if !results.is_empty() {
