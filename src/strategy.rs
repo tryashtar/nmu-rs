@@ -401,7 +401,7 @@ where
     deserializer.deserialize_str(Visitor)
 }
 impl FieldSelector {
-    fn is_match(&self, field: &MetadataField) -> bool {
+    pub fn is_match(&self, field: &MetadataField) -> bool {
         match self {
             Self::All => true,
             Self::Single(single) => field == single,

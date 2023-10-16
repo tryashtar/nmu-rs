@@ -69,7 +69,7 @@ fn print_errors<T>(results: Results<T, ValueError>) -> T {
         match err {
             ValueError::ExitRequested => {}
             other => {
-                eprintln!("{}", cformat!("<yellow>{}</>", other));
+                eprintln!("{}", cformat!("\t<yellow>{}</>", other));
             }
         }
     }
@@ -77,19 +77,22 @@ fn print_errors<T>(results: Results<T, ValueError>) -> T {
 }
 
 fn add_to_song(
-    path: &Path,
+    file_path: &Path,
+    nice_path: &Path,
     metadata: Metadata,
-    config: &LibraryConfig,
+    config: &mut LibraryConfig,
     progress: &mut WorkProgress,
 ) {
     let mut any = false;
-    match id3::Tag::read_from_path(path) {
+    let mut existing_metadata: Option<Metadata> = None;
+    match id3::Tag::read_from_path(file_path) {
         Ok(id3) => {
             any = true;
-            let existing_metadata = get_metadata_id3(&id3, config).into();
-            if print_differences("ID3 Tag", &existing_metadata, &metadata) {
+            let existing = get_metadata_id3(&id3, config).into();
+            if print_differences("ID3 Tag", &existing, &metadata) {
                 progress.changed += 1;
             }
+            existing_metadata = Some(existing);
         }
         Err(err) if matches!(err.kind, id3::ErrorKind::NoTag) => {}
         Err(err) => {
@@ -97,16 +100,17 @@ fn add_to_song(
                 any = true;
                 progress.failed += 1;
             }
-            eprintln!("{}", cformat!("<red>ID3 Tag error: {}</>", err));
+            eprintln!("{}", cformat!("\t<red>ID3 Tag error: {}</>", err));
         }
     }
-    match metaflac::Tag::read_from_path(path) {
+    match metaflac::Tag::read_from_path(file_path) {
         Ok(flac) => {
             any = true;
-            let existing_metadata = get_metadata_flac(&flac, config).into();
-            if print_differences("Flac Tag", &existing_metadata, &metadata) {
+            let existing = get_metadata_flac(&flac, config).into();
+            if print_differences("Flac Tag", &existing, &metadata) {
                 progress.changed += 1;
             }
+            existing_metadata = Some(existing);
         }
         Err(err) if matches!(err.kind, metaflac::ErrorKind::InvalidInput) => {}
         Err(err) => {
@@ -114,12 +118,15 @@ fn add_to_song(
                 any = true;
                 progress.failed += 1;
             }
-            eprintln!("{}", cformat!("<red>Flac Tag error: {}</>", err));
+            eprintln!("{}", cformat!("\t<red>Flac Tag error: {}</>", err));
         }
+    }
+    for report in config.reports.iter_mut() {
+        report.record(nice_path, &metadata, existing_metadata.as_ref(), &config.artist_separator);
     }
     print_errors(FinalMetadata::create(metadata));
     if !any {
-        eprintln!("{}", cformat!("<red>No tags found in file</>"));
+        eprintln!("{}", cformat!("\t<red>No tags found in file</>"));
         progress.failed += 1;
     }
 }
@@ -129,7 +136,7 @@ struct WorkProgress {
     failed: u32,
 }
 
-fn do_scan(library_config: LibraryConfig) {
+fn do_scan(mut library_config: LibraryConfig) {
     let mut config_cache: ConfigCache = HashMap::new();
     let mut progress = WorkProgress {
         changed: 0,
@@ -155,7 +162,13 @@ fn do_scan(library_config: LibraryConfig) {
         if let Ok(results) = get_metadata(&nice_path, &library_config, &mut config_cache) {
             println!("{}", nice_path.display());
             let final_metadata = print_errors(results);
-            add_to_song(&song_path, final_metadata, &library_config, &mut progress);
+            add_to_song(
+                &song_path,
+                &nice_path,
+                final_metadata,
+                &mut library_config,
+                &mut progress,
+            );
         } else {
             progress.failed += 1;
         }
@@ -171,6 +184,11 @@ fn do_scan(library_config: LibraryConfig) {
     if let Some(repo) = library_config.art_repo {
         if let Err(err) = repo.used_templates.save() {
             eprintln!("{}", cformat!("<red>Error saving art cache:\n{}</>", err));
+        }
+    }
+    for report in library_config.reports {
+        if let Err(err) = report.save() {
+            eprintln!("{}", cformat!("<red>Error saving report:\n{}</>", err));
         }
     }
 }
@@ -255,7 +273,6 @@ fn get_metadata(
 
 fn print_differences(name: &str, existing: &Metadata, incoming: &Metadata) -> bool {
     let mut any = false;
-    let blank = MetadataValue::blank();
     for key in existing.keys().chain(incoming.keys()).unique() {
         match key {
             MetadataField::Builtin(BuiltinMetadataField::SimpleLyrics)
@@ -263,7 +280,7 @@ fn print_differences(name: &str, existing: &Metadata, incoming: &Metadata) -> bo
             | MetadataField::Custom(_) => {}
             _ => {
                 if let Some(new) = incoming.get(key) {
-                    let current = existing.get(key).unwrap_or(&blank);
+                    let current = existing.get(key).unwrap_or(&BLANK_VALUE);
                     if current != new {
                         if !any {
                             any = true;

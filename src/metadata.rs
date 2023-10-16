@@ -70,7 +70,7 @@ impl PendingMetadata {
                         })
                     })
                 });
-                match results.nth(0) {
+                match results.next() {
                     Some(PendingValue::Ready(ready)) => Some(ready),
                     _ => None,
                 }
@@ -148,13 +148,14 @@ impl fmt::Display for PendingValue {
     }
 }
 
-#[derive(Deserialize, Serialize, PartialEq, Eq, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(untagged)]
 pub enum MetadataValue {
     Number(u32),
     #[serde(deserialize_with = "string_or_seq_string")]
     List(Vec<String>),
 }
+pub static BLANK_VALUE: MetadataValue = MetadataValue::List(vec![]);
 fn string_or_seq_string<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: serde::de::Deserializer<'de>,
@@ -228,7 +229,7 @@ impl fmt::Display for MetadataValue {
     }
 }
 
-#[derive(Deserialize, Serialize, Eq, Hash, PartialEq, Debug, Clone)]
+#[derive(Deserialize, Serialize, Hash, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(untagged)]
 pub enum MetadataField {
     Builtin(BuiltinMetadataField),
@@ -461,14 +462,14 @@ impl From<FinalMetadata> for Metadata {
     }
 }
 
-#[derive(Deserialize, Serialize, Eq, Hash, PartialEq, Debug, Display, EnumIter, Clone, Copy)]
+#[derive(Deserialize, Serialize, Debug, Display, EnumIter, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum BuiltinMetadataField {
     Title,
     Album,
     #[serde(alias = "performer")]
     Performers,
-    #[serde(alias = "album artist")]
+    #[serde(rename = "album artist")]
     AlbumArtist,
     #[serde(alias = "composer")]
     Composers,

@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use path_absolutize::Absolutize;
-use serde::Deserialize;
-use std::collections::{HashMap, HashSet};
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
@@ -9,14 +9,15 @@ use std::rc::Rc;
 use std::time::SystemTime;
 use thiserror::Error;
 
-use crate::file_stuff::{self, YamlError};
-use crate::metadata::{BuiltinMetadataField, MetadataField, MetadataValue};
+use crate::file_stuff::{self, load_yaml, YamlError};
+use crate::metadata::{BuiltinMetadataField, Metadata, MetadataField, MetadataValue, BLANK_VALUE};
 use crate::song_config::{AllSetter, RawSongConfig, ReferencableOperation, SongConfig};
-use crate::strategy::{ItemSelector, MetadataOperation, MusicItemType, ValueGetter};
+use crate::strategy::{FieldSelector, ItemSelector, MetadataOperation, MusicItemType, ValueGetter};
 
 #[derive(Deserialize)]
 pub struct RawLibraryConfig {
     library: PathBuf,
+    reports: Vec<RawLibraryReport>,
     logs: Option<PathBuf>,
     config_folders: Vec<PathBuf>,
     extensions: HashSet<String>,
@@ -28,8 +29,223 @@ pub struct RawLibraryConfig {
     artist_separator: String,
 }
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub enum RawLibraryReport {
+    Fields {
+        path: PathBuf,
+        key: MetadataField,
+        #[serde(default = "default_false")]
+        split: bool,
+        #[serde(default = "default_false")]
+        blanks: bool,
+    },
+    Items {
+        path: PathBuf,
+        values: FieldSelector,
+        #[serde(default = "default_false")]
+        embedded: bool,
+        #[serde(default = "default_false")]
+        blanks: bool,
+    },
+}
+fn default_false() -> bool {
+    false
+}
+
+pub enum LibraryReport {
+    SplitFields {
+        path: PathBuf,
+        key: MetadataField,
+        include_blanks: bool,
+        map: BTreeMap<Option<String>, BTreeSet<PathBuf>>,
+    },
+    MergedFields {
+        path: PathBuf,
+        key: MetadataField,
+        include_blanks: bool,
+        map: BTreeMap<Option<String>, BTreeSet<PathBuf>>,
+    },
+    ItemData {
+        path: PathBuf,
+        values: FieldSelector,
+        embedded: bool,
+        include_blanks: bool,
+        map: BTreeMap<PathBuf, BTreeMap<MetadataField, ReportValue>>,
+    },
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum ReportValue {
+    String(String),
+    List(Vec<String>),
+    Number(u32),
+    None,
+}
+impl LibraryReport {
+    pub fn save(&self) -> Result<(), YamlError> {
+        match self {
+            Self::SplitFields { path, map, .. } => {
+                let file = File::create(path)?;
+                let writer = BufWriter::new(file);
+                serde_yaml::to_writer(writer, map)?;
+                Ok(())
+            }
+            Self::MergedFields { path, map, .. } => {
+                let file = File::create(path)?;
+                let writer = BufWriter::new(file);
+                serde_yaml::to_writer(writer, map)?;
+                Ok(())
+            }
+            Self::ItemData { path, map, .. } => {
+                let file = File::create(path)?;
+                let writer = BufWriter::new(file);
+                serde_yaml::to_writer(writer, map)?;
+                Ok(())
+            }
+        }
+    }
+    fn load(source: RawLibraryReport, folder: &Path) -> LibraryReport {
+        match source {
+            RawLibraryReport::Fields {
+                path,
+                key,
+                split,
+                blanks,
+            } => {
+                let file_path = folder.join(path);
+                let map = load_yaml(&file_path).unwrap_or_default();
+                if split {
+                    LibraryReport::SplitFields {
+                        path: file_path,
+                        key,
+                        include_blanks: blanks,
+                        map,
+                    }
+                } else {
+                    LibraryReport::MergedFields {
+                        path: file_path,
+                        key,
+                        include_blanks: blanks,
+                        map,
+                    }
+                }
+            }
+            RawLibraryReport::Items {
+                path,
+                values,
+                embedded,
+                blanks,
+            } => {
+                let file_path = folder.join(path);
+                let map = load_yaml(&file_path).unwrap_or_default();
+                LibraryReport::ItemData {
+                    path: file_path,
+                    values,
+                    embedded,
+                    include_blanks: blanks,
+                    map,
+                }
+            }
+        }
+    }
+    fn val_to_str(value: &MetadataValue, sep: &str) -> Option<String> {
+        match value {
+            MetadataValue::Number(n) => Some(n.to_string()),
+            MetadataValue::List(l) if l.is_empty() => None,
+            MetadataValue::List(l) => Some(l.join(sep)),
+        }
+    }
+    fn val_to_strs(value: &MetadataValue) -> Vec<String> {
+        match value {
+            MetadataValue::Number(n) => vec![n.to_string()],
+            MetadataValue::List(l) => l.clone(),
+        }
+    }
+    fn is_blank(value: &MetadataValue) -> bool {
+        match value {
+            MetadataValue::Number(_) => false,
+            MetadataValue::List(l) => l.is_empty(),
+        }
+    }
+    fn to_value(value: &MetadataValue) -> ReportValue {
+        match value {
+            MetadataValue::Number(n) => ReportValue::Number(*n),
+            MetadataValue::List(l) if l.is_empty() => ReportValue::None,
+            MetadataValue::List(l) if l.len() == 1 => ReportValue::String(l[0].clone()),
+            MetadataValue::List(l) => ReportValue::List(l.clone()),
+        }
+    }
+    pub fn record(
+        &mut self,
+        item_path: &Path,
+        metadata: &Metadata,
+        embedded_metadata: Option<&Metadata>,
+        sep: &str,
+    ) {
+        match self {
+            Self::MergedFields {
+                key,
+                include_blanks,
+                map,
+                ..
+            } => {
+                let value = metadata.get(key).unwrap_or(&BLANK_VALUE);
+                if *include_blanks || !Self::is_blank(value) {
+                    let list = map.entry(Self::val_to_str(value, sep)).or_default();
+                    list.insert(item_path.to_owned());
+                }
+            }
+            Self::SplitFields {
+                key,
+                include_blanks,
+                map,
+                ..
+            } => {
+                let value = metadata.get(key).unwrap_or(&BLANK_VALUE);
+                if *include_blanks && Self::is_blank(value) {
+                    let list = map.entry(None).or_default();
+                    list.insert(item_path.to_owned());
+                } else {
+                    for entry in Self::val_to_strs(value) {
+                        let list = map.entry(Some(entry)).or_default();
+                        list.insert(item_path.to_owned());
+                    }
+                }
+            }
+            Self::ItemData {
+                values,
+                embedded,
+                include_blanks,
+                map,
+                ..
+            } => {
+                let mut results = BTreeMap::new();
+                if let Some(save) = {
+                    if *embedded {
+                        embedded_metadata
+                    } else {
+                        Some(metadata)
+                    }
+                } {
+                    for (field, value) in save {
+                        if values.is_match(field) && (*include_blanks || !Self::is_blank(value)) {
+                            results.insert(field.clone(), Self::to_value(value));
+                        }
+                    }
+                    if !results.is_empty() {
+                        map.insert(item_path.into(), results);
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub struct LibraryConfig {
     pub library_folder: PathBuf,
+    pub reports: Vec<LibraryReport>,
     pub log_folder: Option<PathBuf>,
     pub config_folders: Vec<PathBuf>,
     pub song_extensions: HashSet<String>,
@@ -44,6 +260,11 @@ impl LibraryConfig {
     pub fn new(folder: &Path, raw: RawLibraryConfig) -> Self {
         Self {
             library_folder: folder.join(raw.library),
+            reports: raw
+                .reports
+                .into_iter()
+                .map(|x| LibraryReport::load(x, folder))
+                .collect(),
             log_folder: raw.logs.map(|x| folder.join(x)),
             config_folders: raw
                 .config_folders

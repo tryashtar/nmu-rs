@@ -205,21 +205,18 @@ impl ValueModifier {
         }
     }
     fn append(list: &mut Vec<String>, extra: &str, index: Option<&Range>, appending: bool) {
-        let formatter = if appending {
-            |str: &str, extra: &str| format!("{str}{extra}")
-        } else {
-            |str: &str, extra: &str| format!("{extra}{str}")
-        };
         for i in 0..list.len() {
-            match index {
-                None => {
-                    list[i] = formatter(&list[i], extra);
-                }
-                Some(index) if index.in_range(i, list.len(), OutOfBoundsDecision::Clamp) => {
-                    list[i] = formatter(&list[i], extra);
-                }
-                Some(_) => {}
+            let should_modify = match index {
+                None => true,
+                Some(index) => index.in_range(i, list.len(), OutOfBoundsDecision::Clamp),
             };
+            if should_modify {
+                if appending {
+                    list[i].push_str(extra);
+                } else {
+                    list[i].insert_str(0, extra);
+                }
+            }
         }
     }
     fn checked_insert(

@@ -70,6 +70,9 @@ pub fn get_metadata_flac(tag: &metaflac::Tag, config: &LibraryConfig) -> FinalMe
             if let SetValue::Set(v) = flac_list(comment.genre()) {
                 metadata.genres = SetValue::Set(v);
             }
+            if let SetValue::Set(v) = flac_list(comment.get("UNSYNCED LYRICS")) {
+                metadata.simple_lyrics = SetValue::Set(Some(v.join("\n")));
+            }
         }
     }
     metadata
@@ -103,7 +106,11 @@ fn id3_comments(item: Vec<&id3::frame::Comment>) -> Vec<String> {
 }
 
 fn id3_lyrics(item: Vec<&id3::frame::Lyrics>) -> Option<String> {
-    Some(item.into_iter().map(|x| x.text.to_owned()).join("\n"))
+    if item.is_empty() {
+        None
+    } else {
+        Some(item.into_iter().map(|x| x.text.to_owned()).join("\n"))
+    }
 }
 
 fn id3_str(item: Option<&str>) -> Option<String> {
