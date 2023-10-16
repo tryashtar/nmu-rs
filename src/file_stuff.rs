@@ -75,65 +75,73 @@ fn matches_name(path: &Path, name: &str) -> bool {
     path.file_name().map(|x| x == name).unwrap_or(false)
 }
 
-pub fn find_matches(
+pub fn find_matches_sorted(
     selector: &ItemSelector,
-    start: &Path,
+    nice_start: &Path,
     config: &LibraryConfig,
 ) -> Vec<ItemPath> {
-    let full_start = config.library_folder.join(start);
+    find_matches(selector, nice_start, config)
+        .sorted_by(|a, b| Ord::cmp(a.deref(), b.deref()))
+        .collect()
+}
+
+pub fn find_matches<'a>(
+    selector: &'a ItemSelector,
+    nice_start: &'a Path,
+    config: &'a LibraryConfig,
+) -> Box<dyn Iterator<Item = ItemPath> + 'a> {
+    let full_start = config.library_folder.join(nice_start);
     match selector {
-        ItemSelector::This => vec![ItemPath::Folder(PathBuf::from(""))],
-        ItemSelector::All => walkdir::WalkDir::new(&full_start)
-            .into_iter()
-            .filter_entry(|entry| {
-                entry.file_type().is_dir() || match_extension(entry.path(), &config.song_extensions)
-            })
-            .filter_map(|x| x.ok())
-            .filter_map(|entry| {
-                let is_dir = entry.file_type().is_dir();
-                let path = entry.into_path();
-                let path = path.strip_prefix(&full_start).ok();
-                if is_dir {
-                    path.map(|x| ItemPath::Folder(x.to_owned()))
-                } else {
-                    path.map(|x| ItemPath::Song(x.with_extension("")))
-                }
-            })
-            .sorted_by(|a, b| Ord::cmp(a.deref(), b.deref()))
-            .collect(),
-        ItemSelector::Multi(checks) => checks
-            .iter()
-            .flat_map(|selector| find_matches(selector, start, config))
-            .collect(),
+        ItemSelector::This => Box::new(std::iter::once(ItemPath::Folder(PathBuf::from("")))),
+        ItemSelector::All => Box::new(
+            walkdir::WalkDir::new(&full_start)
+                .into_iter()
+                .filter_entry(|entry| {
+                    entry.file_type().is_dir()
+                        || match_extension(entry.path(), &config.song_extensions)
+                })
+                .filter_map(|x| x.ok())
+                .filter_map(|entry| {
+                    let is_dir = entry.file_type().is_dir();
+                    let path = entry.into_path();
+                    let path = path.strip_prefix(&full_start).ok();
+                    if is_dir {
+                        path.map(|x| ItemPath::Folder(x.to_owned()))
+                    } else {
+                        path.map(|x| ItemPath::Song(x.with_extension("")))
+                    }
+                }),
+        ),
+        ItemSelector::Multi(checks) => Box::new(
+            checks
+                .iter()
+                .flat_map(|selector| find_matches(selector, nice_start, config)),
+        ),
         ItemSelector::Path(path) => {
             if let Some(name) = path.file_name().and_then(|x| x.to_str()) {
                 if let Ok(read) =
                     std::fs::read_dir(full_start.join(path).parent().unwrap_or(Path::new("")))
                 {
-                    return read
-                        .into_iter()
-                        .filter_map(|x| x.ok())
-                        .filter_map(|entry| {
-                            let path = entry.path();
-                            let path = path.strip_prefix(&full_start).ok();
-                            path.and_then(|path| {
-                                if is_dir(&entry) {
-                                    if matches_name(path, name) {
-                                        return Some(ItemPath::Folder(path.to_owned()));
-                                    }
-                                } else if match_extension(path, &config.song_extensions) {
-                                    let stripped = path.with_extension("");
-                                    if matches_name(&stripped, name) {
-                                        return Some(ItemPath::Song(stripped));
-                                    }
+                    return Box::new(read.into_iter().filter_map(|x| x.ok()).filter_map(|entry| {
+                        let path = entry.path();
+                        let path = path.strip_prefix(&full_start).ok();
+                        path.and_then(|path| {
+                            if is_dir(&entry) {
+                                if matches_name(path, name) {
+                                    return Some(ItemPath::Folder(path.to_owned()));
                                 }
-                                None
-                            })
+                            } else if match_extension(path, &config.song_extensions) {
+                                let stripped = path.with_extension("");
+                                if matches_name(&stripped, name) {
+                                    return Some(ItemPath::Song(stripped));
+                                }
+                            }
+                            None
                         })
-                        .collect();
+                    }));
                 }
             }
-            vec![]
+            Box::new(std::iter::empty())
         }
         ItemSelector::Segmented { path } => {
             if let Some((last, segments)) = path.split_last() {
@@ -155,44 +163,39 @@ pub fn find_matches(
                     .filter_map(|x| std::fs::read_dir(x).ok())
                     .flatten()
                     .filter_map(|x| x.ok());
-                return files
-                    .filter_map(|entry| {
-                        let path = entry.path();
-                        path.strip_prefix(&full_start).ok().and_then(|path| {
-                            if is_dir(&entry) {
-                                if matches_segment(path, last) {
-                                    return Some(ItemPath::Folder(path.to_owned()));
-                                }
-                            } else if match_extension(path, &config.song_extensions) {
-                                let stripped = path.with_extension("");
-                                if matches_segment(&stripped, last) {
-                                    return Some(ItemPath::Song(stripped));
-                                }
+                return Box::new(files.filter_map(|entry| {
+                    let path = entry.path();
+                    path.strip_prefix(&full_start).ok().and_then(|path| {
+                        if is_dir(&entry) {
+                            if matches_segment(path, last) {
+                                return Some(ItemPath::Folder(path.to_owned()));
                             }
-                            None
-                        })
+                        } else if match_extension(path, &config.song_extensions) {
+                            let stripped = path.with_extension("");
+                            if matches_segment(&stripped, last) {
+                                return Some(ItemPath::Song(stripped));
+                            }
+                        }
+                        None
                     })
-                    .sorted_by(|a, b| Ord::cmp(a.deref(), b.deref()))
-                    .collect();
+                }));
             }
-            vec![]
+            Box::new(std::iter::empty())
         }
         ItemSelector::Subpath { subpath, select } => {
-            let first = find_matches(subpath, start, config)
+            let first = find_matches(subpath, nice_start, config)
                 .into_iter()
                 .filter_map(|x| match x {
                     ItemPath::Folder(path) => Some(path),
                     ItemPath::Song(_) => None,
                 });
-            first
-                .flat_map(|path| {
-                    let second = find_matches(select, &start.join(&path), config);
-                    second.into_iter().map(move |x| match x {
-                        ItemPath::Folder(p) => ItemPath::Folder(path.join(p)),
-                        ItemPath::Song(p) => ItemPath::Song(path.join(p)),
-                    })
+            Box::new(first.flat_map(|path| {
+                let second = find_matches(select, &nice_start.join(&path), config);
+                second.into_iter().map(move |x| match x {
+                    ItemPath::Folder(p) => ItemPath::Folder(path.join(p)),
+                    ItemPath::Song(p) => ItemPath::Song(path.join(p)),
                 })
-                .collect()
+            }))
         }
     }
 }
