@@ -122,7 +122,12 @@ fn add_to_song(
         }
     }
     for report in config.reports.iter_mut() {
-        report.record(nice_path, &metadata, existing_metadata.as_ref(), &config.artist_separator);
+        report.record(
+            nice_path,
+            &metadata,
+            existing_metadata.as_ref(),
+            &config.artist_separator,
+        );
     }
     print_errors(FinalMetadata::create(metadata));
     if !any {
@@ -199,6 +204,40 @@ fn is_not_found(result: &ConfigError) -> bool {
     matches!(result, ConfigError::Yaml(YamlError::Io(ref error)) if error.kind() == ErrorKind::NotFound)
 }
 
+fn find_unused_selectors<'a>(
+    selector: &'a ItemSelector,
+    start: &Path,
+    config: &LibraryConfig,
+) -> Vec<&'a ItemSelector> {
+    match selector {
+        ItemSelector::All
+        | ItemSelector::This
+        | ItemSelector::Path(_)
+        | ItemSelector::Segmented { .. } => {
+            if file_stuff::find_matches(selector, start, config).is_empty() {
+                vec![selector]
+            } else {
+                vec![]
+            }
+        }
+        ItemSelector::Multi(many) => many
+            .iter()
+            .flat_map(|x| find_unused_selectors(x, start, config))
+            .collect(),
+        ItemSelector::Subpath { subpath, select } => {
+            let results = file_stuff::find_matches(subpath, start, config);
+            if results.is_empty() {
+                vec![subpath]
+            } else {
+                results
+                    .into_iter()
+                    .flat_map(|x| find_unused_selectors(select, &x, config))
+                    .collect()
+            }
+        }
+    }
+}
+
 fn load_new_config(
     full_path: &Path,
     nice_folder: &Path,
@@ -206,7 +245,19 @@ fn load_new_config(
 ) -> Result<SongConfig, Rc<ConfigError>> {
     let result = file_stuff::load_config(full_path, nice_folder, library_config);
     match result {
-        Ok(_) => {}
+        Ok(ref config) => {
+            for unused in config
+                .set
+                .iter()
+                .flat_map(|x| find_unused_selectors(&x.names, nice_folder, library_config))
+            {
+                let display = inline_data(unused);
+                eprintln!(
+                    "{}",
+                    cformat!("<yellow>Selector {} didn't find anything</>", display)
+                );
+            }
+        }
         Err(ref error) if is_not_found(error) => {}
         Err(ref error) => {
             eprintln!(

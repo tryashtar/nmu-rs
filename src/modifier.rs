@@ -76,7 +76,7 @@ pub enum ValueError {
         expected: &'static str,
     },
 }
-fn inline_data<T>(item: &T) -> String
+pub fn inline_data<T>(item: &T) -> String
 where
     T: serde::Serialize,
 {
