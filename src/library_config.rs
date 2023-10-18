@@ -9,7 +9,7 @@ use std::rc::Rc;
 use std::time::SystemTime;
 use thiserror::Error;
 
-use crate::file_stuff::{self, load_yaml, YamlError};
+use crate::file_stuff::{self, load_yaml, match_extension, matches_name, YamlError};
 use crate::metadata::{BuiltinMetadataField, Metadata, MetadataField, MetadataValue, BLANK_VALUE};
 use crate::song_config::{AllSetter, RawSongConfig, ReferencableOperation, SongConfig};
 use crate::strategy::{FieldSelector, ItemSelector, MetadataOperation, MusicItemType, ValueGetter};
@@ -84,7 +84,7 @@ impl Serialize for PathList {
     {
         match self.0.first() {
             Some(item) if self.0.len() == 1 => item.serialize(serializer),
-            _ => self.0.serialize(serializer)
+            _ => self.0.serialize(serializer),
         }
     }
 }
@@ -518,8 +518,35 @@ impl ArtRepo {
             icon_folder: raw.icons.map(|x| folder.join(x)),
             used_templates: ArtCache::new(raw.file_cache.map(|x| folder.join(x))),
             named_settings: raw.named_settings,
-            image_extensions: raw.extensions,
+            image_extensions: raw
+                .extensions
+                .into_iter()
+                .map(|x| match x.strip_prefix('.') {
+                    Some(stripped) => stripped.to_owned(),
+                    None => x,
+                })
+                .collect(),
         }
+    }
+    pub fn find_template(&self, nice_path: &Path) -> Option<PathBuf> {
+        if let Some(name) = nice_path.file_name().and_then(|x| x.to_str()) {
+            if let Ok(read) = std::fs::read_dir(
+                self.templates_folder
+                    .join(nice_path)
+                    .parent()
+                    .unwrap_or(Path::new("")),
+            ) {
+                for file in read.filter_map(|x| x.ok()) {
+                    let path = file.path();
+                    if path.file_stem().map(|x| x == name).unwrap_or(false)
+                        && match_extension(&path, &self.image_extensions)
+                    {
+                        return Some(path);
+                    }
+                }
+            }
+        }
+        None
     }
 }
 

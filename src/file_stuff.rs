@@ -71,7 +71,7 @@ fn matches_segment(path: &Path, segment: &PathSegment) -> bool {
         .unwrap_or(false)
 }
 
-fn matches_name(path: &Path, name: &str) -> bool {
+pub fn matches_name(path: &Path, name: &str) -> bool {
     path.file_name().map(|x| x == name).unwrap_or(false)
 }
 

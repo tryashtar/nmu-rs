@@ -156,7 +156,10 @@ fn do_scan(mut library_config: LibraryConfig) {
         let nice_path = ItemPath::Folder(make_nice(&folder_path, &library_config.library_folder));
         if let Ok(results) = get_metadata(&nice_path, &library_config, &mut config_cache) {
             println!("{}", nice_path.display());
-            let metadata = print_errors(results);
+            let mut metadata = print_errors(results);
+            if let Some(repo) = &library_config.art_repo {
+                let template = resolve_art(&mut metadata, repo);
+            }
             for (field, value) in metadata {
                 println!("\t{field}: {value}");
             }
@@ -166,7 +169,10 @@ fn do_scan(mut library_config: LibraryConfig) {
         let nice_path = ItemPath::Song(make_nice(&song_path, &library_config.library_folder));
         if let Ok(results) = get_metadata(&nice_path, &library_config, &mut config_cache) {
             println!("{}", nice_path.display());
-            let final_metadata = print_errors(results);
+            let mut final_metadata = print_errors(results);
+            if let Some(repo) = &library_config.art_repo {
+                let template = resolve_art(&mut final_metadata, repo);
+            }
             add_to_song(
                 &song_path,
                 &nice_path,
@@ -276,6 +282,21 @@ fn load_new_config(
 pub struct Results<T, E> {
     result: T,
     errors: Vec<E>,
+}
+
+fn resolve_art(metadata: &mut Metadata, repo: &ArtRepo) -> Option<PathBuf> {
+    if let Some(MetadataValue::List(art)) = metadata.get_mut(&BuiltinMetadataField::Art.into()) {
+        for path in art.iter_mut() {
+            if let Some(template) = repo.find_template(&PathBuf::from(path.clone())) {
+                let path = path.clone();
+                art.clear();
+                art.push(path);
+                return Some(template);
+            }
+        }
+        art.clear();
+    }
+    None
 }
 
 fn get_metadata(
@@ -404,37 +425,43 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
     }
     if let Some(art_repo) = &library_config.art_repo {
         // for every config that's changed, find all templates it applies to
-        for config_folder in walkdir::WalkDir::new(&art_repo.templates_folder)
+        // also find all templates that have changed
+        for template_file in walkdir::WalkDir::new(&art_repo.templates_folder)
             .into_iter()
-            .filter_entry(|entry| entry.file_type().is_dir() && !is_hidden(entry))
+            .filter_entry(|entry| entry.file_type().is_file() || !is_hidden(entry))
             .filter_map(|x| x.ok())
+            .filter(|x| x.file_type().is_file())
         {
-            let config_folder_path = config_folder.path();
-            let config_file_path = config_folder_path.join("images.yaml");
-            if config_file_path.exists()
+            let is_config = template_file.file_name() == "images.yaml";
+            let template_file_path = template_file.into_path();
+            if is_config
                 && library_config
                     .date_cache
-                    .changed_recently(&config_file_path)
+                    .changed_recently(&template_file_path)
             {
-                for image in walkdir::WalkDir::new(config_folder_path)
-                    .into_iter()
-                    .filter_entry(|entry| entry.file_type().is_file() || !is_hidden(entry))
-                    .filter_map(|x| x.ok())
+                for image in
+                    walkdir::WalkDir::new(template_file_path.parent().unwrap_or(Path::new("")))
+                        .into_iter()
+                        .filter_entry(|entry| entry.file_type().is_file() || !is_hidden(entry))
+                        .filter_map(|x| x.ok())
+                        .filter(|x| x.file_type().is_file())
                 {
-                    let is_file = image.file_type().is_file();
                     let path = image.into_path();
-                    if is_file && match_extension(&path, &art_repo.image_extensions) {
+                    if match_extension(&path, &art_repo.image_extensions) {
                         scan_images.insert(path);
                     }
                 }
+            } else if match_extension(&template_file_path, &art_repo.image_extensions)
+                && library_config
+                    .date_cache
+                    .changed_recently(&template_file_path)
+            {
+                scan_images.insert(template_file_path);
             }
         }
-        // find all templates that have changed
         // scan all songs that used to use any of these templates
         for (image_path, songs) in &art_repo.used_templates.cache {
-            if scan_images.contains(image_path)
-                || library_config.date_cache.changed_recently(image_path)
-            {
+            if scan_images.contains(image_path) {
                 for song in songs.clone() {
                     if scan_songs.insert(song) && std::io::stdout().is_terminal() {
                         print!("\rFound {}", scan_songs.len())
