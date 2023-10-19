@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use image::DynamicImage;
 use path_absolutize::Absolutize;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -9,7 +10,7 @@ use std::rc::Rc;
 use std::time::SystemTime;
 use thiserror::Error;
 
-use crate::file_stuff::{self, load_yaml, match_extension, matches_name, YamlError};
+use crate::file_stuff::{self, load_yaml, match_extension, ConfigError, YamlError};
 use crate::metadata::{BuiltinMetadataField, Metadata, MetadataField, MetadataValue, BLANK_VALUE};
 use crate::song_config::{AllSetter, RawSongConfig, ReferencableOperation, SongConfig};
 use crate::strategy::{FieldSelector, ItemSelector, MetadataOperation, MusicItemType, ValueGetter};
@@ -51,6 +52,39 @@ pub enum RawLibraryReport {
 }
 fn default_false() -> bool {
     false
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct RawArtConfig {
+    pub all: Option<ReferencableArtSettings>,
+    #[serde(rename = "set all")]
+    pub set_all: Option<Vec<RawArtSettingsSetter>>,
+    pub set: Option<HashMap<PathBuf, ReferencableArtSettings>>,
+}
+
+pub struct ArtConfig {
+    pub all: Vec<Rc<ArtSettings>>,
+    pub set: HashMap<PathBuf, Vec<Rc<ArtSettings>>>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum ReferencableArtSettings {
+    Reference(String),
+    Direct(ArtSettings),
+    Many(Vec<ReferencableArtSettings>),
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct RawArtSettingsSetter {
+    pub names: Vec<PathBuf>,
+    pub set: ReferencableArtSettings,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct ArtSettings {}
+impl ArtSettings {
+    pub fn apply(&self, img: &mut DynamicImage) {}
 }
 
 pub enum LibraryReport {
@@ -498,16 +532,17 @@ struct RawArtRepo {
     cache: Option<PathBuf>,
     icons: Option<PathBuf>,
     file_cache: Option<PathBuf>,
-    named_settings: HashMap<String, ArtTemplateSettings>,
+    named_settings: HashMap<String, ArtSettings>,
     extensions: HashSet<String>,
 }
 
+pub type ArtConfigCache = HashMap<PathBuf, Result<ArtConfig, Rc<ConfigError>>>;
 pub struct ArtRepo {
     pub templates_folder: PathBuf,
     pub cache_folder: Option<PathBuf>,
     pub icon_folder: Option<PathBuf>,
     pub used_templates: ArtCache,
-    pub named_settings: HashMap<String, ArtTemplateSettings>,
+    pub named_settings: HashMap<String, Rc<ArtSettings>>,
     pub image_extensions: HashSet<String>,
 }
 impl ArtRepo {
@@ -517,7 +552,11 @@ impl ArtRepo {
             cache_folder: raw.cache.map(|x| folder.join(x)),
             icon_folder: raw.icons.map(|x| folder.join(x)),
             used_templates: ArtCache::new(raw.file_cache.map(|x| folder.join(x))),
-            named_settings: raw.named_settings,
+            named_settings: raw
+                .named_settings
+                .into_iter()
+                .map(|(k, v)| (k, Rc::new(v)))
+                .collect(),
             image_extensions: raw
                 .extensions
                 .into_iter()
@@ -527,6 +566,40 @@ impl ArtRepo {
                 })
                 .collect(),
         }
+    }
+    fn resolve_settings(
+        &self,
+        settings: ReferencableArtSettings,
+    ) -> Result<Vec<Rc<ArtSettings>>, LibraryError> {
+        match settings {
+            ReferencableArtSettings::Direct(direct) => Ok(vec![Rc::new(direct)]),
+            ReferencableArtSettings::Reference(reference) => self
+                .named_settings
+                .get(&reference)
+                .cloned()
+                .map(|x| vec![x])
+                .ok_or(LibraryError::MissingNamedStrategy(reference)),
+            ReferencableArtSettings::Many(many) => many
+                .into_iter()
+                .map(|x| self.resolve_settings(x))
+                .collect::<Result<Vec<_>, _>>()
+                .map(|x| x.into_iter().flatten().collect()),
+        }
+    }
+    pub fn resolve_config(&self, raw_config: RawArtConfig) -> Result<ArtConfig, LibraryError> {
+        let all = raw_config
+            .all
+            .map(|x| self.resolve_settings(x))
+            .transpose()?
+            .unwrap_or_default();
+        let mut set: HashMap<PathBuf, Vec<Rc<ArtSettings>>> = HashMap::new();
+        if let Some(raw_set) = raw_config.set {
+            for (path, settings) in raw_set {
+                let mut resolved = self.resolve_settings(settings)?;
+                set.entry(path).or_default().append(&mut resolved);
+            }
+        }
+        Ok(ArtConfig { all, set })
     }
     pub fn find_template(&self, nice_path: &Path) -> Option<PathBuf> {
         if let Some(name) = nice_path.file_name().and_then(|x| x.to_str()) {
@@ -544,6 +617,87 @@ impl ArtRepo {
                         return Some(path);
                     }
                 }
+            }
+        }
+        None
+    }
+    fn find_first_template(&self, list: &Vec<String>) -> Option<(PathBuf, PathBuf)> {
+        for entry in list {
+            let nice = PathBuf::from(entry.clone());
+            if let Some(template) = self.find_template(&nice) {
+                return Some((nice, template));
+            }
+        }
+        None
+    }
+    fn load_new_config(&self, full_path: &Path) -> Result<ArtConfig, ConfigError> {
+        match load_yaml::<RawArtConfig>(full_path) {
+            Err(error) => Err(ConfigError::Yaml(error)),
+            Ok(config) => self.resolve_config(config).map_err(ConfigError::Library),
+        }
+    }
+    fn process_template(
+        &self,
+        template_path: &Path,
+        nice_path: &Path,
+        config_cache: &mut ArtConfigCache,
+    ) -> Result<image::DynamicImage, image::ImageError> {
+        let mut img = image::open(template_path)?;
+        for ancestor in nice_path
+            .parent()
+            .unwrap_or(Path::new(""))
+            .ancestors()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+        {
+            let select_path = nice_path.strip_prefix(ancestor).unwrap_or(nice_path);
+            let config_path = self.templates_folder.join(ancestor).join("images.yaml");
+            let config_load = config_cache
+                .entry(config_path)
+                .or_insert_with_key(|config_path| {
+                    self.load_new_config(config_path).map_err(Rc::new)
+                });
+            if let Ok(config) = config_load {
+                for settings in &config.all {
+                    settings.apply(&mut img);
+                }
+                if let Some(more) = config.set.get(select_path) {
+                    for settings in more {
+                        settings.apply(&mut img);
+                    }
+                }
+            }
+        }
+        Ok(img)
+    }
+    pub fn resolve_art(
+        &self,
+        metadata: &mut Metadata,
+        scan_paths: &BTreeSet<PathBuf>,
+        config_cache: &mut ArtConfigCache,
+    ) -> Option<Result<DynamicImage, image::ImageError>> {
+        if let Some(MetadataValue::List(art)) = metadata.get_mut(&BuiltinMetadataField::Art.into())
+        {
+            let template = self.find_first_template(art);
+            art.clear();
+            if let Some((nice, template)) = template {
+                art.push(nice.to_string_lossy().into_owned());
+                let cached_path = self.cache_folder.as_ref().map(|x| {
+                    let mut joined = x
+                        .join(&nice)
+                        .to_string_lossy()
+                        .replace(|c: char| !c.is_ascii(), "_");
+                    joined.push_str(".png");
+                    PathBuf::from(joined)
+                });
+
+                if !scan_paths.contains(&template) {
+                    if let Some(cached_path) = cached_path {
+                        return Some(image::open(cached_path));
+                    }
+                }
+                return Some(self.process_template(&template, &nice, config_cache));
             }
         }
         None
@@ -582,9 +736,6 @@ impl ArtCache {
         }
     }
 }
-
-#[derive(Deserialize)]
-pub struct ArtTemplateSettings {}
 
 pub struct DateCache {
     path: Option<PathBuf>,

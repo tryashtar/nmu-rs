@@ -60,10 +60,6 @@ fn main() {
     }
 }
 
-fn make_nice(path: &Path, root: &Path) -> PathBuf {
-    path.strip_prefix(root).unwrap_or(path).with_extension("")
-}
-
 fn print_errors<T>(results: Results<T, ValueError>) -> T {
     for err in results.errors {
         match err {
@@ -88,7 +84,7 @@ fn add_to_song(
     match id3::Tag::read_from_path(file_path) {
         Ok(id3) => {
             any = true;
-            let existing = get_metadata_id3(&id3, config).into();
+            let existing = get_metadata_id3(&id3, &config.artist_separator).into();
             if print_differences("ID3 Tag", &existing, &metadata) {
                 progress.changed += 1;
             }
@@ -106,7 +102,7 @@ fn add_to_song(
     match metaflac::Tag::read_from_path(file_path) {
         Ok(flac) => {
             any = true;
-            let existing = get_metadata_flac(&flac, config).into();
+            let existing = get_metadata_flac(&flac).into();
             if print_differences("Flac Tag", &existing, &metadata) {
                 progress.changed += 1;
             }
@@ -143,6 +139,7 @@ struct WorkProgress {
 
 fn do_scan(mut library_config: LibraryConfig) {
     let mut config_cache: ConfigCache = HashMap::new();
+    let mut art_config_cache: ArtConfigCache = HashMap::new();
     let mut progress = WorkProgress {
         changed: 0,
         failed: 0,
@@ -153,12 +150,17 @@ fn do_scan(mut library_config: LibraryConfig) {
         images: scan_images,
     } = find_scan_songs(&library_config);
     for folder_path in scan_folders {
-        let nice_path = ItemPath::Folder(make_nice(&folder_path, &library_config.library_folder));
+        let nice_path = ItemPath::Folder(
+            folder_path
+                .strip_prefix(&library_config.library_folder)
+                .unwrap_or(&folder_path)
+                .to_owned(),
+        );
         if let Ok(results) = get_metadata(&nice_path, &library_config, &mut config_cache) {
             println!("{}", nice_path.display());
             let mut metadata = print_errors(results);
             if let Some(repo) = &library_config.art_repo {
-                let template = resolve_art(&mut metadata, repo);
+                let template = repo.resolve_art(&mut metadata, &scan_images, &mut art_config_cache);
             }
             for (field, value) in metadata {
                 println!("\t{field}: {value}");
@@ -166,12 +168,18 @@ fn do_scan(mut library_config: LibraryConfig) {
         }
     }
     for song_path in scan_songs {
-        let nice_path = ItemPath::Song(make_nice(&song_path, &library_config.library_folder));
+        let nice_path = ItemPath::Song(
+            song_path
+                .strip_prefix(&library_config.library_folder)
+                .unwrap_or(&song_path)
+                .with_extension(""),
+        );
         if let Ok(results) = get_metadata(&nice_path, &library_config, &mut config_cache) {
             println!("{}", nice_path.display());
             let mut final_metadata = print_errors(results);
             if let Some(repo) = &library_config.art_repo {
-                let template = resolve_art(&mut final_metadata, repo);
+                let template =
+                    repo.resolve_art(&mut final_metadata, &scan_images, &mut art_config_cache);
             }
             add_to_song(
                 &song_path,
@@ -282,21 +290,6 @@ fn load_new_config(
 pub struct Results<T, E> {
     result: T,
     errors: Vec<E>,
-}
-
-fn resolve_art(metadata: &mut Metadata, repo: &ArtRepo) -> Option<PathBuf> {
-    if let Some(MetadataValue::List(art)) = metadata.get_mut(&BuiltinMetadataField::Art.into()) {
-        for path in art.iter_mut() {
-            if let Some(template) = repo.find_template(&PathBuf::from(path.clone())) {
-                let path = path.clone();
-                art.clear();
-                art.push(path);
-                return Some(template);
-            }
-        }
-        art.clear();
-    }
-    None
 }
 
 fn get_metadata(

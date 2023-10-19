@@ -2,12 +2,9 @@ use id3::TagLike;
 use itertools::Itertools;
 use metaflac::Block;
 
-use crate::{
-    library_config::LibraryConfig,
-    metadata::{FinalMetadata, SetValue},
-};
+use crate::metadata::{FinalMetadata, SetValue};
 
-pub fn get_metadata_flac(tag: &metaflac::Tag, config: &LibraryConfig) -> FinalMetadata {
+pub fn get_metadata_flac(tag: &metaflac::Tag) -> FinalMetadata {
     let mut metadata = FinalMetadata {
         title: SetValue::Skip,
         album: SetValue::Skip,
@@ -77,16 +74,13 @@ pub fn get_metadata_flac(tag: &metaflac::Tag, config: &LibraryConfig) -> FinalMe
     }
     metadata
 }
-pub fn get_metadata_id3(tag: &id3::Tag, config: &LibraryConfig) -> FinalMetadata {
+pub fn get_metadata_id3(tag: &id3::Tag, sep: &str) -> FinalMetadata {
     FinalMetadata {
         title: SetValue::Set(id3_str(tag.title())),
         album: SetValue::Set(id3_str(tag.album())),
-        performers: SetValue::Set(id3_str_sep(tag.artist(), &config.artist_separator)),
+        performers: SetValue::Set(id3_str_sep(tag.artist(), sep)),
         album_artist: SetValue::Set(id3_str(tag.album_artist())),
-        composers: SetValue::Set(id3_str_sep(
-            tag.text_for_frame_id("TCOM"),
-            &config.artist_separator,
-        )),
+        composers: SetValue::Set(id3_str_sep(tag.text_for_frame_id("TCOM"), sep)),
         arranger: SetValue::Set(id3_str(tag.text_for_frame_id("TPE4"))),
         comments: SetValue::Set(id3_comments(tag.comments().collect())),
         track: SetValue::Set(tag.track()),
@@ -95,7 +89,7 @@ pub fn get_metadata_id3(tag: &id3::Tag, config: &LibraryConfig) -> FinalMetadata
         disc_total: SetValue::Set(tag.total_discs()),
         year: SetValue::Set(tag.year().map(|x| x as u32)),
         language: SetValue::Set(id3_str(tag.text_for_frame_id("TLAN"))),
-        genres: SetValue::Set(id3_str_sep(tag.genre(), &config.artist_separator)),
+        genres: SetValue::Set(id3_str_sep(tag.genre(), sep)),
         art: SetValue::Skip,
         simple_lyrics: SetValue::Set(id3_lyrics(tag.lyrics().collect())),
     }
