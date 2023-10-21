@@ -81,10 +81,11 @@ pub struct RawArtSettingsSetter {
     pub set: ReferencableArtSettings,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Default)]
 pub struct ArtSettings {}
 impl ArtSettings {
-    pub fn apply(&self, img: &mut DynamicImage) {}
+    pub fn merge_in(&mut self, other: &Self) {}
+    pub fn apply(&self, image: &mut DynamicImage) {}
 }
 
 pub enum LibraryReport {
@@ -593,6 +594,14 @@ impl ArtRepo {
             .transpose()?
             .unwrap_or_default();
         let mut set: HashMap<PathBuf, Vec<Rc<ArtSettings>>> = HashMap::new();
+        if let Some(raw_set) = raw_config.set_all {
+            for setter in raw_set {
+                let mut resolved = self.resolve_settings(setter.set)?;
+                for name in setter.names {
+                    set.entry(name).or_default().append(&mut resolved);
+                }
+            }
+        }
         if let Some(raw_set) = raw_config.set {
             for (path, settings) in raw_set {
                 let mut resolved = self.resolve_settings(settings)?;
@@ -636,13 +645,8 @@ impl ArtRepo {
             Ok(config) => self.resolve_config(config).map_err(ConfigError::Library),
         }
     }
-    fn process_template(
-        &self,
-        template_path: &Path,
-        nice_path: &Path,
-        config_cache: &mut ArtConfigCache,
-    ) -> Result<image::DynamicImage, image::ImageError> {
-        let mut img = image::open(template_path)?;
+    fn get_settings(&self, nice_path: &Path, config_cache: &mut ArtConfigCache) -> ArtSettings {
+        let mut settings = ArtSettings::default();
         for ancestor in nice_path
             .parent()
             .unwrap_or(Path::new(""))
@@ -659,16 +663,27 @@ impl ArtRepo {
                     self.load_new_config(config_path).map_err(Rc::new)
                 });
             if let Ok(config) = config_load {
-                for settings in &config.all {
-                    settings.apply(&mut img);
+                for replace in &config.all {
+                    settings.merge_in(replace);
                 }
                 if let Some(more) = config.set.get(select_path) {
-                    for settings in more {
-                        settings.apply(&mut img);
+                    for replace in more {
+                        settings.merge_in(replace);
                     }
                 }
             }
         }
+        settings
+    }
+    fn process_template(
+        &self,
+        template_path: &Path,
+        nice_path: &Path,
+        config_cache: &mut ArtConfigCache,
+    ) -> Result<image::DynamicImage, image::ImageError> {
+        let mut img = image::open(template_path)?;
+        let settings = self.get_settings(nice_path, config_cache);
+        settings.apply(&mut img);
         Ok(img)
     }
     pub fn resolve_art(
@@ -680,8 +695,8 @@ impl ArtRepo {
         if let Some(MetadataValue::List(art)) = metadata.get_mut(&BuiltinMetadataField::Art.into())
         {
             let template = self.find_first_template(art);
-            art.clear();
             if let Some((nice, template)) = template {
+                art.clear();
                 art.push(nice.to_string_lossy().into_owned());
                 let cached_path = self.cache_folder.as_ref().map(|x| {
                     let mut joined = x
@@ -697,7 +712,11 @@ impl ArtRepo {
                         return Some(image::open(cached_path));
                     }
                 }
-                return Some(self.process_template(&template, &nice, config_cache));
+                let result = self.process_template(&template, &nice, config_cache);
+                if let Ok(image) = &result {
+                    if let Some(cached_path) = cached_path {}
+                }
+                return Some(result);
             }
         }
         None
