@@ -23,6 +23,8 @@ mod song_config;
 use song_config::*;
 mod tag_interop;
 use tag_interop::*;
+mod art;
+use art::*;
 #[cfg(test)]
 mod tests;
 
@@ -170,6 +172,7 @@ fn print_metadata_errors(results: &GetMetadataResults, library_config: &LibraryC
 fn do_scan(mut library_config: LibraryConfig) {
     let mut config_cache: ConfigCache = HashMap::new();
     let mut art_config_cache: ArtConfigCache = HashMap::new();
+    let mut processed_art_cache: ProcessedArtCache = HashMap::new();
     let mut progress = WorkProgress {
         changed: 0,
         failed: 0,
@@ -193,7 +196,12 @@ fn do_scan(mut library_config: LibraryConfig) {
         print_metadata_errors(&results, &library_config);
         if let Some(mut metadata) = results.result {
             if let Some(repo) = &library_config.art_repo {
-                let template = repo.resolve_art(&mut metadata, &scan_images, &mut art_config_cache);
+                let template = repo.resolve_art(
+                    &mut metadata,
+                    &scan_images,
+                    &mut art_config_cache,
+                    &mut processed_art_cache,
+                );
             }
             for (field, value) in metadata {
                 println!("\t{field}: {value}");
@@ -214,7 +222,12 @@ fn do_scan(mut library_config: LibraryConfig) {
         print_metadata_errors(&results, &library_config);
         if let Some(mut metadata) = results.result {
             if let Some(repo) = &library_config.art_repo {
-                let template = repo.resolve_art(&mut metadata, &scan_images, &mut art_config_cache);
+                let template = repo.resolve_art(
+                    &mut metadata,
+                    &scan_images,
+                    &mut art_config_cache,
+                    &mut processed_art_cache,
+                );
             }
             add_to_song(
                 &song_path,
