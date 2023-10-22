@@ -139,10 +139,49 @@ fn print_value_errors(errors: &[ValueError]) {
     }
 }
 
+fn print_art_errors(result: &ProcessArtResult) {
+    match result {
+        ProcessArtResult::NoArtNeeded => {}
+        ProcessArtResult::NoTemplateFound => {
+            eprintln!("{}", cformat!("<yellow>No matching templates found</>",));
+        }
+        ProcessArtResult::Processed {
+            full_path: nice_path,
+            newly_loaded,
+            result,
+        } => {
+            if let Err(ArtError::Image(error)) = Rc::as_ref(result) {
+                eprintln!(
+                    "{}",
+                    cformat!(
+                        "<red>Error loading image {}:\n{}</>",
+                        nice_path.display(),
+                        error
+                    )
+                );
+            }
+            for load in newly_loaded {
+                if let Err(error) = Rc::as_ref(&load.result) {
+                    if !is_not_found(error) {
+                        eprintln!(
+                            "{}",
+                            cformat!(
+                                "<red>Error loading config: {}\n{}</>",
+                                load.full_path.display(),
+                                error
+                            )
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn print_metadata_errors(results: &GetMetadataResults, library_config: &LibraryConfig) {
     for load in &results.newly_loaded {
         match Rc::as_ref(&load.result) {
-            Ok(ref config) => {
+            Ok(config) => {
                 for unused in config.set.iter().flat_map(|x| {
                     find_unused_selectors(&x.names, &load.nice_folder, library_config)
                 }) {
@@ -153,16 +192,17 @@ fn print_metadata_errors(results: &GetMetadataResults, library_config: &LibraryC
                     );
                 }
             }
-            Err(ref error) if is_not_found(error) => {}
-            Err(ref error) => {
-                eprintln!(
-                    "{}",
-                    cformat!(
-                        "<red>Error loading config: {}\n{}</>",
-                        load.full_path.display(),
-                        error
-                    )
-                );
+            Err(error) => {
+                if !is_not_found(error) {
+                    eprintln!(
+                        "{}",
+                        cformat!(
+                            "<red>Error loading config: {}\n{}</>",
+                            load.full_path.display(),
+                            error
+                        )
+                    );
+                }
             }
         }
     }
@@ -196,12 +236,13 @@ fn do_scan(mut library_config: LibraryConfig) {
         print_metadata_errors(&results, &library_config);
         if let Some(mut metadata) = results.result {
             if let Some(repo) = &library_config.art_repo {
-                let template = repo.resolve_art(
+                let art = repo.resolve_art(
                     &mut metadata,
                     &scan_images,
                     &mut art_config_cache,
                     &mut processed_art_cache,
                 );
+                print_art_errors(&art);
             }
             for (field, value) in metadata {
                 println!("\t{field}: {value}");
@@ -222,12 +263,13 @@ fn do_scan(mut library_config: LibraryConfig) {
         print_metadata_errors(&results, &library_config);
         if let Some(mut metadata) = results.result {
             if let Some(repo) = &library_config.art_repo {
-                let template = repo.resolve_art(
+                let art = repo.resolve_art(
                     &mut metadata,
                     &scan_images,
                     &mut art_config_cache,
                     &mut processed_art_cache,
                 );
+                print_art_errors(&art);
             }
             add_to_song(
                 &song_path,
@@ -305,14 +347,14 @@ pub struct Results<T, E> {
     errors: Vec<E>,
 }
 
-struct ConfigLoadResults {
+pub struct ConfigLoadResults<T> {
     nice_folder: PathBuf,
     full_path: PathBuf,
-    result: Rc<Result<SongConfig, ConfigError>>,
+    result: Rc<Result<T, ConfigError>>,
 }
 
 struct GetMetadataResults {
-    newly_loaded: Vec<ConfigLoadResults>,
+    newly_loaded: Vec<ConfigLoadResults<SongConfig>>,
     value_errors: Vec<ValueError>,
     result: Option<Metadata>,
 }
@@ -324,8 +366,7 @@ fn get_metadata(
 ) -> GetMetadataResults {
     let mut newly_loaded = vec![];
     let mut value_errors = vec![];
-    let mut metadata = PendingMetadata::new();
-    let mut failed = false;
+    let mut metadata = Some(PendingMetadata::new());
     for ancestor in nice_path
         .parent()
         .unwrap_or(Path::new(""))
@@ -354,23 +395,28 @@ fn get_metadata(
                 });
             match Rc::as_ref(config_load) {
                 Ok(config) => {
-                    let mut more_errors =
-                        config.apply(nice_path, select_path, &mut metadata, library_config);
-                    value_errors.append(&mut more_errors);
+                    if let Some(ref mut metadata) = metadata {
+                        let mut more_errors =
+                            config.apply(nice_path, select_path, metadata, library_config);
+                        value_errors.append(&mut more_errors);
+                    }
                 }
-                Err(error) if is_not_found(error) => {}
-                Err(_) => {
-                    failed = true;
+                Err(error) => {
+                    if !is_not_found(error) {
+                        metadata = None;
+                    }
                 }
             }
         }
     }
-    let mut resolved = metadata.resolve(nice_path, library_config, config_cache);
-    value_errors.append(&mut resolved.errors);
+    let mut resolved = metadata.map(|x| x.resolve(nice_path, library_config, config_cache));
+    if let Some(ref mut results) = resolved {
+        value_errors.append(&mut results.errors);
+    }
     GetMetadataResults {
         newly_loaded,
         value_errors,
-        result: (!failed).then_some(resolved.result),
+        result: resolved.map(|x| x.result),
     }
 }
 
