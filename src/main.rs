@@ -60,18 +60,6 @@ fn main() {
     }
 }
 
-fn print_errors<T>(results: Results<T, ValueError>) -> T {
-    for err in results.errors {
-        match err {
-            ValueError::ExitRequested => {}
-            other => {
-                eprintln!("{}", cformat!("\t<yellow>{}</>", other));
-            }
-        }
-    }
-    results.result
-}
-
 fn add_to_song(
     file_path: &Path,
     nice_path: &Path,
@@ -125,7 +113,8 @@ fn add_to_song(
             &config.artist_separator,
         );
     }
-    print_errors(FinalMetadata::create(metadata));
+    let final_metadata = FinalMetadata::create(metadata);
+    print_value_errors(&final_metadata.errors);
     if !any {
         eprintln!("{}", cformat!("\t<red>No tags found in file</>"));
         progress.failed += 1;
@@ -135,6 +124,47 @@ fn add_to_song(
 struct WorkProgress {
     changed: u32,
     failed: u32,
+}
+
+fn print_value_errors(errors: &[ValueError]) {
+    for err in errors {
+        match err {
+            ValueError::ExitRequested => {}
+            other => {
+                eprintln!("{}", cformat!("\t<yellow>{}</>", other));
+            }
+        }
+    }
+}
+
+fn print_metadata_errors(results: &GetMetadataResults, library_config: &LibraryConfig) {
+    for load in &results.newly_loaded {
+        match Rc::as_ref(&load.result) {
+            Ok(ref config) => {
+                for unused in config.set.iter().flat_map(|x| {
+                    find_unused_selectors(&x.names, &load.nice_folder, library_config)
+                }) {
+                    let display = inline_data(unused);
+                    eprintln!(
+                        "{}",
+                        cformat!("<yellow>Selector {} didn't find anything</>", display)
+                    );
+                }
+            }
+            Err(ref error) if is_not_found(error) => {}
+            Err(ref error) => {
+                eprintln!(
+                    "{}",
+                    cformat!(
+                        "<red>Error loading config: {}\n{}</>",
+                        load.full_path.display(),
+                        error
+                    )
+                );
+            }
+        }
+    }
+    print_value_errors(&results.value_errors);
 }
 
 fn do_scan(mut library_config: LibraryConfig) {
@@ -156,9 +186,12 @@ fn do_scan(mut library_config: LibraryConfig) {
                 .unwrap_or(&folder_path)
                 .to_owned(),
         );
-        if let Ok(results) = get_metadata(&nice_path, &library_config, &mut config_cache) {
+        let results = get_metadata(&nice_path, &library_config, &mut config_cache);
+        if results.result.is_some() {
             println!("{}", nice_path.display());
-            let mut metadata = print_errors(results);
+        }
+        print_metadata_errors(&results, &library_config);
+        if let Some(mut metadata) = results.result {
             if let Some(repo) = &library_config.art_repo {
                 let template = repo.resolve_art(&mut metadata, &scan_images, &mut art_config_cache);
             }
@@ -174,17 +207,19 @@ fn do_scan(mut library_config: LibraryConfig) {
                 .unwrap_or(&song_path)
                 .with_extension(""),
         );
-        if let Ok(results) = get_metadata(&nice_path, &library_config, &mut config_cache) {
+        let results = get_metadata(&nice_path, &library_config, &mut config_cache);
+        if results.result.is_some() {
             println!("{}", nice_path.display());
-            let mut final_metadata = print_errors(results);
+        }
+        print_metadata_errors(&results, &library_config);
+        if let Some(mut metadata) = results.result {
             if let Some(repo) = &library_config.art_repo {
-                let template =
-                    repo.resolve_art(&mut final_metadata, &scan_images, &mut art_config_cache);
+                let template = repo.resolve_art(&mut metadata, &scan_images, &mut art_config_cache);
             }
             add_to_song(
                 &song_path,
                 &nice_path,
-                final_metadata,
+                metadata,
                 &mut library_config,
                 &mut progress,
             );
@@ -212,7 +247,7 @@ fn do_scan(mut library_config: LibraryConfig) {
     }
 }
 
-type ConfigCache = HashMap<PathBuf, Result<SongConfig, Rc<ConfigError>>>;
+type ConfigCache = HashMap<PathBuf, Rc<Result<SongConfig, ConfigError>>>;
 
 fn is_not_found(result: &ConfigError) -> bool {
     matches!(result, ConfigError::Yaml(YamlError::Io(ref error)) if error.kind() == ErrorKind::NotFound)
@@ -252,53 +287,32 @@ fn find_unused_selectors<'a>(
     }
 }
 
-fn load_new_config(
-    full_path: &Path,
-    nice_folder: &Path,
-    library_config: &LibraryConfig,
-) -> Result<SongConfig, Rc<ConfigError>> {
-    let result = file_stuff::load_config(full_path, nice_folder, library_config);
-    match result {
-        Ok(ref config) => {
-            for unused in config
-                .set
-                .iter()
-                .flat_map(|x| find_unused_selectors(&x.names, nice_folder, library_config))
-            {
-                let display = inline_data(unused);
-                eprintln!(
-                    "{}",
-                    cformat!("<yellow>Selector {} didn't find anything</>", display)
-                );
-            }
-        }
-        Err(ref error) if is_not_found(error) => {}
-        Err(ref error) => {
-            eprintln!(
-                "{}",
-                cformat!(
-                    "<red>Error loading config: {}\n{}</>",
-                    full_path.display(),
-                    error
-                )
-            );
-        }
-    }
-    result.map_err(Rc::new)
-}
-
 pub struct Results<T, E> {
     result: T,
     errors: Vec<E>,
+}
+
+struct ConfigLoadResults {
+    nice_folder: PathBuf,
+    full_path: PathBuf,
+    result: Rc<Result<SongConfig, ConfigError>>,
+}
+
+struct GetMetadataResults {
+    newly_loaded: Vec<ConfigLoadResults>,
+    value_errors: Vec<ValueError>,
+    result: Option<Metadata>,
 }
 
 fn get_metadata(
     nice_path: &ItemPath,
     library_config: &LibraryConfig,
     config_cache: &mut ConfigCache,
-) -> Result<Results<Metadata, ValueError>, Rc<ConfigError>> {
+) -> GetMetadataResults {
+    let mut newly_loaded = vec![];
+    let mut value_errors = vec![];
     let mut metadata = PendingMetadata::new();
-    let mut errors = vec![];
+    let mut failed = false;
     for ancestor in nice_path
         .parent()
         .unwrap_or(Path::new(""))
@@ -313,27 +327,38 @@ fn get_metadata(
             let config_load = config_cache
                 .entry(config_path)
                 .or_insert_with_key(|config_path| {
-                    load_new_config(config_path, ancestor, library_config)
+                    let result = Rc::new(file_stuff::load_config(
+                        config_path,
+                        ancestor,
+                        library_config,
+                    ));
+                    newly_loaded.push(ConfigLoadResults {
+                        nice_folder: ancestor.to_owned(),
+                        full_path: config_path.to_owned(),
+                        result: result.clone(),
+                    });
+                    result
                 });
-            match config_load {
+            match Rc::as_ref(config_load) {
                 Ok(config) => {
                     let mut more_errors =
                         config.apply(nice_path, select_path, &mut metadata, library_config);
-                    errors.append(&mut more_errors);
+                    value_errors.append(&mut more_errors);
                 }
                 Err(error) if is_not_found(error) => {}
-                Err(error) => {
-                    return Err(error.clone());
+                Err(_) => {
+                    failed = true;
                 }
             }
         }
     }
     let mut resolved = metadata.resolve(nice_path, library_config, config_cache);
-    errors.append(&mut resolved.errors);
-    Ok(Results {
-        result: resolved.result,
-        errors,
-    })
+    value_errors.append(&mut resolved.errors);
+    GetMetadataResults {
+        newly_loaded,
+        value_errors,
+        result: (!failed).then_some(resolved.result),
+    }
 }
 
 fn print_differences(name: &str, existing: &Metadata, incoming: &Metadata) -> bool {

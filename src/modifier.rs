@@ -53,6 +53,7 @@ pub enum ValueModifier {
 }
 
 pub enum ValueError {
+    ExitRequested,
     UnexpectedType {
         modifier: Rc<ValueModifier>,
         got: PendingValue,
@@ -65,7 +66,6 @@ pub enum ValueError {
     ItemNotFound {
         selector: Rc<LocalItemSelector>,
     },
-    ExitRequested,
     ResolutionFailed {
         field: MetadataField,
         value: PendingValue,

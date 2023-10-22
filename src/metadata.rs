@@ -11,19 +11,18 @@ use serde::{Deserialize, Serialize};
 use strum::{Display, EnumIter};
 
 use crate::{
-    file_stuff::ConfigError,
     get_metadata,
     library_config::LibraryConfig,
     modifier::{ValueError, ValueModifier},
     util::ItemPath,
-    ConfigCache, Results,
+    ConfigCache, GetMetadataResults, Results,
 };
 
 pub struct PendingMetadata {
     pub fields: HashMap<MetadataField, PendingValue>,
 }
 pub type Metadata = HashMap<MetadataField, MetadataValue>;
-type MetadataCache = HashMap<PathBuf, Result<Metadata, Rc<ConfigError>>>;
+type MetadataCache = HashMap<PathBuf, GetMetadataResults>;
 impl PendingMetadata {
     pub fn new() -> Self {
         Self {
@@ -55,10 +54,9 @@ impl PendingMetadata {
                                 .entry(source.clone().into())
                                 .or_insert_with(|| {
                                     get_metadata(source, library_config, config_cache)
-                                        .map(|x| x.result)
                                 })
+                                .result
                                 .as_ref()
-                                .ok()
                         }
                     };
                     source_metadata.and_then(|meta| {
