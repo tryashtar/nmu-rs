@@ -312,7 +312,7 @@ impl LibraryConfig {
             .songs
             .map(|x| {
                 self.resolve_operation(x).map(|ops| AllSetter {
-                    names: ItemSelector::All,
+                    names: ItemSelector::All { recursive: true },
                     must_be: Some(MusicItemType::Song),
                     set: ops,
                 })
@@ -322,7 +322,7 @@ impl LibraryConfig {
             .folders
             .map(|x| {
                 self.resolve_operation(x).map(|ops| AllSetter {
-                    names: ItemSelector::All,
+                    names: ItemSelector::All { recursive: true },
                     must_be: Some(MusicItemType::Folder),
                     set: ops,
                 })

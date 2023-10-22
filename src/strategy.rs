@@ -170,7 +170,11 @@ impl MetadataOperation {
 #[derive(Deserialize, Serialize, Clone)]
 #[serde(untagged)]
 pub enum ItemSelector {
-    All,
+    #[serde(skip)]
+    All {
+        recursive: bool,
+    },
+    #[serde(skip)]
     This,
     Path(PathBuf),
     Multi(Vec<ItemSelector>),
@@ -185,7 +189,13 @@ pub enum ItemSelector {
 impl ItemSelector {
     pub fn matches(&self, check_path: &Path) -> bool {
         match self {
-            Self::All => true,
+            Self::All { recursive } => {
+                if *recursive {
+                    true
+                } else {
+                    check_path.components().take(2).collect::<Vec<_>>().len() == 1
+                }
+            }
             Self::This => check_path.as_os_str().is_empty(),
             Self::Multi(checks) => checks.iter().any(|x| x.matches(check_path)),
             Self::Path(path) => check_path.starts_with(path),
@@ -203,7 +213,7 @@ impl ItemSelector {
     }
     fn consume<'a>(&self, check_path: &'a Path) -> Vec<&'a Path> {
         match self {
-            Self::All => vec![check_path],
+            Self::All { .. } => vec![check_path],
             Self::This => vec![],
             Self::Path(path) => check_path.strip_prefix(path).into_iter().collect(),
             Self::Multi(multi) => multi.iter().flat_map(|x| x.consume(check_path)).collect(),

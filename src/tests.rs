@@ -509,10 +509,9 @@ fn selector_matches() {
     make_file("sub/deep1/one");
     make_file("sub/deep2/one");
     assert_results(
-        ItemSelector::All,
+        ItemSelector::All { recursive: true },
         "",
         &[
-            "",
             "a",
             "b",
             "c",
@@ -527,18 +526,19 @@ fn selector_matches() {
         ],
     );
     assert_results(
-        ItemSelector::All,
+        ItemSelector::All { recursive: false },
+        "",
+        &["a", "b", "c", "sub"],
+    );
+    assert_results(
+        ItemSelector::All { recursive: true },
         "sub",
-        &[
-            "",
-            "a",
-            "deep1",
-            "deep1/one",
-            "deep2",
-            "deep2/one",
-            "e",
-            "f",
-        ],
+        &["a", "deep1", "deep1/one", "deep2", "deep2/one", "e", "f"],
+    );
+    assert_results(
+        ItemSelector::All { recursive: false },
+        "sub",
+        &["a", "deep1", "deep2", "e", "f"],
     );
     assert_results(ItemSelector::Path(PathBuf::from("b")), "", &["b"]);
     assert_results(ItemSelector::Path(PathBuf::from("b")), "sub", &[]);

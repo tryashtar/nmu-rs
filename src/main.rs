@@ -39,7 +39,7 @@ fn main() {
         Err(YamlError::Io(error))
             if error.kind() == ErrorKind::NotFound && library_argument.is_none() =>
         {
-            eprintln!("{}", cformat!("<red>{}</>", error.to_string()));
+            eprintln!("{}", cformat!("❌ <red>{}</>", error.to_string()));
             if let Ok(dir) = std::env::current_dir() {
                 eprintln!(
                     "Provide the path to a library.yaml or add one to '{}'",
@@ -86,7 +86,7 @@ fn add_to_song(
                 any = true;
                 progress.failed += 1;
             }
-            eprintln!("{}", cformat!("\t<red>ID3 Tag error: {}</>", err));
+            eprintln!("{}", cformat!("\t❌ <red>ID3 Tag error: {}</>", err));
         }
     }
     match metaflac::Tag::read_from_path(file_path) {
@@ -104,7 +104,7 @@ fn add_to_song(
                 any = true;
                 progress.failed += 1;
             }
-            eprintln!("{}", cformat!("\t<red>Flac Tag error: {}</>", err));
+            eprintln!("{}", cformat!("\t❌ <red>Flac Tag error: {}</>", err));
         }
     }
     for report in config.reports.iter_mut() {
@@ -118,7 +118,7 @@ fn add_to_song(
     let final_metadata = FinalMetadata::create(metadata);
     print_value_errors(&final_metadata.errors);
     if !any {
-        eprintln!("{}", cformat!("\t<red>No tags found in file</>"));
+        eprintln!("{}", cformat!("\t❌ <red>No tags found in file</>"));
         progress.failed += 1;
     }
 }
@@ -133,7 +133,7 @@ fn print_value_errors(errors: &[ValueError]) {
         match err {
             ValueError::ExitRequested => {}
             other => {
-                eprintln!("{}", cformat!("\t<yellow>{}</>", other));
+                eprintln!("{}", cformat!("\t⚠️ <yellow>{}</>", other));
             }
         }
     }
@@ -143,7 +143,7 @@ fn print_art_errors(result: &ProcessArtResult) {
     match result {
         ProcessArtResult::NoArtNeeded => {}
         ProcessArtResult::NoTemplateFound => {
-            eprintln!("{}", cformat!("<yellow>No matching templates found</>",));
+            eprintln!("{}", cformat!("⚠️ <yellow>No matching templates found</>",));
         }
         ProcessArtResult::Processed {
             full_path: nice_path,
@@ -154,7 +154,7 @@ fn print_art_errors(result: &ProcessArtResult) {
                 eprintln!(
                     "{}",
                     cformat!(
-                        "<red>Error loading image {}:\n{}</>",
+                        "❌ <red>Error loading image {}:\n{}</>",
                         nice_path.display(),
                         error
                     )
@@ -166,7 +166,7 @@ fn print_art_errors(result: &ProcessArtResult) {
                         eprintln!(
                             "{}",
                             cformat!(
-                                "<red>Error loading config: {}\n{}</>",
+                                "❌ <red>Error loading config: {}\n{}</>",
                                 load.full_path.display(),
                                 error
                             )
@@ -197,7 +197,7 @@ fn print_metadata_errors(results: &GetMetadataResults, library_config: &LibraryC
                     eprintln!(
                         "{}",
                         cformat!(
-                            "<red>Error loading config: {}\n{}</>",
+                            "❌ <red>Error loading config: {}\n{}</>",
                             load.full_path.display(),
                             error
                         )
@@ -288,16 +288,22 @@ fn do_scan(mut library_config: LibraryConfig) {
         println!("Updated {}, errored {}", progress.changed, progress.failed);
     }
     if let Err(err) = library_config.date_cache.save() {
-        eprintln!("{}", cformat!("<red>Error saving date cache:\n{}</>", err));
+        eprintln!(
+            "{}",
+            cformat!("❌ <red>Error saving date cache:\n{}</>", err)
+        );
     }
     if let Some(repo) = library_config.art_repo {
         if let Err(err) = repo.used_templates.save() {
-            eprintln!("{}", cformat!("<red>Error saving art cache:\n{}</>", err));
+            eprintln!(
+                "{}",
+                cformat!("❌ <red>Error saving art cache:\n{}</>", err)
+            );
         }
     }
     for report in library_config.reports {
         if let Err(err) = report.save() {
-            eprintln!("{}", cformat!("<red>Error saving report:\n{}</>", err));
+            eprintln!("{}", cformat!("❌ <red>Error saving report:\n{}</>", err));
         }
     }
 }
@@ -314,7 +320,7 @@ fn find_unused_selectors<'a>(
     config: &LibraryConfig,
 ) -> Vec<&'a ItemSelector> {
     match selector {
-        ItemSelector::All
+        ItemSelector::All { .. }
         | ItemSelector::This
         | ItemSelector::Path(_)
         | ItemSelector::Segmented { .. } => {

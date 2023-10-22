@@ -83,24 +83,56 @@ pub fn find_matches(
     let full_start = config.library_folder.join(nice_start);
     match selector {
         ItemSelector::This => vec![ItemPath::Folder(PathBuf::from(""))],
-        ItemSelector::All => walkdir::WalkDir::new(&full_start)
-            .into_iter()
-            .filter_entry(|entry| {
-                entry.file_type().is_dir() || match_extension(entry.path(), &config.song_extensions)
-            })
-            .filter_map(|x| x.ok())
-            .filter_map(|entry| {
-                let is_dir = entry.file_type().is_dir();
-                let path = entry.into_path();
-                let path = path.strip_prefix(&full_start).ok();
-                if is_dir {
-                    path.map(|x| ItemPath::Folder(x.to_owned()))
-                } else {
-                    path.map(|x| ItemPath::Song(x.with_extension("")))
+        ItemSelector::All { recursive } => {
+            if *recursive {
+                walkdir::WalkDir::new(&full_start)
+                    .into_iter()
+                    .filter_entry(|entry| {
+                        entry.file_type().is_dir()
+                            || match_extension(entry.path(), &config.song_extensions)
+                    })
+                    .filter_map(|x| x.ok())
+                    .filter_map(|entry| {
+                        let is_dir = entry.file_type().is_dir();
+                        let path = entry.into_path();
+                        let path = path.strip_prefix(&full_start).ok();
+                        if let Some(path) = path {
+                            if path.as_os_str().is_empty() {
+                                return None;
+                            }
+                        }
+                        if is_dir {
+                            path.map(|x| ItemPath::Folder(x.to_owned()))
+                        } else {
+                            path.map(|x| ItemPath::Song(x.with_extension("")))
+                        }
+                    })
+                    .sorted_by(|a, b| Ord::cmp(a.deref(), b.deref()))
+                    .collect()
+            } else {
+                if let Ok(read) = std::fs::read_dir(&full_start) {
+                    return read
+                        .into_iter()
+                        .filter_map(|x| x.ok())
+                        .filter_map(|entry| {
+                            let path = entry.path();
+                            let path = path.strip_prefix(&full_start).ok();
+                            path.and_then(|path| {
+                                if is_dir(&entry) {
+                                    return Some(ItemPath::Folder(path.to_owned()));
+                                } else if match_extension(path, &config.song_extensions) {
+                                    let stripped = path.with_extension("");
+                                    return Some(ItemPath::Song(stripped));
+                                }
+                                None
+                            })
+                        })
+                        .sorted_by(|a, b| Ord::cmp(a.deref(), b.deref()))
+                        .collect();
                 }
-            })
-            .sorted_by(|a, b| Ord::cmp(a.deref(), b.deref()))
-            .collect(),
+                vec![]
+            }
+        }
         ItemSelector::Multi(checks) => checks
             .iter()
             .flat_map(|selector| find_matches(selector, nice_start, config))
