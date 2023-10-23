@@ -199,11 +199,40 @@ impl FinalArtSettings {
             };
             image = match self.scale {
                 ArtScale::Stretch => image.resize_exact(width, height, filter),
-                ArtScale::Max => image.resize_to_fill(width, height, filter),
-                ArtScale::Pad => image.resize(width, height, filter),
+                ArtScale::Pad | ArtScale::Max => image.resize(width, height, filter),
             };
+            if matches!(self.scale, ArtScale::Pad) {
+                let mut field = self.empty_field(width, height);
+                let (current_width, current_height) = image.dimensions();
+                image::imageops::overlay(
+                    &mut field,
+                    &image,
+                    ((width - current_width) / 2) as i64,
+                    ((height - current_height) / 2) as i64,
+                );
+                image = field.into()
+            }
+        }
+        if let Some(buffer) = self.buffer {
+            let (width, height) = image.dimensions();
+            let mut field = self.empty_field(
+                width + buffer[0] + buffer[2],
+                height + buffer[1] + buffer[3],
+            );
+            image::imageops::overlay(&mut field, &image, buffer[0] as i64, buffer[1] as i64);
+            image = field.into()
+        } else if self.background.is_some() {
+            let (width, height) = image.dimensions();
+            let mut field = self.empty_field(width, height);
+            image::imageops::overlay(&mut field, &image, 0, 0);
         }
         image
+    }
+    fn empty_field(&self, width: u32, height: u32) -> image::RgbaImage {
+        match self.background {
+            None => image::RgbaImage::new(width, height),
+            Some(bg) => image::RgbaImage::from_pixel(width, height, image::Rgba::<u8>(bg)),
+        }
     }
     fn bounding_rectangle(image: &DynamicImage) -> (u32, u32, u32, u32) {
         let (mut left, mut top) = image.dimensions();
@@ -380,7 +409,7 @@ impl ArtRepo {
                 if let Ok(mut template) = template_result {
                     template = config.apply(template);
                     if let Some(cached_path) = cached_path {
-                        let _ = template.save(cached_path);
+                        let _ = template.save_with_format(cached_path, image::ImageFormat::Png);
                     }
                     template_result = Ok(template);
                 }
