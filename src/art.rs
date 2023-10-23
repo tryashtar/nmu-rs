@@ -4,7 +4,7 @@ use std::{
     rc::Rc,
 };
 
-use image::{DynamicImage, ImageError};
+use image::{DynamicImage, GenericImageView, ImageError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -33,16 +33,16 @@ pub struct ArtSettings {
     height: Option<ArtLength>,
     interpolation: Option<Interpolation>,
     integer_scale: Option<bool>,
-    buffer: Option<ArtList>,
-    background: Option<ArtList>,
+    buffer: Option<ArtList<[u32; 4]>>,
+    background: Option<ArtList<[u8; 4]>>,
     scale: Option<ArtScale>,
 }
 #[derive(Deserialize, Serialize, Clone)]
 #[serde(untagged)]
-pub enum ArtList {
+pub enum ArtList<T> {
     #[serde(deserialize_with = "art_list_disabled")]
     Disabled,
-    Present([u32; 4]),
+    Present(T),
 }
 fn art_list_disabled<'de, D>(deserializer: D) -> Result<(), D::Error>
 where
@@ -82,6 +82,7 @@ pub enum Interpolation {
 pub enum ArtScale {
     Pad,
     Max,
+    Stretch,
 }
 #[derive(Deserialize, Serialize, Clone)]
 #[serde(untagged)]
@@ -171,11 +172,52 @@ pub struct FinalArtSettings {
     interpolation: Interpolation,
     integer_scale: bool,
     buffer: Option<[u32; 4]>,
-    background: Option<[u32; 4]>,
+    background: Option<[u8; 4]>,
     scale: ArtScale,
 }
 impl FinalArtSettings {
-    fn apply(&self, image: &mut DynamicImage) {}
+    fn apply(&self, mut image: DynamicImage) -> DynamicImage {
+        if self.buffer.is_some() {
+            let (x, y, width, height) = Self::bounding_rectangle(&image);
+            image = image.crop(x, y, width, height);
+        }
+        if self.width.is_some() || self.height.is_some() {
+            let (current_width, current_height) = image.dimensions();
+            let mut width = self.width.unwrap_or(current_width);
+            let mut height = self.height.unwrap_or(current_height);
+            if self.integer_scale {
+                width = width / current_width * current_width;
+                height = height / current_height * current_height;
+            }
+            if let Some(buffer) = self.buffer {
+                width -= buffer[0] + buffer[2];
+                height -= buffer[1] + buffer[3];
+            }
+            let filter = match self.interpolation {
+                Interpolation::NearestNeighbor => image::imageops::FilterType::Nearest,
+                Interpolation::Bicubic => image::imageops::FilterType::CatmullRom,
+            };
+            image = match self.scale {
+                ArtScale::Stretch => image.resize_exact(width, height, filter),
+                ArtScale::Max => image.resize_to_fill(width, height, filter),
+                ArtScale::Pad => image.resize(width, height, filter),
+            };
+        }
+        image
+    }
+    fn bounding_rectangle(image: &DynamicImage) -> (u32, u32, u32, u32) {
+        let (mut left, mut top) = image.dimensions();
+        let (mut right, mut bottom) = (0, 0);
+        for (x, y, color) in image.pixels() {
+            if color[3] > 0 {
+                left = std::cmp::min(x, left);
+                top = std::cmp::min(y, top);
+                right = std::cmp::max(x, right);
+                bottom = std::cmp::max(y, bottom);
+            }
+        }
+        (left, top, right - left + 1, bottom - top + 1)
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -327,7 +369,7 @@ impl ArtRepo {
                 };
             }
         }
-        let mut template = image::open(template);
+        let mut template_result = image::open(template);
         let settings = self.get_settings(nice, config_cache);
         match &settings.result {
             None => GetProcessedResult {
@@ -335,15 +377,16 @@ impl ArtRepo {
                 result: Err(ArtError::Config),
             },
             Some(config) => {
-                if let Ok(ref mut template) = template {
-                    config.apply(template);
+                if let Ok(mut template) = template_result {
+                    template = config.apply(template);
                     if let Some(cached_path) = cached_path {
                         let _ = template.save(cached_path);
                     }
+                    template_result = Ok(template);
                 }
                 GetProcessedResult {
                     newly_loaded: settings.newly_loaded,
-                    result: template.map_err(ArtError::Image),
+                    result: template_result.map_err(ArtError::Image),
                 }
             }
         }
