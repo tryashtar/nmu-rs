@@ -23,56 +23,99 @@ pub fn get_metadata_flac(tag: &metaflac::Tag) -> FinalMetadata {
         art: SetValue::Skip,
         simple_lyrics: SetValue::Skip,
     };
-    for block in tag.blocks() {
-        if let Block::VorbisComment(comment) = block {
-            if let SetValue::Set(v) = flac_str(comment.title()) {
-                metadata.title = SetValue::Set(v);
-            }
-            if let SetValue::Set(v) = flac_str(comment.album()) {
-                metadata.album = SetValue::Set(v);
-            }
-            if let SetValue::Set(v) = flac_list(comment.artist()) {
-                metadata.performers = SetValue::Set(v);
-            }
-            if let SetValue::Set(v) = flac_str(comment.album_artist()) {
-                metadata.album_artist = SetValue::Set(v);
-            }
-            if let SetValue::Set(v) = flac_list(comment.get("COMPOSER")) {
-                metadata.composers = SetValue::Set(v);
-            }
-            if let SetValue::Set(v) = flac_str(comment.get("REMIXEDBY")) {
-                metadata.arranger = SetValue::Set(v);
-            }
-            if let SetValue::Set(v) = flac_list(comment.get("COMMENT")) {
-                metadata.comments = SetValue::Set(v);
-            }
-            if let SetValue::Set(v) = flac_num(comment.track()) {
-                metadata.track = SetValue::Set(v);
-            }
-            if let SetValue::Set(v) = flac_num_str(comment.get("TRACKTOTAL")) {
-                metadata.track_total = SetValue::Set(v);
-            }
-            if let SetValue::Set(v) = flac_num_str(comment.get("DISCNUMBER")) {
-                metadata.disc = SetValue::Set(v);
-            }
-            if let SetValue::Set(v) = flac_num_str(comment.get("DISCTOTAL")) {
-                metadata.disc_total = SetValue::Set(v);
-            }
-            if let SetValue::Set(v) = flac_num_str(comment.get("YEAR")) {
-                metadata.year = SetValue::Set(v);
-            }
-            if let SetValue::Set(v) = flac_str(comment.get("LANGUAGE")) {
-                metadata.language = SetValue::Set(v);
-            }
-            if let SetValue::Set(v) = flac_list(comment.genre()) {
-                metadata.genres = SetValue::Set(v);
-            }
-            if let SetValue::Set(v) = flac_list(comment.get("UNSYNCED LYRICS")) {
-                metadata.simple_lyrics = SetValue::Set(Some(v.join("\n")));
-            }
+    if let Some(comment) = tag.vorbis_comments() {
+        if let SetValue::Set(v) = flac_str(comment.get("TITLE")) {
+            metadata.title = SetValue::Set(v);
+        }
+        if let SetValue::Set(v) = flac_str(comment.get("ALBUM")) {
+            metadata.album = SetValue::Set(v);
+        }
+        if let SetValue::Set(v) = flac_list(comment.get("ARTIST")) {
+            metadata.performers = SetValue::Set(v);
+        }
+        if let SetValue::Set(v) = flac_str(comment.get("ALBUMARTIST")) {
+            metadata.album_artist = SetValue::Set(v);
+        }
+        if let SetValue::Set(v) = flac_list(comment.get("COMPOSER")) {
+            metadata.composers = SetValue::Set(v);
+        }
+        if let SetValue::Set(v) = flac_str(comment.get("REMIXEDBY")) {
+            metadata.arranger = SetValue::Set(v);
+        }
+        if let SetValue::Set(v) = flac_list(comment.get("COMMENT")) {
+            metadata.comments = SetValue::Set(v);
+        }
+        if let SetValue::Set(v) = flac_num_str(comment.get("TRACK")) {
+            metadata.track = SetValue::Set(v);
+        }
+        if let SetValue::Set(v) = flac_num_str(comment.get("TRACKTOTAL")) {
+            metadata.track_total = SetValue::Set(v);
+        }
+        if let SetValue::Set(v) = flac_num_str(comment.get("DISCNUMBER")) {
+            metadata.disc = SetValue::Set(v);
+        }
+        if let SetValue::Set(v) = flac_num_str(comment.get("DISCTOTAL")) {
+            metadata.disc_total = SetValue::Set(v);
+        }
+        if let SetValue::Set(v) = flac_num_str(comment.get("YEAR")) {
+            metadata.year = SetValue::Set(v);
+        }
+        if let SetValue::Set(v) = flac_str(comment.get("LANGUAGE")) {
+            metadata.language = SetValue::Set(v);
+        }
+        if let SetValue::Set(v) = flac_list(comment.get("GENRE")) {
+            metadata.genres = SetValue::Set(v);
+        }
+        if let SetValue::Set(v) = flac_list(comment.get("UNSYNCED LYRICS")) {
+            metadata.simple_lyrics = SetValue::Set(Some(v.join("\n")));
         }
     }
     metadata
+}
+pub fn set_metadata_flac(tag: &mut metaflac::Tag, metadata: &FinalMetadata) {
+    let comment = tag.vorbis_comments_mut();
+    if let SetValue::Set(v) = &metadata.title {
+        flac_set(comment, "TITLE", v.clone());
+    }
+    if let SetValue::Set(v) = &metadata.album {
+        flac_set(comment, "ALBUM", v.clone());
+    }
+    if let SetValue::Set(v) = &metadata.performers {
+        flac_set_list(comment, "ARTIST", v.clone());
+    }
+    if let SetValue::Set(v) = &metadata.album_artist {
+        flac_set(comment, "ALBUMARTIST", v.clone());
+    }
+    if let SetValue::Set(v) = &metadata.composers {
+        flac_set_list(comment, "COMPOSER", v.clone());
+    }
+    if let SetValue::Set(v) = &metadata.arranger {
+        flac_set(comment, "REMIXEDBY", v.clone());
+    }
+    if let SetValue::Set(v) = &metadata.comments {
+        flac_set_list(comment, "COMMENT", v.clone());
+    }
+    if let SetValue::Set(v) = &metadata.track {
+        flac_set_number(comment, "TRACK", *v);
+    }
+    if let SetValue::Set(v) = &metadata.track_total {
+        flac_set_number(comment, "TRACKTOTAL", *v);
+    }
+    if let SetValue::Set(v) = &metadata.disc {
+        flac_set_number(comment, "DISCNUMBER", *v);
+    }
+    if let SetValue::Set(v) = &metadata.disc_total {
+        flac_set_number(comment, "DISCTOTAL", *v);
+    }
+    if let SetValue::Set(v) = &metadata.year {
+        flac_set_number(comment, "YEAR", *v);
+    }
+    if let SetValue::Set(v) = &metadata.language {
+        flac_set(comment, "LANGUAGE", v.clone());
+    }
+    if let SetValue::Set(v) = &metadata.genres {
+        flac_set_list(comment, "GENRE", v.clone());
+    }
 }
 pub fn get_metadata_id3(tag: &id3::Tag, sep: &str) -> FinalMetadata {
     FinalMetadata {
@@ -92,6 +135,137 @@ pub fn get_metadata_id3(tag: &id3::Tag, sep: &str) -> FinalMetadata {
         genres: SetValue::Set(id3_str_sep(tag.genre(), sep)),
         art: SetValue::Skip,
         simple_lyrics: SetValue::Set(id3_lyrics(tag.lyrics().collect())),
+    }
+}
+pub fn set_metadata_id3(tag: &mut id3::Tag, metadata: &FinalMetadata, sep: &str) {
+    if let SetValue::Set(v) = &metadata.title {
+        match v {
+            None => tag.remove_title(),
+            Some(v) => tag.set_title(v),
+        };
+    }
+    if let SetValue::Set(v) = &metadata.album {
+        match v {
+            None => tag.remove_album(),
+            Some(v) => tag.set_album(v),
+        };
+    }
+    if let SetValue::Set(v) = &metadata.performers {
+        if v.is_empty() {
+            tag.remove_artist();
+        } else {
+            tag.set_artist(v.join(sep));
+        }
+    }
+    if let SetValue::Set(v) = &metadata.album_artist {
+        match v {
+            None => tag.remove_album_artist(),
+            Some(v) => tag.set_album_artist(v),
+        };
+    }
+    if let SetValue::Set(v) = &metadata.composers {
+        if v.is_empty() {
+            tag.remove("TCOM");
+        } else {
+            tag.set_text("TCOM", v.join(sep));
+        }
+    }
+    if let SetValue::Set(v) = &metadata.arranger {
+        match v {
+            None => {
+                tag.remove("TPE4");
+            }
+            Some(v) => {
+                tag.set_text("TPE4", v);
+            }
+        };
+    }
+    if let SetValue::Set(v) = &metadata.comments {
+        if v.is_empty() {
+            tag.remove("COMM");
+        } else {
+            let lang = match &metadata.language {
+                SetValue::Skip => id3_str(tag.text_for_frame_id("TLAN")),
+                SetValue::Set(val) => val.clone(),
+            }
+            .unwrap_or_default();
+            for comment in v {
+                tag.add_frame(id3::frame::Comment {
+                    lang: lang.clone(),
+                    description: String::from(""),
+                    text: comment.to_owned(),
+                });
+            }
+        }
+    }
+    if let SetValue::Set(v) = &metadata.track {
+        match v {
+            None => tag.remove_track(),
+            Some(v) => tag.set_track(*v),
+        };
+    }
+    if let SetValue::Set(v) = &metadata.track_total {
+        match v {
+            None => tag.remove_total_tracks(),
+            Some(v) => tag.set_total_tracks(*v),
+        };
+    }
+    if let SetValue::Set(v) = &metadata.disc {
+        match v {
+            None => tag.remove_disc(),
+            Some(v) => tag.set_disc(*v),
+        };
+    }
+    if let SetValue::Set(v) = &metadata.disc_total {
+        match v {
+            None => tag.remove_total_discs(),
+            Some(v) => tag.set_total_discs(*v),
+        };
+    }
+    if let SetValue::Set(v) = &metadata.year {
+        match v {
+            None => tag.remove_year(),
+            Some(v) => tag.set_year(*v as i32),
+        };
+    }
+    if let SetValue::Set(v) = &metadata.language {
+        match v {
+            None => {
+                tag.remove("TLAN");
+            }
+            Some(v) => {
+                tag.set_text("TLAN", v);
+            }
+        };
+    }
+    if let SetValue::Set(v) = &metadata.genres {
+        if v.is_empty() {
+            tag.remove_genre();
+        } else {
+            tag.set_genre(v.join(sep));
+        }
+    }
+}
+
+fn flac_set(comment: &mut metaflac::block::VorbisComment, field: &str, value: Option<String>) {
+    match value {
+        None => comment.remove(field),
+        Some(value) => comment.set(field, vec![value]),
+    };
+}
+
+fn flac_set_number(comment: &mut metaflac::block::VorbisComment, field: &str, value: Option<u32>) {
+    match value {
+        None => comment.remove(field),
+        Some(value) => comment.set(field, vec![value.to_string()]),
+    };
+}
+
+fn flac_set_list(comment: &mut metaflac::block::VorbisComment, field: &str, value: Vec<String>) {
+    if value.is_empty() {
+        comment.remove(field);
+    } else {
+        comment.set(field, value);
     }
 }
 

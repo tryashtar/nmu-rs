@@ -72,12 +72,14 @@ fn add_to_song(
 ) {
     let mut any = false;
     let mut existing_metadata: Option<Metadata> = None;
+    let final_metadata = FinalMetadata::create(&metadata);
     match id3::Tag::read_from_path(file_path) {
-        Ok(id3) => {
+        Ok(mut id3) => {
             any = true;
             let existing = get_metadata_id3(&id3, &config.artist_separator).into();
             if print_differences("ID3 Tag", &existing, &metadata) {
                 progress.changed += 1;
+                set_metadata_id3(&mut id3, &final_metadata.result, &config.artist_separator);
             }
             existing_metadata = Some(existing);
         }
@@ -91,11 +93,12 @@ fn add_to_song(
         }
     }
     match metaflac::Tag::read_from_path(file_path) {
-        Ok(flac) => {
+        Ok(mut flac) => {
             any = true;
             let existing = get_metadata_flac(&flac).into();
             if print_differences("Flac Tag", &existing, &metadata) {
                 progress.changed += 1;
+                set_metadata_flac(&mut flac, &final_metadata.result);
             }
             existing_metadata = Some(existing);
         }
@@ -116,7 +119,6 @@ fn add_to_song(
             &config.artist_separator,
         );
     }
-    let final_metadata = FinalMetadata::create(metadata);
     print_value_errors(&final_metadata.errors);
     if !any {
         eprintln!("{}", cformat!("\t❌ <red>No tags found in file</>"));

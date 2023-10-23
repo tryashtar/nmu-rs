@@ -247,11 +247,11 @@ pub struct FinalMetadata {
     pub simple_lyrics: SetValue<Option<String>>,
 }
 impl FinalMetadata {
-    pub fn create(mut metadata: Metadata) -> Results<FinalMetadata, ValueError> {
+    pub fn create(metadata: &Metadata) -> Results<FinalMetadata, ValueError> {
         let mut errors = vec![];
         let mut convert_string = |field: BuiltinMetadataField| {
             let field = field.into();
-            match metadata.remove(&field) {
+            match metadata.get(&field) {
                 None => SetValue::Skip,
                 Some(MetadataValue::List(list)) if list.is_empty() => SetValue::Set(None),
                 Some(value) => match value.as_string() {
@@ -259,7 +259,7 @@ impl FinalMetadata {
                     None => {
                         errors.push(ValueError::WrongFieldType {
                             field,
-                            got: value,
+                            got: value.clone(),
                             expected: "single string",
                         });
                         SetValue::Skip
@@ -275,14 +275,14 @@ impl FinalMetadata {
         let simple_lyrics = convert_string(BuiltinMetadataField::SimpleLyrics);
         let mut convert_vec = |field: BuiltinMetadataField| {
             let field = field.into();
-            match metadata.remove(&field) {
+            match metadata.get(&field) {
                 None => SetValue::Skip,
                 Some(value) => match value {
-                    MetadataValue::List(list) => SetValue::Set(list),
+                    MetadataValue::List(list) => SetValue::Set(list.clone()),
                     MetadataValue::Number(_) => {
                         errors.push(ValueError::WrongFieldType {
                             field,
-                            got: value,
+                            got: value.clone(),
                             expected: "list",
                         });
                         SetValue::Skip
@@ -300,15 +300,15 @@ impl FinalMetadata {
         };
         let mut convert_num = |field: BuiltinMetadataField| {
             let field = field.into();
-            match metadata.remove(&field) {
+            match metadata.get(&field) {
                 None => SetValue::Skip,
                 Some(MetadataValue::List(list)) if list.is_empty() => SetValue::Set(None),
                 Some(value) => match value {
-                    MetadataValue::Number(num) => SetValue::Set(Some(num)),
+                    MetadataValue::Number(num) => SetValue::Set(Some(*num)),
                     MetadataValue::List(_) => {
                         errors.push(ValueError::WrongFieldType {
                             field,
-                            got: value,
+                            got: value.clone(),
                             expected: "number",
                         });
                         SetValue::Skip
