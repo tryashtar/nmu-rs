@@ -311,7 +311,7 @@ fn do_scan(mut library_config: LibraryConfig) {
                 );
                 print_art_errors(&art);
             }
-            for (field, value) in metadata {
+            for (field, value) in metadata.iter().sorted() {
                 println!("\t{field}: {value}");
             }
         }
@@ -495,7 +495,7 @@ fn get_metadata(
 
 fn print_differences(name: &str, existing: &Metadata, incoming: &Metadata) -> bool {
     let mut any = false;
-    for key in existing.keys().chain(incoming.keys()).unique() {
+    for key in existing.keys().chain(incoming.keys()).unique().sorted() {
         match key {
             MetadataField::Builtin(BuiltinMetadataField::SimpleLyrics)
             | MetadataField::Builtin(BuiltinMetadataField::Art)
@@ -652,6 +652,7 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
         print!("\r")
     }
     println!("Found {}, skipped {}", scan_songs.len(), skipped);
+    scan_folders.remove(&library_config.library_folder);
     ScanResults {
         songs: scan_songs,
         folders: scan_folders,

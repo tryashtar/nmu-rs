@@ -11,11 +11,11 @@ use thiserror::Error;
 
 use crate::art::{ArtRepo, RawArtRepo};
 use crate::file_stuff::{self, load_yaml, YamlError};
-use crate::metadata::{BuiltinMetadataField, Metadata, MetadataField, MetadataValue, BLANK_VALUE};
+use crate::metadata::{Metadata, MetadataField, MetadataValue, BLANK_VALUE};
 use crate::song_config::{
     AllSetter, DiscSet, OrderingSetter, RawSongConfig, ReferencableOperation, SongConfig,
 };
-use crate::strategy::{FieldSelector, ItemSelector, MetadataOperation, MusicItemType, ValueGetter};
+use crate::strategy::{FieldSelector, ItemSelector, MetadataOperation, MusicItemType};
 
 #[derive(Deserialize)]
 pub struct RawLibraryConfig {

@@ -91,16 +91,12 @@ pub fn find_matches(
                         entry.file_type().is_dir()
                             || match_extension(entry.path(), &config.song_extensions)
                     })
+                    .skip(1)
                     .filter_map(|x| x.ok())
                     .filter_map(|entry| {
                         let is_dir = entry.file_type().is_dir();
                         let path = entry.into_path();
                         let path = path.strip_prefix(&full_start).ok();
-                        if let Some(path) = path {
-                            if path.as_os_str().is_empty() {
-                                return None;
-                            }
-                        }
                         if is_dir {
                             path.map(|x| ItemPath::Folder(x.to_owned()))
                         } else {
