@@ -429,9 +429,9 @@ impl ArtRepo {
         let mut set: HashMap<PathBuf, Vec<Rc<ArtSettings>>> = HashMap::new();
         if let Some(raw_set) = raw_config.set_all {
             for setter in raw_set {
-                let mut resolved = self.resolve_settings(setter.set)?;
+                let resolved = self.resolve_settings(setter.set)?;
                 for name in setter.names {
-                    set.entry(name).or_default().append(&mut resolved);
+                    set.entry(name).or_default().append(&mut resolved.clone());
                 }
             }
         }

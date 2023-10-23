@@ -51,7 +51,7 @@ fn main() {
         Err(error) => {
             eprintln!(
                 "{}",
-                cformat!("<red>Error loading library config:\n{}</>", error)
+                cformat!("❌ <red>Error loading library config:\n{}</>", error)
             );
         }
         Ok(raw_config) => {
