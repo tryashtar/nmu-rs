@@ -12,7 +12,9 @@ use thiserror::Error;
 use crate::art::{ArtRepo, RawArtRepo};
 use crate::file_stuff::{self, load_yaml, YamlError};
 use crate::metadata::{BuiltinMetadataField, Metadata, MetadataField, MetadataValue, BLANK_VALUE};
-use crate::song_config::{AllSetter, RawSongConfig, ReferencableOperation, SongConfig};
+use crate::song_config::{
+    AllSetter, DiscSet, OrderingSetter, RawSongConfig, ReferencableOperation, SongConfig,
+};
 use crate::strategy::{FieldSelector, ItemSelector, MetadataOperation, MusicItemType, ValueGetter};
 
 #[derive(Deserialize)]
@@ -338,71 +340,6 @@ impl LibraryConfig {
                 })
             })
             .transpose()?;
-        let discs = raw_config
-            .discs
-            .map(|map| {
-                let disc_total = *(map.keys().max().unwrap_or(&1));
-                map.into_iter()
-                    .flat_map(|(disc, sel)| {
-                        let matches = file_stuff::find_matches(&sel, folder, self);
-                        let track_total = matches.len();
-                        matches.into_iter().enumerate().map(move |(track, path)| {
-                            AllSetter::new(
-                                ItemSelector::Path(path.into()),
-                                MetadataOperation::Set(HashMap::from([
-                                    (
-                                        BuiltinMetadataField::Track.into(),
-                                        ValueGetter::Direct(MetadataValue::Number(
-                                            (track + 1) as u32,
-                                        )),
-                                    ),
-                                    (
-                                        BuiltinMetadataField::TrackTotal.into(),
-                                        ValueGetter::Direct(MetadataValue::Number(
-                                            track_total as u32,
-                                        )),
-                                    ),
-                                    (
-                                        BuiltinMetadataField::Disc.into(),
-                                        ValueGetter::Direct(MetadataValue::Number(disc)),
-                                    ),
-                                    (
-                                        BuiltinMetadataField::DiscTotal.into(),
-                                        ValueGetter::Direct(MetadataValue::Number(disc_total)),
-                                    ),
-                                ])),
-                            )
-                        })
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let order = raw_config
-            .order
-            .map(|x| {
-                let matches = file_stuff::find_matches(&x, folder, self);
-                let total = matches.len();
-                matches
-                    .into_iter()
-                    .enumerate()
-                    .map(|(track, path)| {
-                        AllSetter::new(
-                            ItemSelector::Path(path.into()),
-                            MetadataOperation::Set(HashMap::from([
-                                (
-                                    BuiltinMetadataField::Track.into(),
-                                    ValueGetter::Direct(MetadataValue::Number((track + 1) as u32)),
-                                ),
-                                (
-                                    BuiltinMetadataField::TrackTotal.into(),
-                                    ValueGetter::Direct(MetadataValue::Number(total as u32)),
-                                ),
-                            ])),
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
         let set_fields = raw_config
             .set_fields
             .map(|sets| {
@@ -459,13 +396,52 @@ impl LibraryConfig {
             .into_iter()
             .chain(folders)
             .chain(this)
-            .chain(discs)
-            .chain(order)
             .chain(set_fields)
             .chain(set_all)
             .chain(set)
             .collect::<Vec<_>>();
-        Ok(SongConfig { set: merged })
+        let ordering = {
+            if let Some(discs) = raw_config.discs {
+                let mut map = HashMap::new();
+                for (disc, sel) in &discs {
+                    let matches = file_stuff::find_matches(sel, folder, self);
+                    let track_total = matches.len();
+                    for (track, path) in matches.into_iter().enumerate() {
+                        map.insert(
+                            PathBuf::from(path),
+                            DiscSet {
+                                disc: *disc,
+                                track: (track + 1) as u32,
+                                track_total: track_total as u32,
+                            },
+                        );
+                    }
+                }
+                Some(OrderingSetter::Discs {
+                    map,
+                    disc_total: *(discs.keys().max().unwrap_or(&1)),
+                    original_selectors: discs.into_values().collect(),
+                })
+            } else if let Some(order) = raw_config.order {
+                let map = file_stuff::find_matches(&order, folder, self)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(track, path)| (PathBuf::from(path), (track + 1) as u32))
+                    .collect::<HashMap<_, _>>();
+                let total = map.len() as u32;
+                Some(OrderingSetter::Order {
+                    map,
+                    total,
+                    original_selector: order,
+                })
+            } else {
+                None
+            }
+        };
+        Ok(SongConfig {
+            set: merged,
+            order: ordering,
+        })
     }
     fn resolve_operation(
         &self,

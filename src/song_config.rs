@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     library_config::LibraryConfig,
-    metadata::{MetadataField, PendingMetadata},
+    metadata::{BuiltinMetadataField, MetadataField, MetadataValue, PendingMetadata},
     modifier::ValueError,
     strategy::{ItemSelector, MetadataOperation, MusicItemType, ValueGetter},
     util::ItemPath,
@@ -51,6 +51,24 @@ pub struct RawFieldSetter {
 
 pub struct SongConfig {
     pub set: Vec<AllSetter>,
+    pub order: Option<OrderingSetter>,
+}
+pub enum OrderingSetter {
+    Order {
+        map: HashMap<PathBuf, u32>,
+        total: u32,
+        original_selector: ItemSelector,
+    },
+    Discs {
+        map: HashMap<PathBuf, DiscSet>,
+        disc_total: u32,
+        original_selectors: Vec<ItemSelector>,
+    },
+}
+pub struct DiscSet {
+    pub disc: u32,
+    pub track: u32,
+    pub track_total: u32,
 }
 impl SongConfig {
     pub fn apply(
@@ -61,6 +79,44 @@ impl SongConfig {
         library_config: &LibraryConfig,
     ) -> Vec<ValueError> {
         let mut errors = vec![];
+        if let Some(order) = &self.order {
+            match order {
+                OrderingSetter::Order { map, total, .. } => {
+                    if let Some(track) = map.get(select) {
+                        metadata.fields.insert(
+                            BuiltinMetadataField::Track.into(),
+                            MetadataValue::Number(*track).into(),
+                        );
+                        metadata.fields.insert(
+                            BuiltinMetadataField::TrackTotal.into(),
+                            MetadataValue::Number(*total).into(),
+                        );
+                    }
+                }
+                OrderingSetter::Discs {
+                    map, disc_total, ..
+                } => {
+                    if let Some(values) = map.get(select) {
+                        metadata.fields.insert(
+                            BuiltinMetadataField::Disc.into(),
+                            MetadataValue::Number(values.disc).into(),
+                        );
+                        metadata.fields.insert(
+                            BuiltinMetadataField::DiscTotal.into(),
+                            MetadataValue::Number(*disc_total).into(),
+                        );
+                        metadata.fields.insert(
+                            BuiltinMetadataField::Track.into(),
+                            MetadataValue::Number(values.track).into(),
+                        );
+                        metadata.fields.insert(
+                            BuiltinMetadataField::TrackTotal.into(),
+                            MetadataValue::Number(values.track_total).into(),
+                        );
+                    }
+                }
+            }
+        }
         for setter in &self.set {
             if setter.names.matches(select)
                 && MusicItemType::matches(&nice_path.as_type(), setter.must_be.as_ref())

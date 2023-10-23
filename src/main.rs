@@ -1,9 +1,10 @@
 use color_print::cformat;
 use file_stuff::ConfigError;
 use itertools::Itertools;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::env;
 use std::io::{ErrorKind, IsTerminal};
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use walkdir::DirEntry;
@@ -182,14 +183,80 @@ fn print_metadata_errors(results: &GetMetadataResults, library_config: &LibraryC
     for load in &results.newly_loaded {
         match Rc::as_ref(&load.result) {
             Ok(config) => {
-                for unused in config.set.iter().flat_map(|x| {
-                    find_unused_selectors(&x.names, &load.nice_folder, library_config)
-                }) {
+                for unused in config
+                    .set
+                    .iter()
+                    .flat_map(|x| {
+                        find_unused_selectors(&x.names, &load.nice_folder, library_config)
+                    })
+                    .chain(
+                        config
+                            .order
+                            .as_ref()
+                            .map(|x| match x {
+                                OrderingSetter::Discs {
+                                    original_selectors, ..
+                                } => original_selectors
+                                    .iter()
+                                    .flat_map(|x| {
+                                        find_unused_selectors(x, &load.nice_folder, library_config)
+                                    })
+                                    .collect(),
+                                OrderingSetter::Order {
+                                    original_selector, ..
+                                } => find_unused_selectors(
+                                    original_selector,
+                                    &load.nice_folder,
+                                    library_config,
+                                ),
+                            })
+                            .unwrap_or_default(),
+                    )
+                {
                     let display = inline_data(unused);
                     eprintln!(
                         "{}",
-                        cformat!("<yellow>Selector {} didn't find anything</>", display)
+                        cformat!("⚠️ <yellow>Selector {} didn't find anything</>", display)
                     );
+                }
+                if let Some(order) = &config.order {
+                    let found = match order {
+                        OrderingSetter::Discs { map, .. } => {
+                            map.keys().map(|x| x.to_owned()).collect::<HashSet<_>>()
+                        }
+                        OrderingSetter::Order { map, .. } => {
+                            map.keys().map(|x| x.to_owned()).collect::<HashSet<_>>()
+                        }
+                    };
+                    let parents = found
+                        .iter()
+                        .filter_map(|x| x.parent())
+                        .collect::<HashSet<_>>();
+                    let all_children = parents
+                        .into_iter()
+                        .flat_map(|x| {
+                            let start = load.nice_folder.join(x);
+                            file_stuff::find_matches(
+                                &ItemSelector::All { recursive: false },
+                                &start,
+                                library_config,
+                            )
+                            .into_iter()
+                            .filter_map(|y| match y {
+                                ItemPath::Folder(_) => None,
+                                ItemPath::Song(path) => Some(x.join(path)),
+                            })
+                        })
+                        .collect::<HashSet<_>>();
+                    for item in all_children.difference(&found) {
+                        eprintln!(
+                            "{}",
+                            cformat!(
+                                "⚠️ <yellow>Item \"{}\" wasn't included in track order</>",
+                                item.display()
+                            )
+                        );
+                    }
                 }
             }
             Err(error) => {
@@ -341,7 +408,7 @@ fn find_unused_selectors<'a>(
             } else {
                 results
                     .into_iter()
-                    .flat_map(|x| find_unused_selectors(select, &x, config))
+                    .flat_map(|x| find_unused_selectors(select, &start.join(x.deref()), config))
                     .collect()
             }
         }
