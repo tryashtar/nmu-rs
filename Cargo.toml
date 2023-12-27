@@ -8,9 +8,9 @@ edition = "2021"
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 color-print = "0.3"
-id3 = "1.8"
+id3 = "1.10"
 image = "0.24"
-itertools = "0.11"
+itertools = "0.12"
 metaflac = "0.2"
 path-absolutize = "3.1"
 regex = "1.10"

@@ -1,4 +1,3 @@
-use chrono::{DateTime, Utc};
 use path_absolutize::Absolutize;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -471,7 +470,8 @@ pub enum LibraryError {
 
 pub struct DateCache {
     path: Option<PathBuf>,
-    cache: HashMap<PathBuf, DateTime<Utc>>,
+    cache: HashMap<PathBuf, SystemTime>,
+    updated: HashSet<PathBuf>,
 }
 impl DateCache {
     pub fn new(path: Option<PathBuf>) -> Self {
@@ -479,6 +479,7 @@ impl DateCache {
             None => Self {
                 path: None,
                 cache: HashMap::new(),
+                updated: HashSet::new(),
             },
             Some(path) => Self {
                 path: Some(path.clone()),
@@ -486,16 +487,27 @@ impl DateCache {
                     Err(_) => HashMap::new(),
                     Ok(map) => map,
                 },
+                updated: HashSet::new(),
             },
         }
     }
-    pub fn save(&self) -> Result<(), YamlError> {
+    pub fn mark_updated(&mut self, path: PathBuf) {
+        if let Ok(absolute) = path.absolutize() {
+            self.updated.insert(absolute.into_owned());
+        }
+    }
+    pub fn save(&mut self) -> Result<(), YamlError> {
         match &self.path {
             None => Ok(()),
             Some(path) => {
+                let time = SystemTime::now();
+                for entry in self.updated.drain() {
+                    self.cache.insert(entry, time);
+                }
+                let ordered: BTreeMap<_, _> = self.cache.iter().collect();
                 let file = File::create(path)?;
                 let writer = BufWriter::new(file);
-                serde_yaml::to_writer(writer, &self.cache)?;
+                serde_yaml::to_writer(writer, &ordered)?;
                 Ok(())
             }
         }
@@ -507,7 +519,7 @@ impl DateCache {
                 None => true,
                 Some(cache_time) => match fs::metadata(&path).and_then(|x| x.modified()) {
                     Err(_) => true,
-                    Ok(file_time) => Into::<SystemTime>::into(*cache_time) < file_time,
+                    Ok(file_time) => *cache_time < file_time,
                 },
             },
         }

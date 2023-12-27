@@ -1,10 +1,11 @@
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     path::{Path, PathBuf},
     rc::Rc,
 };
 
 use image::{DynamicImage, GenericImageView, ImageError};
+use path_absolutize::Absolutize;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -554,31 +555,77 @@ impl ArtRepo {
 
 pub struct ArtCache {
     path: Option<PathBuf>,
-    pub cache: HashMap<PathBuf, Vec<PathBuf>>,
+    pub template_to_users: HashMap<PathBuf, HashSet<PathBuf>>,
+    user_to_template: HashMap<PathBuf, PathBuf>,
 }
 impl ArtCache {
     fn new(path: Option<PathBuf>) -> Self {
         match path {
             None => Self {
                 path: None,
-                cache: HashMap::new(),
+                template_to_users: HashMap::new(),
+                user_to_template: HashMap::new(),
             },
-            Some(path) => Self {
-                path: Some(path.clone()),
-                cache: match file_stuff::load_yaml(&path) {
-                    Err(_) => HashMap::new(),
-                    Ok(map) => map,
-                },
-            },
+            Some(path) => {
+                let map = file_stuff::load_yaml::<HashMap<PathBuf, HashSet<PathBuf>>>(&path);
+                match map {
+                    Err(_) => Self {
+                        path: Some(path),
+                        template_to_users: HashMap::new(),
+                        user_to_template: HashMap::new(),
+                    },
+                    Ok(map) => {
+                        let mut reverse = HashMap::new();
+                        for (template, songs) in &map {
+                            for song in songs {
+                                reverse.insert(song.to_path_buf(), template.to_path_buf());
+                            }
+                        }
+                        Self {
+                            path: Some(path),
+                            template_to_users: map,
+                            user_to_template: reverse,
+                        }
+                    }
+                }
+            }
+        }
+    }
+    pub fn add(&mut self, song: &Path, art: ProcessArtResult) {
+        if let Ok(path) = song.absolutize() {
+            let path = path.into_owned();
+            match art {
+                ProcessArtResult::NoArtNeeded | ProcessArtResult::NoTemplateFound => {
+                    if let Some(old) = self.user_to_template.remove(&path) {
+                        if let Some(set) = self.template_to_users.get_mut(&old) {
+                            set.remove(&path);
+                        }
+                    }
+                }
+                ProcessArtResult::Processed { full_path, .. } => {
+                    if let Some(old) = self.user_to_template.remove(&path) {
+                        if let Some(set) = self.template_to_users.get_mut(&old) {
+                            set.remove(&path);
+                        }
+                    }
+                    self.user_to_template
+                        .insert(path.clone(), full_path.clone());
+                    self.template_to_users
+                        .entry(full_path)
+                        .or_default()
+                        .insert(path);
+                }
+            }
         }
     }
     pub fn save(&self) -> Result<(), YamlError> {
         match &self.path {
             None => Ok(()),
             Some(path) => {
+                let ordered: BTreeMap<_, _> = self.template_to_users.iter().collect();
                 let file = std::fs::File::create(path)?;
                 let writer = std::io::BufWriter::new(file);
-                serde_yaml::to_writer(writer, &self.cache)?;
+                serde_yaml::to_writer(writer, &ordered)?;
                 Ok(())
             }
         }

@@ -13,6 +13,7 @@ use strum::{Display, EnumIter};
 use crate::{
     get_metadata,
     library_config::LibraryConfig,
+    lyrics::{RichLyrics, SyncedLyrics},
     modifier::{ValueError, ValueModifier},
     util::ItemPath,
     ConfigCache, GetMetadataResults, Results,
@@ -245,6 +246,8 @@ pub struct FinalMetadata {
     pub genres: SetValue<Vec<String>>,
     pub art: SetValue<Vec<PathBuf>>,
     pub simple_lyrics: SetValue<Option<String>>,
+    pub synced_lyrics: SetValue<Option<SyncedLyrics>>,
+    pub rich_lyrics: SetValue<Option<RichLyrics>>,
 }
 impl FinalMetadata {
     pub fn create(metadata: &Metadata) -> Results<FinalMetadata, ValueError> {
@@ -339,6 +342,8 @@ impl FinalMetadata {
                 genres,
                 art,
                 simple_lyrics,
+                synced_lyrics: SetValue::Skip,
+                rich_lyrics: SetValue::Skip,
             },
             errors,
         }

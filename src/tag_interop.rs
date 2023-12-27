@@ -1,8 +1,10 @@
 use id3::TagLike;
 use itertools::Itertools;
-use metaflac::Block;
 
-use crate::metadata::{FinalMetadata, SetValue};
+use crate::{
+    lyrics::SyncedLyrics,
+    metadata::{FinalMetadata, SetValue},
+};
 
 pub fn get_metadata_flac(tag: &metaflac::Tag) -> FinalMetadata {
     let mut metadata = FinalMetadata {
@@ -22,6 +24,8 @@ pub fn get_metadata_flac(tag: &metaflac::Tag) -> FinalMetadata {
         genres: SetValue::Skip,
         art: SetValue::Skip,
         simple_lyrics: SetValue::Skip,
+        synced_lyrics: SetValue::Skip,
+        rich_lyrics: SetValue::Skip,
     };
     if let Some(comment) = tag.vorbis_comments() {
         if let SetValue::Set(v) = flac_str(comment.get("TITLE")) {
@@ -45,7 +49,7 @@ pub fn get_metadata_flac(tag: &metaflac::Tag) -> FinalMetadata {
         if let SetValue::Set(v) = flac_list(comment.get("COMMENT")) {
             metadata.comments = SetValue::Set(v);
         }
-        if let SetValue::Set(v) = flac_num_str(comment.get("TRACK")) {
+        if let SetValue::Set(v) = flac_num_str(comment.get("TRACKNUMBER")) {
             metadata.track = SetValue::Set(v);
         }
         if let SetValue::Set(v) = flac_num_str(comment.get("TRACKTOTAL")) {
@@ -68,6 +72,14 @@ pub fn get_metadata_flac(tag: &metaflac::Tag) -> FinalMetadata {
         }
         if let SetValue::Set(v) = flac_list(comment.get("UNSYNCED LYRICS")) {
             metadata.simple_lyrics = SetValue::Set(Some(v.join("\n")));
+        }
+        if let SetValue::Set(v) = flac_list(comment.get("LYRICS")) {
+            if let Ok(lyrics) = SyncedLyrics::parse(v) {
+                metadata.synced_lyrics = SetValue::Set(Some(lyrics));
+            }
+        }
+        if let SetValue::Set(v) = flac_str(comment.get("RICH LYRICS")) {
+            metadata.rich_lyrics = SetValue::Set(v.and_then(|x| serde_json::de::from_str(&x).ok()))
         }
     }
     metadata
@@ -116,6 +128,26 @@ pub fn set_metadata_flac(tag: &mut metaflac::Tag, metadata: &FinalMetadata) {
     if let SetValue::Set(v) = &metadata.genres {
         flac_set_list(comment, "GENRE", v.clone());
     }
+    if let SetValue::Set(v) = &metadata.simple_lyrics {
+        flac_set(comment, "UNSYNCED LYRICS", v.clone());
+    }
+    if let SetValue::Set(v) = &metadata.synced_lyrics {
+        flac_set_list(
+            comment,
+            "LYRICS",
+            match v {
+                None => vec![],
+                Some(lyrics) => lyrics.lines.iter().map(|x| x.to_str()).collect(),
+            },
+        );
+    }
+    if let SetValue::Set(v) = &metadata.rich_lyrics {
+        flac_set(
+            comment,
+            "RICH LYRICS",
+            v.as_ref().and_then(|x| serde_json::ser::to_string(&x).ok()),
+        );
+    }
 }
 pub fn get_metadata_id3(tag: &id3::Tag, sep: &str) -> FinalMetadata {
     FinalMetadata {
@@ -135,6 +167,8 @@ pub fn get_metadata_id3(tag: &id3::Tag, sep: &str) -> FinalMetadata {
         genres: SetValue::Set(id3_str_sep(tag.genre(), sep)),
         art: SetValue::Skip,
         simple_lyrics: SetValue::Set(id3_lyrics(tag.lyrics().collect())),
+        synced_lyrics: SetValue::Skip,
+        rich_lyrics: SetValue::Skip,
     }
 }
 pub fn set_metadata_id3(tag: &mut id3::Tag, metadata: &FinalMetadata, sep: &str) {
@@ -288,13 +322,6 @@ fn id3_str(item: Option<&str>) -> Option<String> {
 fn id3_str_sep(item: Option<&str>, separator: &str) -> Vec<String> {
     item.map(|x| x.split(separator).map(|y| y.replace('\0', "/")).collect())
         .unwrap_or_default()
-}
-
-fn flac_num(item: Option<u32>) -> SetValue<Option<u32>> {
-    match item {
-        None => SetValue::Skip,
-        Some(value) => SetValue::Set(Some(value)),
-    }
 }
 
 fn flac_num_str(item: Option<&Vec<String>>) -> SetValue<Option<u32>> {
