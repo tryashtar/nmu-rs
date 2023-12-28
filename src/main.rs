@@ -72,8 +72,9 @@ fn add_to_song(
     metadata: Metadata,
     config: &mut LibraryConfig,
     progress: &mut WorkProgress,
-) {
+) -> bool {
     let mut any = false;
+    let mut success = true;
     let mut existing_metadata: Option<Metadata> = None;
     let final_metadata = FinalMetadata::create(&metadata);
     match id3::Tag::read_from_path(file_path) {
@@ -90,6 +91,7 @@ fn add_to_song(
         Err(err) => {
             if !any {
                 any = true;
+                success = false;
                 progress.failed += 1;
             }
             eprintln!("{}", cformat!("\t❌ <red>ID3 Tag error: {}</>", err));
@@ -109,6 +111,7 @@ fn add_to_song(
         Err(err) => {
             if !any {
                 any = true;
+                success = false;
                 progress.failed += 1;
             }
             eprintln!("{}", cformat!("\t❌ <red>Flac Tag error: {}</>", err));
@@ -125,8 +128,10 @@ fn add_to_song(
     print_value_errors(&final_metadata.errors);
     if !any {
         eprintln!("{}", cformat!("\t❌ <red>No tags found in file</>"));
+        success = false;
         progress.failed += 1;
     }
+    success
 }
 
 struct WorkProgress {
@@ -152,7 +157,7 @@ fn print_art_errors(result: &ProcessArtResult, library_config: &mut LibraryConfi
             eprintln!("{}", cformat!("⚠️ <yellow>No matching templates found</>",));
         }
         ProcessArtResult::Processed {
-            full_path: nice_path,
+            full_path,
             newly_loaded,
             result,
         } => {
@@ -161,10 +166,13 @@ fn print_art_errors(result: &ProcessArtResult, library_config: &mut LibraryConfi
                     "{}",
                     cformat!(
                         "❌ <red>Error loading image {}:\n{}</>",
-                        nice_path.display(),
+                        full_path.display(),
                         error
                     )
                 );
+            }
+            if result.is_ok() {
+                library_config.date_cache.mark_updated(full_path.to_owned());
             }
             for load in newly_loaded {
                 match Rc::as_ref(&load.result) {
@@ -356,14 +364,15 @@ fn do_scan(mut library_config: LibraryConfig) {
                 repo.used_templates.add(&song_path, &art);
                 print_art_errors(&art, &mut library_config);
             }
-            add_to_song(
+            if add_to_song(
                 &song_path,
                 &nice_path,
                 metadata,
                 &mut library_config,
                 &mut progress,
-            );
-            library_config.date_cache.mark_updated(song_path);
+            ) {
+                library_config.date_cache.mark_updated(song_path);
+            }
         } else {
             progress.failed += 1;
         }
