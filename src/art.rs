@@ -5,7 +5,6 @@ use std::{
 };
 
 use image::{DynamicImage, GenericImageView, ImageError};
-use path_absolutize::Absolutize;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -591,30 +590,27 @@ impl ArtCache {
             }
         }
     }
-    pub fn add(&mut self, song: &Path, art: ProcessArtResult) {
-        if let Ok(path) = song.absolutize() {
-            let path = path.into_owned();
-            match art {
-                ProcessArtResult::NoArtNeeded | ProcessArtResult::NoTemplateFound => {
-                    if let Some(old) = self.user_to_template.remove(&path) {
-                        if let Some(set) = self.template_to_users.get_mut(&old) {
-                            set.remove(&path);
-                        }
+    pub fn add(&mut self, song: &Path, art: &ProcessArtResult) {
+        match art {
+            ProcessArtResult::NoArtNeeded | ProcessArtResult::NoTemplateFound => {
+                if let Some(old) = self.user_to_template.remove(song) {
+                    if let Some(set) = self.template_to_users.get_mut(&old) {
+                        set.remove(song);
                     }
                 }
-                ProcessArtResult::Processed { full_path, .. } => {
-                    if let Some(old) = self.user_to_template.remove(&path) {
-                        if let Some(set) = self.template_to_users.get_mut(&old) {
-                            set.remove(&path);
-                        }
+            }
+            ProcessArtResult::Processed { full_path, .. } => {
+                if let Some(old) = self.user_to_template.remove(song) {
+                    if let Some(set) = self.template_to_users.get_mut(&old) {
+                        set.remove(song);
                     }
-                    self.user_to_template
-                        .insert(path.clone(), full_path.clone());
-                    self.template_to_users
-                        .entry(full_path)
-                        .or_default()
-                        .insert(path);
                 }
+                self.user_to_template
+                    .insert(song.to_owned(), full_path.to_owned());
+                self.template_to_users
+                    .entry(full_path.to_owned())
+                    .or_default()
+                    .insert(song.to_owned());
             }
         }
     }

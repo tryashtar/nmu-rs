@@ -1,4 +1,4 @@
-use path_absolutize::Absolutize;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, File};
@@ -470,7 +470,7 @@ pub enum LibraryError {
 
 pub struct DateCache {
     path: Option<PathBuf>,
-    cache: HashMap<PathBuf, SystemTime>,
+    cache: HashMap<PathBuf, DateTime<Utc>>,
     updated: HashSet<PathBuf>,
 }
 impl DateCache {
@@ -492,15 +492,13 @@ impl DateCache {
         }
     }
     pub fn mark_updated(&mut self, path: PathBuf) {
-        if let Ok(absolute) = path.absolutize() {
-            self.updated.insert(absolute.into_owned());
-        }
+        self.updated.insert(path);
     }
     pub fn save(&mut self) -> Result<(), YamlError> {
         match &self.path {
             None => Ok(()),
             Some(path) => {
-                let time = SystemTime::now();
+                let time = SystemTime::now().into();
                 for entry in self.updated.drain() {
                     self.cache.insert(entry, time);
                 }
@@ -513,14 +511,11 @@ impl DateCache {
         }
     }
     pub fn changed_recently(&self, path: &Path) -> bool {
-        match path.absolutize() {
-            Err(_) => true,
-            Ok(path) => match self.cache.get(path.as_ref()) {
-                None => true,
-                Some(cache_time) => match fs::metadata(&path).and_then(|x| x.modified()) {
-                    Err(_) => true,
-                    Ok(file_time) => *cache_time < file_time,
-                },
+        match self.cache.get(path) {
+            None => true,
+            Some(cache_time) => match fs::metadata(path).and_then(|x| x.modified()) {
+                Err(_) => true,
+                Ok(file_time) => *cache_time < std::convert::Into::<DateTime<Utc>>::into(file_time),
             },
         }
     }
