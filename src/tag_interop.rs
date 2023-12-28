@@ -1,8 +1,11 @@
-use id3::TagLike;
+use id3::{
+    frame::{self, SynchronisedLyrics},
+    TagLike,
+};
 use itertools::Itertools;
 
 use crate::{
-    lyrics::SyncedLyrics,
+    lyrics::{SyncedLine, SyncedLyrics},
     metadata::{FinalMetadata, SetValue},
 };
 
@@ -167,8 +170,54 @@ pub fn get_metadata_id3(tag: &id3::Tag, sep: &str) -> FinalMetadata {
         genres: SetValue::Set(id3_str_sep(tag.genre(), sep)),
         art: SetValue::Skip,
         simple_lyrics: SetValue::Set(id3_lyrics(tag.lyrics().collect())),
-        synced_lyrics: SetValue::Skip,
-        rich_lyrics: SetValue::Skip,
+        synced_lyrics: {
+            let lines = tag
+                .synchronised_lyrics()
+                .flat_map(convert_id3_synced_lyrics)
+                .collect_vec();
+            if lines.is_empty() {
+                SetValue::Set(None)
+            } else {
+                SetValue::Set(Some(SyncedLyrics { lines }))
+            }
+        },
+        rich_lyrics: {
+            SetValue::Set(
+                tag.frames()
+                    .find_map(|x| {
+                        if x.id() != "TXXX" {
+                            return None;
+                        }
+                        match x.content() {
+                            id3::Content::ExtendedText(ext) => {
+                                (ext.description == "RICH LYRICS").then_some(&ext.value)
+                            }
+                            _ => None,
+                        }
+                    })
+                    .and_then(|y| serde_json::de::from_str(y).ok()),
+            )
+        },
+    }
+}
+fn convert_id3_synced_lyrics(lyrics: &SynchronisedLyrics) -> Vec<SyncedLine> {
+    match lyrics.timestamp_format {
+        id3::frame::TimestampFormat::Mpeg => lyrics
+            .content
+            .iter()
+            .map(|(_, y)| SyncedLine {
+                timestamp: std::time::Duration::ZERO,
+                text: y.to_owned(),
+            })
+            .collect(),
+        id3::frame::TimestampFormat::Ms => lyrics
+            .content
+            .iter()
+            .map(|(x, y)| SyncedLine {
+                timestamp: std::time::Duration::from_millis(*x as u64),
+                text: y.to_owned(),
+            })
+            .collect(),
     }
 }
 pub fn set_metadata_id3(tag: &mut id3::Tag, metadata: &FinalMetadata, sep: &str) {
@@ -277,6 +326,49 @@ pub fn set_metadata_id3(tag: &mut id3::Tag, metadata: &FinalMetadata, sep: &str)
             tag.remove_genre();
         } else {
             tag.set_genre(v.join(sep));
+        }
+    }
+    if let SetValue::Set(v) = &metadata.simple_lyrics {
+        tag.remove_all_lyrics();
+        if let Some(text) = v {
+            tag.add_frame(frame::Lyrics {
+                lang: match &metadata.language {
+                    SetValue::Skip | SetValue::Set(None) => String::from("XXX"),
+                    SetValue::Set(Some(lang)) => lang.to_owned(),
+                },
+                description: String::from(""),
+                text: text.to_owned(),
+            });
+        }
+    }
+    if let SetValue::Set(v) = &metadata.synced_lyrics {
+        tag.remove_all_synchronised_lyrics();
+        if let Some(text) = v {
+            tag.add_frame(frame::SynchronisedLyrics {
+                lang: match &metadata.language {
+                    SetValue::Skip | SetValue::Set(None) => String::from("XXX"),
+                    SetValue::Set(Some(lang)) => lang.to_owned(),
+                },
+                description: String::from(""),
+                timestamp_format: frame::TimestampFormat::Ms,
+                content_type: frame::SynchronisedLyricsType::Lyrics,
+                content: text
+                    .lines
+                    .iter()
+                    .map(|x| (x.timestamp.as_millis() as u32, x.text.to_owned()))
+                    .collect(),
+            });
+        }
+    }
+    if let SetValue::Set(v) = &metadata.rich_lyrics {
+        tag.remove_extended_text(Some("RICH LYRICS"), None);
+        if let Some(text) = v {
+            if let Ok(ser) = serde_json::ser::to_string(text) {
+                tag.add_frame(frame::ExtendedText {
+                    description: String::from("RICH LYRICS"),
+                    value: ser,
+                });
+            }
         }
     }
 }

@@ -303,7 +303,6 @@ fn do_scan(mut library_config: LibraryConfig) {
         songs: scan_songs,
         folders: scan_folders,
         images: scan_images,
-        ..
     } = find_scan_songs(&library_config);
     for folder_path in scan_folders {
         let nice_path = ItemPath::Folder(
@@ -380,7 +379,10 @@ fn do_scan(mut library_config: LibraryConfig) {
             cformat!("❌ <red>Error saving date cache:\n{}</>", err)
         );
     }
-    if let Some(repo) = library_config.art_repo {
+    if let Some(repo) = &mut library_config.art_repo {
+        repo.used_templates
+            .template_to_users
+            .retain(|x, y| x.exists() && !y.is_empty());
         if let Err(err) = repo.used_templates.save() {
             eprintln!(
                 "{}",
@@ -541,8 +543,6 @@ struct ScanResults {
     songs: BTreeSet<PathBuf>,
     folders: BTreeSet<PathBuf>,
     images: BTreeSet<PathBuf>,
-    song_configs: BTreeSet<PathBuf>,
-    image_configs: BTreeSet<PathBuf>,
 }
 
 fn is_hidden(entry: &DirEntry) -> bool {
@@ -557,8 +557,6 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
     let mut scan_songs = BTreeSet::<PathBuf>::new();
     let mut scan_folders = BTreeSet::<PathBuf>::new();
     let mut scan_images = BTreeSet::<PathBuf>::new();
-    let mut scan_song_configs = BTreeSet::<PathBuf>::new();
-    let mut scan_image_configs = BTreeSet::<PathBuf>::new();
     // for every config that's changed, scan all songs it applies to
     for config_root in &library_config.config_folders {
         for config_folder in walkdir::WalkDir::new(config_root)
@@ -594,7 +592,6 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
                         print!("\rFound {}", scan_songs.len())
                     }
                 }
-                scan_song_configs.insert(config_file_path);
             }
         }
     }
@@ -626,7 +623,6 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
                         scan_images.insert(path);
                     }
                 }
-                scan_image_configs.insert(template_file_path);
             } else if match_extension(&template_file_path, &art_repo.image_extensions)
                 && library_config
                     .date_cache
@@ -638,6 +634,17 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
         // scan all songs that used to use an updated image
         for image in &scan_images {
             if let Some(songs) = art_repo.used_templates.template_to_users.get(image) {
+                for path in songs {
+                    if path.is_dir() {
+                        scan_folders.insert(path.clone());
+                    } else if scan_songs.insert(path.clone()) && std::io::stdout().is_terminal() {
+                        print!("\rFound {}", scan_songs.len())
+                    }
+                }
+            }
+        }
+        for (template, songs) in &art_repo.used_templates.template_to_users {
+            if !template.exists() {
                 for path in songs {
                     if path.is_dir() {
                         scan_folders.insert(path.clone());
@@ -685,7 +692,5 @@ fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
         songs: scan_songs,
         folders: scan_folders,
         images: scan_images,
-        song_configs: scan_song_configs,
-        image_configs: scan_image_configs,
     }
 }

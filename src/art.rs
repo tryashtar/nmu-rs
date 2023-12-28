@@ -618,7 +618,11 @@ impl ArtCache {
         match &self.path {
             None => Ok(()),
             Some(path) => {
-                let ordered: BTreeMap<_, _> = self.template_to_users.iter().collect();
+                let ordered: BTreeMap<_, BTreeSet<_>> = self
+                    .template_to_users
+                    .iter()
+                    .map(|(x, y)| (x, y.iter().collect()))
+                    .collect();
                 let file = std::fs::File::create(path)?;
                 let writer = std::io::BufWriter::new(file);
                 serde_yaml::to_writer(writer, &ordered)?;
