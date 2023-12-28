@@ -77,7 +77,11 @@ pub fn get_metadata_flac(tag: &metaflac::Tag) -> FinalMetadata {
             metadata.simple_lyrics = SetValue::Set(Some(v.join("\n")));
         }
         if let SetValue::Set(v) = flac_list(comment.get("LYRICS")) {
-            if let Ok(lyrics) = SyncedLyrics::parse(v) {
+            if let Ok(lyrics) = SyncedLyrics::parse(
+                v.into_iter()
+                    .flat_map(|x| x.split('\n').map(|y| y.to_owned()).collect::<Vec<_>>())
+                    .collect(),
+            ) {
                 metadata.synced_lyrics = SetValue::Set(Some(lyrics));
             }
         }
