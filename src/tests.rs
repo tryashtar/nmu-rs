@@ -402,6 +402,7 @@ fn dummy_config() -> LibraryConfig {
     LibraryConfig {
         library_folder: PathBuf::from("a/b/c"),
         reports: vec![],
+        lyrics: None,
         log_folder: None,
         config_folders: vec![],
         song_extensions: HashSet::from(["a".to_owned()]),

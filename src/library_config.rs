@@ -1,8 +1,9 @@
 use chrono::{DateTime, Utc};
+use id3::frame::Lyrics;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, File};
-use std::io::BufWriter;
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::SystemTime;
@@ -10,7 +11,10 @@ use thiserror::Error;
 
 use crate::art::{ArtRepo, RawArtRepo};
 use crate::file_stuff::{self, load_yaml, YamlError};
-use crate::metadata::{Metadata, MetadataField, MetadataValue, BLANK_VALUE};
+use crate::lyrics::{RichLyrics, SyncedLyrics};
+use crate::metadata::{
+    FinalMetadata, Metadata, MetadataField, MetadataValue, SetValue, BLANK_VALUE,
+};
 use crate::song_config::{
     AllSetter, DiscSet, OrderingSetter, RawSongConfig, ReferencableOperation, SongConfig,
 };
@@ -20,6 +24,7 @@ use crate::strategy::{FieldSelector, ItemSelector, MetadataOperation, MusicItemT
 pub struct RawLibraryConfig {
     library: PathBuf,
     reports: Vec<RawLibraryReport>,
+    lyrics: Option<LyricsConfig>,
     logs: Option<PathBuf>,
     config_folders: Vec<PathBuf>,
     extensions: HashSet<String>,
@@ -252,9 +257,173 @@ impl LibraryReport {
     }
 }
 
+#[derive(Deserialize, Serialize)]
+pub struct LyricsConfig {
+    folder: PathBuf,
+    priority: Vec<LyricsType>,
+    config: HashMap<LyricsType, LyricsReplaceMode>,
+}
+impl LyricsConfig {
+    pub fn handle(&self, nice_path: &Path, source: &FinalMetadata, dest: &mut FinalMetadata) {
+        let best = self
+            .priority
+            .iter()
+            .find_map(|x| x.get(&self.folder, nice_path, source));
+        for (lyric_type, replace) in &self.config {
+            match replace {
+                LyricsReplaceMode::Ignore => {}
+                LyricsReplaceMode::Remove => {
+                    lyric_type.set(&self.folder, nice_path, dest, None);
+                }
+                LyricsReplaceMode::Replace => {
+                    lyric_type.set(&self.folder, nice_path, dest, best.as_ref());
+                }
+            }
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum LyricsType {
+    RichEmbedded,
+    RichFile,
+    SyncedEmbedded,
+    SyncedFile,
+    SimpleEmbedded,
+    SimpleFile,
+}
+impl LyricsType {
+    fn set(
+        &self,
+        folder: &Path,
+        nice_path: &Path,
+        metadata: &mut FinalMetadata,
+        value: Option<&RichLyrics>,
+    ) {
+        match self {
+            LyricsType::RichEmbedded => metadata.rich_lyrics = SetValue::Set(value.cloned()),
+            LyricsType::RichFile => {
+                let mut path = folder.join(nice_path).to_string_lossy().into_owned();
+                path.push_str(".lrc.json");
+                let path = PathBuf::from(path);
+                match value {
+                    None => {
+                        std::fs::remove_file(path);
+                    }
+                    Some(val) => {
+                        if let Ok(file) = std::fs::File::create(path) {
+                            let mut writer = std::io::BufWriter::new(file);
+                            if let Ok(str) = serde_json::ser::to_string_pretty(val) {
+                                write!(writer, "{}", str);
+                            }
+                        }
+                    }
+                }
+            }
+            LyricsType::SyncedEmbedded => {
+                metadata.synced_lyrics = SetValue::Set(value.cloned().map(|x| x.into()))
+            }
+            LyricsType::SyncedFile => {
+                let mut path = folder.join(nice_path).to_string_lossy().into_owned();
+                path.push_str(".lrc");
+                let path = PathBuf::from(path);
+                match value {
+                    None => {
+                        std::fs::remove_file(path);
+                    }
+                    Some(val) => {
+                        if let Ok(file) = std::fs::File::create(path) {
+                            let mut writer = std::io::BufWriter::new(file);
+                            for line in std::convert::Into::<SyncedLyrics>::into(val.clone()).save()
+                            {
+                                writeln!(writer, "{}", line);
+                            }
+                        }
+                    }
+                }
+            }
+            LyricsType::SimpleEmbedded => {
+                metadata.simple_lyrics = SetValue::Set(value.cloned().map(|x| x.into()))
+            }
+            LyricsType::SimpleFile => {
+                let mut path = folder.join(nice_path).to_string_lossy().into_owned();
+                path.push_str(".lrc.txt");
+                let path = PathBuf::from(path);
+                match value {
+                    None => {
+                        std::fs::remove_file(path);
+                    }
+                    Some(val) => {
+                        if let Ok(file) = std::fs::File::create(path) {
+                            let mut writer = std::io::BufWriter::new(file);
+                            let str = std::convert::Into::<String>::into(val.clone());
+                            write!(writer, "{}", str);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    fn get(&self, folder: &Path, nice_path: &Path, metadata: &FinalMetadata) -> Option<RichLyrics> {
+        match self {
+            LyricsType::RichEmbedded => match &metadata.rich_lyrics {
+                SetValue::Skip => None,
+                SetValue::Set(val) => val.as_ref().cloned(),
+            },
+            LyricsType::RichFile => {
+                let mut path = folder.join(nice_path).to_string_lossy().into_owned();
+                path.push_str(".lrc.json");
+                let path = PathBuf::from(path);
+                let file = File::open(path).ok()?;
+                let reader = BufReader::new(file);
+                let lyrics: RichLyrics = serde_json::de::from_reader(reader).ok()?;
+                Some(lyrics)
+            }
+            LyricsType::SyncedEmbedded => match &metadata.synced_lyrics {
+                SetValue::Skip => None,
+                SetValue::Set(val) => val.as_ref().cloned().map(|x| x.into()),
+            },
+            LyricsType::SyncedFile => {
+                let mut path = folder.join(nice_path).to_string_lossy().into_owned();
+                path.push_str(".lrc");
+                let path = PathBuf::from(path);
+                let file = File::open(path).ok()?;
+                let reader: BufReader<File> = BufReader::new(file);
+                let lyrics =
+                    SyncedLyrics::parse(reader.lines().filter_map(|x| x.ok()).collect()).ok()?;
+                Some(lyrics.into())
+            }
+            LyricsType::SimpleEmbedded => match &metadata.simple_lyrics {
+                SetValue::Skip => None,
+                SetValue::Set(val) => val.as_ref().cloned().map(|x| x.into()),
+            },
+            LyricsType::SimpleFile => {
+                let mut path = folder.join(nice_path).to_string_lossy().into_owned();
+                path.push_str(".lrc.txt");
+                let path = PathBuf::from(path);
+                let file = File::open(path).ok()?;
+                let mut reader: BufReader<File> = BufReader::new(file);
+                let mut buf = String::new();
+                reader.read_to_string(&mut buf).ok()?;
+                Some(buf.into())
+            }
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LyricsReplaceMode {
+    Ignore,
+    Remove,
+    Replace,
+}
+
 pub struct LibraryConfig {
     pub library_folder: PathBuf,
     pub reports: Vec<LibraryReport>,
+    pub lyrics: Option<LyricsConfig>,
     pub log_folder: Option<PathBuf>,
     pub config_folders: Vec<PathBuf>,
     pub song_extensions: HashSet<String>,
@@ -274,6 +443,11 @@ impl LibraryConfig {
                 .into_iter()
                 .map(|x| LibraryReport::load(x, folder))
                 .collect(),
+            lyrics: raw.lyrics.map(|x| LyricsConfig {
+                folder: folder.join(x.folder),
+                priority: x.priority,
+                config: x.config,
+            }),
             log_folder: raw.logs.map(|x| folder.join(x)),
             config_folders: raw
                 .config_folders

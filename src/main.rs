@@ -76,11 +76,15 @@ fn add_to_song(
     let mut any = false;
     let mut success = true;
     let mut existing_metadata: Option<Metadata> = None;
-    let final_metadata = FinalMetadata::create(&metadata);
+    let mut final_metadata = FinalMetadata::create(&metadata);
     match id3::Tag::read_from_path(file_path) {
         Ok(mut id3) => {
             any = true;
-            let existing = get_metadata_id3(&id3, &config.artist_separator).into();
+            let existing = get_metadata_id3(&id3, &config.artist_separator);
+            if let Some(lyric_config) = &config.lyrics {
+                lyric_config.handle(nice_path, &existing, &mut final_metadata.result);
+            }
+            let existing = existing.into();
             if print_differences("ID3 Tag", &existing, &metadata) {
                 progress.changed += 1;
                 set_metadata_id3(&mut id3, &final_metadata.result, &config.artist_separator);
@@ -100,7 +104,11 @@ fn add_to_song(
     match metaflac::Tag::read_from_path(file_path) {
         Ok(mut flac) => {
             any = true;
-            let existing = get_metadata_flac(&flac).into();
+            let existing = get_metadata_flac(&flac);
+            if let Some(lyric_config) = &config.lyrics {
+                lyric_config.handle(nice_path, &existing, &mut final_metadata.result);
+            }
+            let existing = existing.into();
             if print_differences("Flac Tag", &existing, &metadata) {
                 progress.changed += 1;
                 set_metadata_flac(&mut flac, &final_metadata.result);
