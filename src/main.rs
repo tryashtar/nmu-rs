@@ -1,5 +1,6 @@
 use color_print::cformat;
 use file_stuff::ConfigError;
+use image::DynamicImage;
 use itertools::Itertools;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::env;
@@ -70,6 +71,7 @@ fn add_to_song(
     file_path: &Path,
     nice_path: &Path,
     metadata: Metadata,
+    art: Option<Rc<DynamicImage>>,
     config: &mut LibraryConfig,
     progress: &mut WorkProgress,
 ) -> bool {
@@ -77,6 +79,7 @@ fn add_to_song(
     let mut success = true;
     let mut existing_metadata: Option<Metadata> = None;
     let mut final_metadata = FinalMetadata::create(&metadata);
+    final_metadata.result.art = SetValue::Set(art);
     match id3::Tag::read_from_path(file_path) {
         Ok(mut id3) => {
             any = true;
@@ -362,6 +365,7 @@ fn do_scan(mut library_config: LibraryConfig) {
         }
         print_metadata_errors(&results, &mut library_config);
         if let Some(mut metadata) = results.result {
+            let mut image = None;
             if let Some(repo) = &mut library_config.art_repo {
                 let art = repo.resolve_art(
                     &mut metadata,
@@ -371,11 +375,15 @@ fn do_scan(mut library_config: LibraryConfig) {
                 );
                 repo.used_templates.add(&song_path, &art);
                 print_art_errors(&art, &mut library_config);
+                if let ProcessArtResult::Processed { result, .. } = art {
+                    image = Some(result.clone());
+                }
             }
             if add_to_song(
                 &song_path,
                 &nice_path,
                 metadata,
+                image.and_then(|x| x.as_ref().as_ref().ok().cloned()),
                 &mut library_config,
                 &mut progress,
             ) {

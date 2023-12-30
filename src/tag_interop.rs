@@ -31,48 +31,20 @@ pub fn get_metadata_flac(tag: &metaflac::Tag) -> FinalMetadata {
         rich_lyrics: SetValue::Skip,
     };
     if let Some(comment) = tag.vorbis_comments() {
-        if let SetValue::Set(v) = flac_str(comment.get("TITLE")) {
-            metadata.title = SetValue::Set(v);
-        }
-        if let SetValue::Set(v) = flac_str(comment.get("ALBUM")) {
-            metadata.album = SetValue::Set(v);
-        }
-        if let SetValue::Set(v) = flac_list(comment.get("ARTIST")) {
-            metadata.performers = SetValue::Set(v);
-        }
-        if let SetValue::Set(v) = flac_str(comment.get("ALBUMARTIST")) {
-            metadata.album_artist = SetValue::Set(v);
-        }
-        if let SetValue::Set(v) = flac_list(comment.get("COMPOSER")) {
-            metadata.composers = SetValue::Set(v);
-        }
-        if let SetValue::Set(v) = flac_str(comment.get("REMIXEDBY")) {
-            metadata.arranger = SetValue::Set(v);
-        }
-        if let SetValue::Set(v) = flac_list(comment.get("COMMENT")) {
-            metadata.comments = SetValue::Set(v);
-        }
-        if let SetValue::Set(v) = flac_num_str(comment.get("TRACKNUMBER")) {
-            metadata.track = SetValue::Set(v);
-        }
-        if let SetValue::Set(v) = flac_num_str(comment.get("TRACKTOTAL")) {
-            metadata.track_total = SetValue::Set(v);
-        }
-        if let SetValue::Set(v) = flac_num_str(comment.get("DISCNUMBER")) {
-            metadata.disc = SetValue::Set(v);
-        }
-        if let SetValue::Set(v) = flac_num_str(comment.get("DISCTOTAL")) {
-            metadata.disc_total = SetValue::Set(v);
-        }
-        if let SetValue::Set(v) = flac_num_str(comment.get("YEAR")) {
-            metadata.year = SetValue::Set(v);
-        }
-        if let SetValue::Set(v) = flac_str(comment.get("LANGUAGE")) {
-            metadata.language = SetValue::Set(v);
-        }
-        if let SetValue::Set(v) = flac_list(comment.get("GENRE")) {
-            metadata.genres = SetValue::Set(v);
-        }
+        metadata.title = flac_str(comment.get("TITLE"));
+        metadata.album = flac_str(comment.get("ALBUM"));
+        metadata.performers = flac_list(comment.get("ARTIST"));
+        metadata.album_artist = flac_str(comment.get("ALBUMARTIST"));
+        metadata.composers = flac_list(comment.get("COMPOSER"));
+        metadata.arranger = flac_str(comment.get("REMIXEDBY"));
+        metadata.comments = flac_list(comment.get("COMMENT"));
+        metadata.track = flac_num_str(comment.get("TRACKNUMBER"));
+        metadata.track_total = flac_num_str(comment.get("TRACKTOTAL"));
+        metadata.disc = flac_num_str(comment.get("DISCNUMBER"));
+        metadata.disc_total = flac_num_str(comment.get("DISCTOTAL"));
+        metadata.year = flac_num_str(comment.get("YEAR"));
+        metadata.language = flac_str(comment.get("LANGUAGE"));
+        metadata.genres = flac_list(comment.get("GENRE"));
         if let SetValue::Set(v) = flac_list(comment.get("UNSYNCED LYRICS")) {
             metadata.simple_lyrics = SetValue::Set(Some(v.join("\n")));
         }

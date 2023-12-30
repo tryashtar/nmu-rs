@@ -6,6 +6,7 @@ use std::{
     rc::Rc,
 };
 
+use image::DynamicImage;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumIter};
@@ -244,7 +245,7 @@ pub struct FinalMetadata {
     pub year: SetValue<Option<u32>>,
     pub language: SetValue<Option<String>>,
     pub genres: SetValue<Vec<String>>,
-    pub art: SetValue<Vec<PathBuf>>,
+    pub art: SetValue<Option<Rc<DynamicImage>>>,
     pub simple_lyrics: SetValue<Option<String>>,
     pub synced_lyrics: SetValue<Option<SyncedLyrics>>,
     pub rich_lyrics: SetValue<Option<RichLyrics>>,
@@ -297,10 +298,6 @@ impl FinalMetadata {
         let composers = convert_vec(BuiltinMetadataField::Composers);
         let comments = convert_vec(BuiltinMetadataField::Comment);
         let genres = convert_vec(BuiltinMetadataField::Genres);
-        let art = match convert_vec(BuiltinMetadataField::Art) {
-            SetValue::Skip => SetValue::Skip,
-            SetValue::Set(list) => SetValue::Set(list.into_iter().map(PathBuf::from).collect()),
-        };
         let mut convert_num = |field: BuiltinMetadataField| {
             let field = field.into();
             match metadata.get(&field) {
@@ -340,7 +337,7 @@ impl FinalMetadata {
                 year,
                 language,
                 genres,
-                art,
+                art: SetValue::Skip,
                 simple_lyrics,
                 synced_lyrics: SetValue::Skip,
                 rich_lyrics: SetValue::Skip,

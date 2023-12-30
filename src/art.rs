@@ -17,7 +17,7 @@ use crate::{
 };
 
 pub type ArtConfigCache = HashMap<PathBuf, Rc<Result<ArtConfig, ConfigError>>>;
-pub type ProcessedArtCache = HashMap<PathBuf, Rc<Result<DynamicImage, ArtError>>>;
+pub type ProcessedArtCache = HashMap<PathBuf, Rc<Result<Rc<DynamicImage>, ArtError>>>;
 
 #[derive(Error, Debug)]
 pub enum ArtError {
@@ -292,13 +292,13 @@ pub enum ProcessArtResult {
     Processed {
         full_path: PathBuf,
         newly_loaded: Vec<ConfigLoadResults<ArtConfig>>,
-        result: Rc<Result<DynamicImage, ArtError>>,
+        result: Rc<Result<Rc<DynamicImage>, ArtError>>,
     },
 }
 
 pub struct GetProcessedResult {
     newly_loaded: Vec<ConfigLoadResults<ArtConfig>>,
-    result: Result<DynamicImage, ArtError>,
+    result: Result<Rc<DynamicImage>, ArtError>,
 }
 
 pub struct GetSettingsResults {
@@ -394,7 +394,9 @@ impl ArtRepo {
             if let Some(cached_path) = cached_path {
                 return GetProcessedResult {
                     newly_loaded: vec![],
-                    result: image::open(cached_path).map_err(ArtError::Image),
+                    result: image::open(cached_path)
+                        .map(Rc::new)
+                        .map_err(ArtError::Image),
                 };
             }
         }
@@ -415,7 +417,7 @@ impl ArtRepo {
                 }
                 GetProcessedResult {
                     newly_loaded: settings.newly_loaded,
-                    result: template_result.map_err(ArtError::Image),
+                    result: template_result.map(Rc::new).map_err(ArtError::Image),
                 }
             }
         }
