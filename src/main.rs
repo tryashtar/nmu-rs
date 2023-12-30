@@ -164,26 +164,33 @@ fn print_value_errors(errors: &[ValueError]) {
 fn print_art_errors(result: &ProcessArtResult, library_config: &mut LibraryConfig) {
     match result {
         ProcessArtResult::NoArtNeeded => {}
-        ProcessArtResult::NoTemplateFound => {
-            eprintln!("{}", cformat!("⚠️ <yellow>No matching templates found</>",));
+        ProcessArtResult::NoTemplateFound { tried } => {
+            let list = tried.iter().map(|x| x.to_string_lossy()).join(", ");
+            eprintln!(
+                "{}",
+                cformat!("⚠️ <yellow>No matching templates found: [{}]</>", list)
+            );
         }
         ProcessArtResult::Processed {
             full_path,
             newly_loaded,
             result,
         } => {
-            if let Err(ArtError::Image(error)) = Rc::as_ref(result) {
-                eprintln!(
-                    "{}",
-                    cformat!(
-                        "❌ <red>Error loading image {}:\n{}</>",
-                        full_path.display(),
-                        error
-                    )
-                );
-            }
-            if result.is_ok() {
-                library_config.date_cache.mark_updated(full_path.to_owned());
+            match Rc::as_ref(result) {
+                Ok(_) => {
+                    library_config.date_cache.mark_updated(full_path.to_owned());
+                }
+                Err(ArtError::Image(error)) => {
+                    eprintln!(
+                        "{}",
+                        cformat!(
+                            "❌ <red>Error loading image {}:\n{}</>",
+                            full_path.display(),
+                            error
+                        )
+                    );
+                }
+                Err(_) => {}
             }
             for load in newly_loaded {
                 match Rc::as_ref(&load.result) {

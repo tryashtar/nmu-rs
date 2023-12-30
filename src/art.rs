@@ -288,7 +288,9 @@ pub struct RawArtRepo {
 
 pub enum ProcessArtResult {
     NoArtNeeded,
-    NoTemplateFound,
+    NoTemplateFound {
+        tried: Vec<PathBuf>,
+    },
     Processed {
         full_path: PathBuf,
         newly_loaded: Vec<ConfigLoadResults<ArtConfig>>,
@@ -369,7 +371,9 @@ impl ArtRepo {
                     result: result.clone(),
                 }
             } else {
-                ProcessArtResult::NoTemplateFound
+                ProcessArtResult::NoTemplateFound {
+                    tried: art.iter().map(PathBuf::from).collect(),
+                }
             }
         } else {
             ProcessArtResult::NoArtNeeded
@@ -594,7 +598,7 @@ impl ArtCache {
     }
     pub fn add(&mut self, song: &Path, art: &ProcessArtResult) {
         match art {
-            ProcessArtResult::NoArtNeeded | ProcessArtResult::NoTemplateFound => {
+            ProcessArtResult::NoArtNeeded | ProcessArtResult::NoTemplateFound { .. } => {
                 if let Some(old) = self.user_to_template.remove(song) {
                     if let Some(set) = self.template_to_users.get_mut(&old) {
                         set.remove(song);
