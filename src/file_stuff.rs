@@ -12,7 +12,6 @@ use thiserror::Error;
 
 use crate::{
     library_config::{LibraryConfig, LibraryError},
-    song_config::{RawSongConfig, SongConfig},
     strategy::{ItemSelector, PathSegment},
     util::ItemPath,
 };
@@ -39,19 +38,6 @@ where
     let reader = BufReader::new(file);
     let yaml: T = serde_yaml::from_reader(reader)?;
     Ok(yaml)
-}
-
-pub fn load_config(
-    full_path: &Path,
-    nice_folder: &Path,
-    library_config: &LibraryConfig,
-) -> Result<SongConfig, ConfigError> {
-    match load_yaml::<RawSongConfig>(full_path) {
-        Err(error) => Err(ConfigError::Yaml(error)),
-        Ok(config) => library_config
-            .resolve_config(config, nice_folder)
-            .map_err(ConfigError::Library),
-    }
 }
 
 pub fn match_extension(path: &Path, extensions: &HashSet<String>) -> bool {

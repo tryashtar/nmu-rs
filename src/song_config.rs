@@ -12,6 +12,7 @@ use crate::{
     modifier::ValueError,
     strategy::{ItemSelector, MetadataOperation, MusicItemType, ValueGetter},
     util::ItemPath,
+    Metadata,
 };
 
 #[derive(Deserialize, Serialize)]
@@ -77,17 +78,18 @@ impl SongConfig {
         select: &Path,
         metadata: &mut PendingMetadata,
         library_config: &LibraryConfig,
+        copy_cache: &HashMap<ItemPath, Metadata>,
     ) -> Vec<ValueError> {
         let mut errors = vec![];
         if let Some(order) = &self.order {
             match order {
                 OrderingSetter::Order { map, total, .. } => {
                     if let Some(track) = map.get(select) {
-                        metadata.fields.insert(
+                        metadata.insert(
                             BuiltinMetadataField::Track.into(),
                             MetadataValue::Number(*track).into(),
                         );
-                        metadata.fields.insert(
+                        metadata.insert(
                             BuiltinMetadataField::TrackTotal.into(),
                             MetadataValue::Number(*total).into(),
                         );
@@ -97,19 +99,19 @@ impl SongConfig {
                     map, disc_total, ..
                 } => {
                     if let Some(values) = map.get(select) {
-                        metadata.fields.insert(
+                        metadata.insert(
                             BuiltinMetadataField::Disc.into(),
                             MetadataValue::Number(values.disc).into(),
                         );
-                        metadata.fields.insert(
+                        metadata.insert(
                             BuiltinMetadataField::DiscTotal.into(),
                             MetadataValue::Number(*disc_total).into(),
                         );
-                        metadata.fields.insert(
+                        metadata.insert(
                             BuiltinMetadataField::Track.into(),
                             MetadataValue::Number(values.track).into(),
                         );
-                        metadata.fields.insert(
+                        metadata.insert(
                             BuiltinMetadataField::TrackTotal.into(),
                             MetadataValue::Number(values.track_total).into(),
                         );
@@ -124,7 +126,7 @@ impl SongConfig {
                 let mut more_errors =
                     setter
                         .set
-                        .apply(metadata, nice_path.as_ref(), library_config);
+                        .apply(metadata, nice_path.as_ref(), library_config, copy_cache);
                 errors.append(&mut more_errors);
             }
         }

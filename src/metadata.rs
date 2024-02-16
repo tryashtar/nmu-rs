@@ -1,10 +1,5 @@
 use core::fmt;
-use std::{
-    collections::HashMap,
-    ops::Deref,
-    path::{Path, PathBuf},
-    rc::Rc,
-};
+use std::{collections::HashMap, path::PathBuf, rc::Rc};
 
 use image::DynamicImage;
 use regex::Regex;
@@ -12,124 +7,19 @@ use serde::{Deserialize, Serialize};
 use strum::{Display, EnumIter};
 
 use crate::{
-    get_metadata,
-    library_config::LibraryConfig,
     lyrics::{RichLyrics, SyncedLyrics},
-    modifier::{ValueError, ValueModifier},
-    util::ItemPath,
-    ConfigCache, GetMetadataResults, Results,
+    modifier::ValueError,
+    GetMetadataResults, Results,
 };
 
-pub struct PendingMetadata {
-    pub fields: HashMap<MetadataField, PendingValue>,
-}
 pub type Metadata = HashMap<MetadataField, MetadataValue>;
+pub type PendingMetadata = HashMap<MetadataField, PendingValue>;
 type MetadataCache = HashMap<PathBuf, GetMetadataResults>;
-impl PendingMetadata {
-    pub fn new() -> Self {
-        Self {
-            fields: HashMap::new(),
-        }
-    }
-    fn try_resolve_value(
-        value: &mut PendingValue,
-        nice_path: &Path,
-        metadata: &Metadata,
-        metadata_cache: &mut MetadataCache,
-        config_cache: &mut ConfigCache,
-        library_config: &LibraryConfig,
-    ) -> Option<MetadataValue> {
-        match value {
-            PendingValue::Ready(ready) => Some(ready.clone()),
-            PendingValue::RegexMatches { .. } => None,
-            PendingValue::CopyField {
-                field: from,
-                sources,
-                modify,
-            } => {
-                let mut results = sources.iter().filter_map(|source| {
-                    let source_metadata = {
-                        if nice_path == source.deref() {
-                            Some(metadata)
-                        } else {
-                            metadata_cache
-                                .entry(source.clone().into())
-                                .or_insert_with(|| {
-                                    get_metadata(source, library_config, config_cache)
-                                })
-                                .result
-                                .as_ref()
-                        }
-                    };
-                    source_metadata.and_then(|meta| {
-                        meta.get(from).cloned().and_then(|x| match modify {
-                            None => Some(x.into()),
-                            Some(modify) => modify
-                                .modify(x.into(), source.as_ref(), library_config)
-                                .ok(),
-                        })
-                    })
-                });
-                match results.next() {
-                    Some(PendingValue::Ready(ready)) => Some(ready),
-                    _ => None,
-                }
-            }
-        }
-    }
-    pub fn resolve(
-        mut self,
-        nice_path: &Path,
-        library_config: &LibraryConfig,
-        config_cache: &mut ConfigCache,
-    ) -> Results<Metadata, ValueError> {
-        let mut metadata = Metadata::new();
-        let mut metadata_cache: MetadataCache = HashMap::new();
-        loop {
-            let mut added_any = false;
-            self.fields.retain(|field, value| {
-                if let Some(resolved) = Self::try_resolve_value(
-                    value,
-                    nice_path,
-                    &metadata,
-                    &mut metadata_cache,
-                    config_cache,
-                    library_config,
-                ) {
-                    metadata.insert(field.clone(), resolved);
-                    added_any = true;
-                    return false;
-                }
-                true
-            });
-            if !added_any {
-                break;
-            }
-        }
-        let mut errors = vec![];
-        // remaining items that couldn't be resolved
-        for (field, value) in self.fields {
-            errors.push(ValueError::ResolutionFailed { field, value })
-        }
-        Results {
-            result: metadata,
-            errors,
-        }
-    }
-}
 
 #[derive(Clone)]
 pub enum PendingValue {
     Ready(MetadataValue),
-    RegexMatches {
-        source: String,
-        regex: Regex,
-    },
-    CopyField {
-        field: MetadataField,
-        sources: Vec<ItemPath>,
-        modify: Option<Rc<ValueModifier>>,
-    },
+    RegexMatches { source: String, regex: Regex },
 }
 impl From<MetadataValue> for PendingValue {
     fn from(value: MetadataValue) -> Self {
@@ -141,9 +31,6 @@ impl fmt::Display for PendingValue {
         match self {
             Self::Ready(r) => r.fmt(f),
             Self::RegexMatches { source, regex } => write!(f, "regex {} on {}", source, regex),
-            Self::CopyField { field, sources, .. } => {
-                write!(f, "copy {} from {} sources", field, sources.len())
-            }
         }
     }
 }

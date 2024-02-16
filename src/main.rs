@@ -44,7 +44,7 @@ fn main() {
         Err(YamlError::Io(error))
             if error.kind() == ErrorKind::NotFound && library_argument.is_none() =>
         {
-            eprintln!("{}", cformat!("❌ <red>{}</>", error.to_string()));
+            eprintln!("{}", cformat!("❌ <red>{}</>", error));
             if let Ok(dir) = std::env::current_dir() {
                 eprintln!(
                     "Provide the path to a library.yaml or add one to '{}'",
@@ -55,14 +55,151 @@ fn main() {
         Err(error) => {
             eprintln!(
                 "{}",
-                cformat!("❌ <red>Error loading library config:\n{}</>", error)
+                cformat!("❌ <red>Error loading library config\n{}</>", error)
             );
         }
         Ok(raw_config) => {
             let library_config_folder = library_config_path.parent().unwrap_or(Path::new(""));
-            let library_config: LibraryConfig =
+            let mut library_config: LibraryConfig =
                 LibraryConfig::new(library_config_folder, raw_config);
-            do_scan(library_config);
+            do_scan(&mut library_config);
+        }
+    }
+}
+
+type ConfigCache = HashMap<PathBuf, Result<SongConfig, ConfigError>>;
+struct WorkProgress {
+    changed: u32,
+    failed: u32,
+}
+
+fn do_scan(library_config: &mut LibraryConfig) {
+    let mut config_cache: ConfigCache = HashMap::new();
+    let mut art_config_cache: ArtConfigCache = HashMap::new();
+    let mut processed_art_cache: ProcessedArtCache = HashMap::new();
+    let mut progress = WorkProgress {
+        changed: 0,
+        failed: 0,
+    };
+    let ScanResults {
+        songs: scan_songs,
+        folders: scan_folders,
+        images: scan_images,
+    } = find_scan_songs(library_config);
+    let mut copy_cache = HashMap::new();
+    for folder_path in scan_folders {
+        let nice_path = ItemPath::Folder(
+            folder_path
+                .strip_prefix(&library_config.library_folder)
+                .unwrap_or(&folder_path)
+                .to_owned(),
+        );
+        process_path(
+            library_config,
+            &nice_path,
+            &mut config_cache,
+            &mut copy_cache,
+        );
+    }
+    for song_path in scan_songs {
+        let nice_path = ItemPath::Song(
+            song_path
+                .strip_prefix(&library_config.library_folder)
+                .unwrap_or(&song_path)
+                .with_extension(""),
+        );
+        process_path(
+            library_config,
+            &nice_path,
+            &mut config_cache,
+            &mut copy_cache,
+        );
+    }
+    if progress.failed == 0 {
+        println!("Updated {}", progress.changed);
+    } else {
+        println!("Updated {}, errored {}", progress.changed, progress.failed);
+    }
+    if let Err(err) = library_config.date_cache.save() {
+        eprintln!(
+            "{}",
+            cformat!("❌ <red>Error saving date cache\n{}</>", err)
+        );
+    }
+    if let Some(repo) = &mut library_config.art_repo {
+        repo.used_templates
+            .template_to_users
+            .retain(|x, y| x.exists() && !y.is_empty());
+        if let Err(err) = repo.used_templates.save() {
+            eprintln!("{}", cformat!("❌ <red>Error saving art cache\n{}</>", err));
+        }
+    }
+    for report in &library_config.reports {
+        let path = match report {
+            LibraryReport::SplitFields { path, .. }
+            | LibraryReport::MergedFields { path, .. }
+            | LibraryReport::ItemData { path, .. } => path,
+        };
+        if let Err(err) = report.save() {
+            eprintln!(
+                "{}",
+                cformat!(
+                    "❌ <red>Error saving report\n{}\n{}</>",
+                    path.display(),
+                    err
+                )
+            );
+        }
+    }
+}
+
+fn process_path(
+    library_config: &mut LibraryConfig,
+    nice_path: &ItemPath,
+    config_cache: &mut ConfigCache,
+    copy_cache: &mut HashMap<ItemPath, Metadata>,
+) {
+    let mut metadata = Some(PendingMetadata::new());
+    let mut config_errors = vec![];
+    for (config_path, nice_folder) in relevant_config_paths(nice_path, library_config) {
+        let loaded = config_cache
+            .entry(config_path.clone())
+            .or_insert_with_key(|x| {
+                let loaded = load_config(x, nice_folder, library_config);
+                print_config_errors(&loaded, x, nice_folder, library_config);
+                if loaded.is_ok() {
+                    library_config.date_cache.mark_updated(x.to_owned());
+                }
+                loaded
+            });
+        match loaded {
+            Ok(config) => {
+                if let Some(metadata) = &mut metadata {
+                    let select_path = nice_path.strip_prefix(nice_folder).unwrap_or(nice_folder);
+                    let errors =
+                        config.apply(nice_path, select_path, metadata, library_config, copy_cache);
+                    if !errors.is_empty() {
+                        config_errors.push((config_path, errors));
+                    }
+                }
+            }
+            Err(err) => {
+                if !is_not_found(err) {
+                    metadata = None;
+                }
+            }
+        }
+    }
+    if let Some(metadata) = metadata {
+        println!("{}", nice_path.display());
+        for (path, errors) in config_errors {
+            eprintln!(
+                "{}",
+                cformat!("⚠️ <yellow>Errors applying config\n{}</>", path.display())
+            );
+            for error in errors {
+                eprintln!("{}", cformat!("\t<yellow>{}</>", error));
+            }
         }
     }
 }
@@ -101,7 +238,7 @@ fn add_to_song(
                 success = false;
                 progress.failed += 1;
             }
-            eprintln!("{}", cformat!("\t❌ <red>ID3 Tag error: {}</>", err));
+            eprintln!("{}", cformat!("❌ <red>Error reading ID3 tag\n{}</>", err));
         }
     }
     match metaflac::Tag::read_from_path(file_path) {
@@ -125,7 +262,7 @@ fn add_to_song(
                 success = false;
                 progress.failed += 1;
             }
-            eprintln!("{}", cformat!("\t❌ <red>Flac Tag error: {}</>", err));
+            eprintln!("{}", cformat!("❌ <red>Error reading flac tag\n{}</>", err));
         }
     }
     for report in config.reports.iter_mut() {
@@ -138,16 +275,11 @@ fn add_to_song(
     }
     print_value_errors(&final_metadata.errors);
     if !any {
-        eprintln!("{}", cformat!("\t❌ <red>No tags found in file</>"));
+        eprintln!("{}", cformat!("❌ <red>No tags found in file</>"));
         success = false;
         progress.failed += 1;
     }
     success
-}
-
-struct WorkProgress {
-    changed: u32,
-    failed: u32,
 }
 
 fn print_value_errors(errors: &[ValueError]) {
@@ -217,219 +349,126 @@ fn print_art_errors(result: &ProcessArtResult, library_config: &mut LibraryConfi
     }
 }
 
-fn print_metadata_errors(results: &GetMetadataResults, library_config: &mut LibraryConfig) {
-    for load in &results.newly_loaded {
-        match Rc::as_ref(&load.result) {
-            Ok(config) => {
-                for unused in config
-                    .set
-                    .iter()
-                    .flat_map(|x| {
-                        find_unused_selectors(&x.names, &load.nice_folder, library_config)
-                    })
-                    .chain(
-                        config
-                            .order
-                            .as_ref()
-                            .map(|x| match x {
-                                OrderingSetter::Discs {
-                                    original_selectors, ..
-                                } => original_selectors
-                                    .iter()
-                                    .flat_map(|x| {
-                                        find_unused_selectors(x, &load.nice_folder, library_config)
-                                    })
-                                    .collect(),
-                                OrderingSetter::Order {
-                                    original_selector, ..
-                                } => find_unused_selectors(
-                                    original_selector,
-                                    &load.nice_folder,
-                                    library_config,
-                                ),
-                            })
-                            .unwrap_or_default(),
-                    )
-                {
-                    let display = inline_data(unused);
-                    eprintln!(
-                        "{}",
-                        cformat!("⚠️ <yellow>Selector {} didn't find anything</>", display)
-                    );
-                }
-                if let Some(order) = &config.order {
-                    let found = match order {
-                        OrderingSetter::Discs { map, .. } => {
-                            map.keys().map(|x| x.to_owned()).collect::<HashSet<_>>()
-                        }
-                        OrderingSetter::Order { map, .. } => {
-                            map.keys().map(|x| x.to_owned()).collect::<HashSet<_>>()
-                        }
-                    };
-                    let parents = found
+fn get_unused_selectors<'a>(
+    config: &'a SongConfig,
+    nice_folder: &Path,
+    library_config: &LibraryConfig,
+) -> Vec<&'a ItemSelector> {
+    config
+        .set
+        .iter()
+        .flat_map(|x| find_unused_selectors(&x.names, nice_folder, library_config))
+        .chain(
+            config
+                .order
+                .as_ref()
+                .map(|x| match x {
+                    OrderingSetter::Discs {
+                        original_selectors, ..
+                    } => original_selectors
                         .iter()
-                        .filter_map(|x| x.parent())
-                        .collect::<HashSet<_>>();
-                    let all_children = parents
-                        .into_iter()
-                        .flat_map(|x| {
-                            let start = load.nice_folder.join(x);
-                            file_stuff::find_matches(
-                                &ItemSelector::All { recursive: false },
-                                &start,
-                                library_config,
-                            )
-                            .into_iter()
-                            .filter_map(|y| match y {
-                                ItemPath::Folder(_) => None,
-                                ItemPath::Song(path) => Some(x.join(path)),
-                            })
-                        })
-                        .collect::<HashSet<_>>();
-                    for item in all_children.difference(&found) {
-                        eprintln!(
-                            "{}",
-                            cformat!(
-                                "⚠️ <yellow>Item \"{}\" wasn't included in track order</>",
-                                item.display()
-                            )
-                        );
+                        .flat_map(|x| find_unused_selectors(x, nice_folder, library_config))
+                        .collect(),
+                    OrderingSetter::Order {
+                        original_selector, ..
+                    } => find_unused_selectors(original_selector, nice_folder, library_config),
+                })
+                .unwrap_or_default(),
+        )
+        .collect()
+}
+
+fn get_unselected_items(
+    order: &OrderingSetter,
+    nice_folder: &Path,
+    library_config: &LibraryConfig,
+) -> BTreeSet<PathBuf> {
+    let found = match order {
+        OrderingSetter::Discs { map, .. } => {
+            map.keys().map(|x| x.to_owned()).collect::<HashSet<_>>()
+        }
+        OrderingSetter::Order { map, .. } => {
+            map.keys().map(|x| x.to_owned()).collect::<HashSet<_>>()
+        }
+    };
+    let parents = found
+        .iter()
+        .filter_map(|x| x.parent())
+        .collect::<HashSet<_>>();
+    let mut all_children = parents
+        .into_iter()
+        .flat_map(|x| {
+            let start = nice_folder.join(x);
+            file_stuff::find_matches(
+                &ItemSelector::All { recursive: false },
+                &start,
+                library_config,
+            )
+            .into_iter()
+            .filter_map(|y| match y {
+                ItemPath::Folder(_) => None,
+                ItemPath::Song(path) => Some(x.join(path)),
+            })
+        })
+        .collect::<BTreeSet<_>>();
+    for item in found {
+        all_children.remove(&item);
+    }
+    all_children
+}
+
+fn print_config_errors(
+    result: &Result<SongConfig, ConfigError>,
+    full_path: &Path,
+    nice_folder: &Path,
+    library_config: &LibraryConfig,
+) {
+    match result {
+        Err(error) => {
+            if !is_not_found(error) {
+                eprintln!(
+                    "{}",
+                    cformat!(
+                        "❌ <red>Error loading config\n{}\n{}</>",
+                        full_path.display(),
+                        error
+                    )
+                );
+            }
+        }
+        Ok(config) => {
+            let mut warnings = vec![];
+            let unused = get_unused_selectors(config, nice_folder, library_config);
+            if !unused.is_empty() {
+                warnings.push(cformat!("<yellow>Selectors that didn't find anything:</>"));
+                for selector in unused {
+                    warnings.push(cformat!("\t<yellow>{}</>", inline_data(selector)));
+                }
+            }
+            if let Some(order) = &config.order {
+                let unselected = get_unselected_items(order, nice_folder, library_config);
+                if !unselected.is_empty() {
+                    warnings.push(cformat!("<yellow>Items not included in track order:</>"));
+                    for item in unselected {
+                        warnings.push(cformat!("\t<yellow>{}</>", item.display()));
                     }
                 }
-                library_config
-                    .date_cache
-                    .mark_updated(load.full_path.to_owned());
             }
-            Err(error) => {
-                if !is_not_found(error) {
-                    eprintln!(
-                        "{}",
-                        cformat!(
-                            "❌ <red>Error loading config: {}\n{}</>",
-                            load.full_path.display(),
-                            error
-                        )
-                    );
+            if !warnings.is_empty() {
+                eprintln!(
+                    "{}",
+                    cformat!(
+                        "⚠️ <yellow>Warnings loading config\n{}</>",
+                        full_path.display()
+                    )
+                );
+                for warning in warnings {
+                    eprintln!("{}", warning);
                 }
             }
         }
     }
-    print_value_errors(&results.value_errors);
 }
-
-fn do_scan(mut library_config: LibraryConfig) {
-    let mut config_cache: ConfigCache = HashMap::new();
-    let mut art_config_cache: ArtConfigCache = HashMap::new();
-    let mut processed_art_cache: ProcessedArtCache = HashMap::new();
-    let mut progress = WorkProgress {
-        changed: 0,
-        failed: 0,
-    };
-    let ScanResults {
-        songs: scan_songs,
-        folders: scan_folders,
-        images: scan_images,
-    } = find_scan_songs(&library_config);
-    for folder_path in scan_folders {
-        let nice_path = ItemPath::Folder(
-            folder_path
-                .strip_prefix(&library_config.library_folder)
-                .unwrap_or(&folder_path)
-                .to_owned(),
-        );
-        let results = get_metadata(&nice_path, &library_config, &mut config_cache);
-        if results.result.is_some() {
-            println!("{}", nice_path.display());
-        }
-        print_metadata_errors(&results, &mut library_config);
-        if let Some(mut metadata) = results.result {
-            if let Some(repo) = &mut library_config.art_repo {
-                let art = repo.resolve_art(
-                    &mut metadata,
-                    &scan_images,
-                    &mut art_config_cache,
-                    &mut processed_art_cache,
-                );
-                repo.used_templates.add(&folder_path, &art);
-                print_art_errors(&art, &mut library_config);
-            }
-            for (field, value) in metadata.iter().sorted() {
-                println!("\t{field}: {value}");
-            }
-            library_config.date_cache.mark_updated(folder_path);
-        }
-    }
-    for song_path in scan_songs {
-        let nice_path = ItemPath::Song(
-            song_path
-                .strip_prefix(&library_config.library_folder)
-                .unwrap_or(&song_path)
-                .with_extension(""),
-        );
-        let results = get_metadata(&nice_path, &library_config, &mut config_cache);
-        if results.result.is_some() {
-            println!("{}", nice_path.display());
-        }
-        print_metadata_errors(&results, &mut library_config);
-        if let Some(mut metadata) = results.result {
-            let mut image = None;
-            if let Some(repo) = &mut library_config.art_repo {
-                let art = repo.resolve_art(
-                    &mut metadata,
-                    &scan_images,
-                    &mut art_config_cache,
-                    &mut processed_art_cache,
-                );
-                repo.used_templates.add(&song_path, &art);
-                print_art_errors(&art, &mut library_config);
-                if let ProcessArtResult::Processed { result, .. } = art {
-                    image = Some(result.clone());
-                }
-            }
-            if add_to_song(
-                &song_path,
-                &nice_path,
-                metadata,
-                image.and_then(|x| x.as_ref().as_ref().ok().cloned()),
-                &mut library_config,
-                &mut progress,
-            ) {
-                library_config.date_cache.mark_updated(song_path);
-            }
-        } else {
-            progress.failed += 1;
-        }
-    }
-    if progress.failed == 0 {
-        println!("Updated {}", progress.changed);
-    } else {
-        println!("Updated {}, errored {}", progress.changed, progress.failed);
-    }
-    if let Err(err) = library_config.date_cache.save() {
-        eprintln!(
-            "{}",
-            cformat!("❌ <red>Error saving date cache:\n{}</>", err)
-        );
-    }
-    if let Some(repo) = &mut library_config.art_repo {
-        repo.used_templates
-            .template_to_users
-            .retain(|x, y| x.exists() && !y.is_empty());
-        if let Err(err) = repo.used_templates.save() {
-            eprintln!(
-                "{}",
-                cformat!("❌ <red>Error saving art cache:\n{}</>", err)
-            );
-        }
-    }
-    for report in library_config.reports {
-        if let Err(err) = report.save() {
-            eprintln!("{}", cformat!("❌ <red>Error saving report:\n{}</>", err));
-        }
-    }
-}
-
-type ConfigCache = HashMap<PathBuf, Rc<Result<SongConfig, ConfigError>>>;
 
 fn is_not_found(result: &ConfigError) -> bool {
     matches!(result, ConfigError::Yaml(YamlError::Io(ref error)) if error.kind() == ErrorKind::NotFound)
@@ -486,14 +525,24 @@ struct GetMetadataResults {
     result: Option<Metadata>,
 }
 
-fn get_metadata(
-    nice_path: &ItemPath,
+fn load_config(
+    full_path: &Path,
+    nice_folder: &Path,
     library_config: &LibraryConfig,
-    config_cache: &mut ConfigCache,
-) -> GetMetadataResults {
-    let mut newly_loaded = vec![];
-    let mut value_errors = vec![];
-    let mut metadata = Some(PendingMetadata::new());
+) -> Result<SongConfig, ConfigError> {
+    match file_stuff::load_yaml::<RawSongConfig>(full_path) {
+        Err(error) => Err(ConfigError::Yaml(error)),
+        Ok(config) => library_config
+            .resolve_config(config, nice_folder)
+            .map_err(ConfigError::Library),
+    }
+}
+
+fn relevant_config_paths<'a>(
+    nice_path: &'a Path,
+    library_config: &LibraryConfig,
+) -> Vec<(PathBuf, &'a Path)> {
+    let mut list = vec![];
     for ancestor in nice_path
         .parent()
         .unwrap_or(Path::new(""))
@@ -502,49 +551,12 @@ fn get_metadata(
         .into_iter()
         .rev()
     {
-        let select_path = nice_path.strip_prefix(ancestor).unwrap_or(nice_path);
         for config_root in &library_config.config_folders {
             let config_path = config_root.join(ancestor).join("config.yaml");
-            let config_load = config_cache
-                .entry(config_path)
-                .or_insert_with_key(|config_path| {
-                    let result = Rc::new(file_stuff::load_config(
-                        config_path,
-                        ancestor,
-                        library_config,
-                    ));
-                    newly_loaded.push(ConfigLoadResults {
-                        nice_folder: ancestor.to_owned(),
-                        full_path: config_path.to_owned(),
-                        result: result.clone(),
-                    });
-                    result
-                });
-            match Rc::as_ref(config_load) {
-                Ok(config) => {
-                    if let Some(ref mut metadata) = metadata {
-                        let mut more_errors =
-                            config.apply(nice_path, select_path, metadata, library_config);
-                        value_errors.append(&mut more_errors);
-                    }
-                }
-                Err(error) => {
-                    if !is_not_found(error) {
-                        metadata = None;
-                    }
-                }
-            }
+            list.push((config_path, ancestor));
         }
     }
-    let mut resolved = metadata.map(|x| x.resolve(nice_path, library_config, config_cache));
-    if let Some(ref mut results) = resolved {
-        value_errors.append(&mut results.errors);
-    }
-    GetMetadataResults {
-        newly_loaded,
-        value_errors,
-        result: resolved.map(|x| x.result),
-    }
+    list
 }
 
 fn print_differences(name: &str, existing: &Metadata, incoming: &Metadata) -> bool {

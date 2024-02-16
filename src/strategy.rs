@@ -16,6 +16,7 @@ use crate::{
     metadata::{BuiltinMetadataField, MetadataField, MetadataValue, PendingMetadata, PendingValue},
     modifier::{ValueError, ValueModifier},
     util::{ItemPath, OutOfBoundsDecision, Range},
+    Metadata,
 };
 
 #[derive(Deserialize, Serialize)]
@@ -51,12 +52,13 @@ impl MetadataOperation {
         metadata: &mut PendingMetadata,
         nice_path: &Path,
         config: &LibraryConfig,
+        copy_cache: &HashMap<ItemPath, Metadata>,
     ) -> Vec<ValueError> {
         let mut errors = vec![];
         match self {
             Self::Many(items) => {
                 for item in items {
-                    let mut more_errors = item.apply(metadata, nice_path, config);
+                    let mut more_errors = item.apply(metadata, nice_path, config, copy_cache);
                     errors.append(&mut more_errors);
                 }
             }
@@ -66,23 +68,21 @@ impl MetadataOperation {
                     .collect::<Vec<_>>();
                 for field in config.custom_fields.iter().chain(builtin.iter()) {
                     if remove.is_match(field) {
-                        metadata
-                            .fields
-                            .insert(field.clone(), MetadataValue::blank().into());
+                        metadata.insert(field.clone(), MetadataValue::blank().into());
                     }
                 }
             }
             Self::Keep { keep } => {
-                metadata.fields.retain(|k, _| !keep.is_match(k));
+                metadata.retain(|k, _| !keep.is_match(k));
             }
-            Self::Shared { fields, set } => match set.get(nice_path, config) {
+            Self::Shared { fields, set } => match set.get(nice_path, config, copy_cache) {
                 Ok(value) => {
                     let builtin = BuiltinMetadataField::iter()
                         .map(|x| x.into())
                         .collect::<Vec<_>>();
                     for field in config.custom_fields.iter().chain(builtin.iter()) {
                         if fields.is_match(field) {
-                            metadata.fields.insert(field.clone(), value.clone());
+                            metadata.insert(field.clone(), value.clone());
                         }
                     }
                 }
@@ -96,10 +96,10 @@ impl MetadataOperation {
                     .collect::<Vec<_>>();
                 for field in config.custom_fields.iter().chain(builtin.iter()) {
                     if fields.is_match(field) {
-                        if let Some(existing) = metadata.fields.get(field) {
-                            match modify.modify(existing.clone(), nice_path, config) {
+                        if let Some(existing) = metadata.get(field) {
+                            match modify.modify(existing.clone(), nice_path, config, copy_cache) {
                                 Ok(modified) => {
-                                    metadata.fields.insert(field.clone(), modified);
+                                    metadata.insert(field.clone(), modified);
                                 }
                                 Err(err) => {
                                     errors.push(err);
@@ -116,9 +116,9 @@ impl MetadataOperation {
             }
             Self::Set(set) => {
                 for (field, value) in set {
-                    match value.get(nice_path, config) {
+                    match value.get(nice_path, config, copy_cache) {
                         Ok(value) => {
-                            metadata.fields.insert(field.clone(), value);
+                            metadata.insert(field.clone(), value);
                         }
                         Err(err) => {
                             errors.push(err);
@@ -126,12 +126,12 @@ impl MetadataOperation {
                     }
                 }
             }
-            Self::Context { source, modify } => match source.get(nice_path, config) {
+            Self::Context { source, modify } => match source.get(nice_path, config, copy_cache) {
                 Ok(value) => {
                     for (field, modifier) in modify {
-                        match modifier.modify(value.clone(), nice_path, config) {
+                        match modifier.modify(value.clone(), nice_path, config, copy_cache) {
                             Ok(modified) => {
-                                metadata.fields.insert(field.clone(), modified);
+                                metadata.insert(field.clone(), modified);
                             }
                             Err(err) => {
                                 errors.push(err);
@@ -145,10 +145,10 @@ impl MetadataOperation {
             },
             Self::Modify { modify } => {
                 for (field, modifier) in modify {
-                    if let Some(existing) = metadata.fields.get(field) {
-                        match modifier.modify(existing.clone(), nice_path, config) {
+                    if let Some(existing) = metadata.get(field) {
+                        match modifier.modify(existing.clone(), nice_path, config, copy_cache) {
                             Ok(modified) => {
-                                metadata.fields.insert(field.clone(), modified);
+                                metadata.insert(field.clone(), modified);
                             }
                             Err(err) => {
                                 errors.push(err);
@@ -425,7 +425,7 @@ impl FieldSelector {
 pub enum ValueGetter {
     Direct(MetadataValue),
     Copy {
-        from: LocalItemSelector,
+        from: Rc<LocalItemSelector>,
         copy: MetadataField,
         modify: Option<Rc<ValueModifier>>,
     },
@@ -448,7 +448,12 @@ fn default_missing() -> WarnBehavior {
     WarnBehavior::Warn
 }
 impl ValueGetter {
-    pub fn get(&self, path: &Path, config: &LibraryConfig) -> Result<PendingValue, ValueError> {
+    pub fn get(
+        &self,
+        path: &Path,
+        config: &LibraryConfig,
+        copy_cache: &HashMap<ItemPath, Metadata>,
+    ) -> Result<PendingValue, ValueError> {
         match self {
             Self::Direct(value) => Ok(value.clone().into()),
             Self::From {
@@ -474,14 +479,20 @@ impl ValueGetter {
                 );
                 match modify {
                     None => Ok(result.into()),
-                    Some(modify) => modify.modify(result.into(), path, config),
+                    Some(modify) => modify.modify(result.into(), path, config, copy_cache),
                 }
             }
-            Self::Copy { from, copy, modify } => Ok(PendingValue::CopyField {
-                field: copy.clone(),
-                modify: modify.clone(),
-                sources: from.get(path, config),
-            }),
+            Self::Copy { from, copy, modify } => {
+                let sources = from
+                    .get(path, config)
+                    .into_iter()
+                    .filter_map(|x| copy_cache.get(&x))
+                    .collect::<Vec<_>>();
+                Err(ValueError::ResolutionFailed {
+                    field: copy.clone(),
+                    value: PendingValue::Ready(MetadataValue::Number(0)),
+                })
+            }
         }
     }
 }

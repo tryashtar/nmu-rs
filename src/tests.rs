@@ -416,62 +416,6 @@ fn dummy_config() -> LibraryConfig {
 }
 
 #[test]
-fn copy_field_resolution() {
-    let path = PathBuf::from("a/b/c");
-    let config = dummy_config();
-    let mut pending = PendingMetadata::new();
-    pending.fields.insert(
-        BuiltinMetadataField::Performers.into(),
-        MetadataValue::string("item".to_owned()).into(),
-    );
-    pending.fields.insert(
-        BuiltinMetadataField::Composers.into(),
-        PendingValue::CopyField {
-            field: BuiltinMetadataField::Performers.into(),
-            sources: vec![ItemPath::Song(path.clone())],
-            modify: None,
-        },
-    );
-    let resolved = pending.resolve(&path, &config, &mut HashMap::new());
-    let result = resolved
-        .result
-        .get(&BuiltinMetadataField::Composers.into())
-        .unwrap();
-    assert!(matches!(result, MetadataValue::List(x) if x.as_slice() == ["item"]));
-}
-
-#[test]
-fn copy_field_loop() {
-    let path = PathBuf::from("a/b/c");
-    let config = dummy_config();
-    let mut pending = PendingMetadata::new();
-    pending.fields.insert(
-        BuiltinMetadataField::Performers.into(),
-        PendingValue::CopyField {
-            field: BuiltinMetadataField::Composers.into(),
-            sources: vec![ItemPath::Song(path.clone())],
-            modify: None,
-        },
-    );
-    pending.fields.insert(
-        BuiltinMetadataField::Composers.into(),
-        PendingValue::CopyField {
-            field: BuiltinMetadataField::Performers.into(),
-            sources: vec![ItemPath::Song(path.clone())],
-            modify: None,
-        },
-    );
-    let resolved = pending.resolve(&path, &config, &mut HashMap::new());
-    assert!(matches!(
-        resolved.errors.as_slice(),
-        [
-            ValueError::ResolutionFailed { .. },
-            ValueError::ResolutionFailed { .. }
-        ]
-    ));
-}
-
-#[test]
 fn selector_matches() {
     let tmp_dir = tempdir::TempDir::new("nmu-tests").unwrap();
     let config = dummy_config();

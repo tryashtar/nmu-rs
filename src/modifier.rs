@@ -1,4 +1,4 @@
-use std::{path::Path, rc::Rc};
+use std::{collections::HashMap, path::Path, rc::Rc};
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -8,6 +8,7 @@ use crate::{
     metadata::{MetadataField, MetadataValue, PendingValue},
     strategy::{LocalItemSelector, ValueGetter},
     util::{OutOfBoundsDecision, Range},
+    ItemPath, Metadata,
 };
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -153,41 +154,16 @@ impl ValueModifier {
         config: &LibraryConfig,
         index: Option<&Range>,
         appending: bool,
+        copy_cache: &HashMap<ItemPath, Metadata>,
     ) -> Result<PendingValue, ValueError> {
         if let PendingValue::Ready(MetadataValue::List(mut list)) = value {
-            let extra = append.get(path, config)?;
+            let extra = append.get(path, config, copy_cache)?;
             match extra {
                 PendingValue::Ready(ref val) => {
                     if let Some(str) = val.as_string() {
                         Self::append(&mut list, str, index, appending);
                         return Ok(MetadataValue::List(list).into());
                     }
-                }
-                PendingValue::CopyField {
-                    field,
-                    sources,
-                    modify,
-                } => {
-                    let switched = Rc::new(if appending {
-                        ValueModifier::Prepend {
-                            prepend: Box::new(ValueGetter::Direct(MetadataValue::List(list))),
-                            index: None,
-                        }
-                    } else {
-                        ValueModifier::Append {
-                            append: Box::new(ValueGetter::Direct(MetadataValue::List(list))),
-                            index: None,
-                        }
-                    });
-                    let new_modify = match modify {
-                        None => switched,
-                        Some(modify) => Rc::new(ValueModifier::Multiple(vec![modify, switched])),
-                    };
-                    return Ok(PendingValue::CopyField {
-                        field,
-                        sources,
-                        modify: Some(new_modify),
-                    });
                 }
                 _ => {}
             }
@@ -228,8 +204,11 @@ impl ValueModifier {
         add: usize,
         path: &Path,
         config: &LibraryConfig,
+        copy_cache: &HashMap<ItemPath, Metadata>,
     ) -> Result<PendingValue, ValueError> {
-        if let PendingValue::Ready(MetadataValue::List(val)) = insert.get(path, config)? {
+        if let PendingValue::Ready(MetadataValue::List(val)) =
+            insert.get(path, config, copy_cache)?
+        {
             if let PendingValue::Ready(MetadataValue::List(mut list)) = value {
                 return match Range::wrap_both(point, list.len(), out_of_bounds) {
                     None => Err(ValueError::ExitRequested),
@@ -252,27 +231,12 @@ impl ValueModifier {
         mut value: PendingValue,
         path: &Path,
         config: &LibraryConfig,
+        copy_cache: &HashMap<ItemPath, Metadata>,
     ) -> Result<PendingValue, ValueError> {
-        if let PendingValue::CopyField {
-            field,
-            sources,
-            modify,
-        } = value
-        {
-            let new_modify = match modify {
-                None => self.clone(),
-                Some(modify) => Rc::new(ValueModifier::Multiple(vec![modify, self.clone()])),
-            };
-            return Ok(PendingValue::CopyField {
-                field,
-                sources,
-                modify: Some(new_modify),
-            });
-        }
         match Rc::as_ref(self) {
             Self::Multiple(items) => {
                 for item in items {
-                    value = item.modify(value, path, config)?;
+                    value = item.modify(value, path, config, copy_cache)?;
                 }
                 Ok(value)
             }
@@ -307,12 +271,30 @@ impl ValueModifier {
                 insert,
                 before,
                 out_of_bounds,
-            } => self.checked_insert(value, insert, before, *out_of_bounds, 0, path, config),
+            } => self.checked_insert(
+                value,
+                insert,
+                before,
+                *out_of_bounds,
+                0,
+                path,
+                config,
+                copy_cache,
+            ),
             Self::InsertAfter {
                 insert,
                 after,
                 out_of_bounds,
-            } => self.checked_insert(value, insert, after, *out_of_bounds, 1, path, config),
+            } => self.checked_insert(
+                value,
+                insert,
+                after,
+                *out_of_bounds,
+                1,
+                path,
+                config,
+                copy_cache,
+            ),
             Self::Take { take } => {
                 if let PendingValue::Ready(MetadataValue::List(list)) = value {
                     return match take {
@@ -320,13 +302,12 @@ impl ValueModifier {
                             index,
                             out_of_bounds,
                             min_length,
-                        } => Self::take(&list, index, *out_of_bounds, min_length.as_ref().copied())
-                            .map(|x| x.into()),
+                        } => Self::take(&list, index, *out_of_bounds, min_length.as_ref().copied()),
                         TakeModifier::Simple(range) => {
                             Self::take(&list, range, OutOfBoundsDecision::Exit, None)
-                                .map(|x| x.into())
                         }
-                    };
+                    }
+                    .map(|x| x.into());
                 }
                 Err(ValueError::UnexpectedType {
                     modifier: self.clone(),
@@ -334,14 +315,26 @@ impl ValueModifier {
                     expected: "list",
                 })
             }
-            Self::Append { append, index } => {
-                self.checked_append(value, append, path, config, index.as_ref(), true)
-            }
-            Self::Prepend { prepend, index } => {
-                self.checked_append(value, prepend, path, config, index.as_ref(), false)
-            }
+            Self::Append { append, index } => self.checked_append(
+                value,
+                append,
+                path,
+                config,
+                index.as_ref(),
+                true,
+                copy_cache,
+            ),
+            Self::Prepend { prepend, index } => self.checked_append(
+                value,
+                prepend,
+                path,
+                config,
+                index.as_ref(),
+                false,
+                copy_cache,
+            ),
             Self::Join { join } => {
-                if let PendingValue::Ready(extra) = join.get(path, config)? {
+                if let PendingValue::Ready(extra) = join.get(path, config, copy_cache)? {
                     if let Some(str) = extra.as_string() {
                         if let PendingValue::Ready(MetadataValue::List(list)) = value {
                             return Ok(MetadataValue::string(list.join(str)).into());

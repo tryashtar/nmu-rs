@@ -481,7 +481,7 @@ impl LibraryConfig {
     pub fn resolve_config(
         &self,
         raw_config: RawSongConfig,
-        folder: &Path,
+        nice_folder: &Path,
     ) -> Result<SongConfig, LibraryError> {
         let songs = raw_config
             .songs
@@ -577,7 +577,7 @@ impl LibraryConfig {
             if let Some(discs) = raw_config.discs {
                 let mut map = HashMap::new();
                 for (disc, sel) in &discs {
-                    let matches = file_stuff::find_matches(sel, folder, self);
+                    let matches = file_stuff::find_matches(sel, nice_folder, self);
                     let track_total = matches.len();
                     for (track, path) in matches.into_iter().enumerate() {
                         map.insert(
@@ -596,7 +596,7 @@ impl LibraryConfig {
                     original_selectors: discs.into_values().collect(),
                 })
             } else if let Some(order) = raw_config.order {
-                let map = file_stuff::find_matches(&order, folder, self)
+                let map = file_stuff::find_matches(&order, nice_folder, self)
                     .into_iter()
                     .enumerate()
                     .map(|(track, path)| (PathBuf::from(path), (track + 1) as u32))
