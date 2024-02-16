@@ -8,6 +8,7 @@ use std::{
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use strum::IntoEnumIterator;
 
 use crate::{
@@ -46,20 +47,28 @@ pub enum MetadataOperation {
     Set(HashMap<MetadataField, ValueGetter>),
     Many(Vec<Rc<MetadataOperation>>),
 }
+pub struct ApplyReport {
+    pub errors: Vec<(Rc<MetadataOperation>, ValueError)>,
+}
+impl ApplyReport {
+    pub fn merge(&mut self, mut other: ApplyReport) {
+        self.errors.append(&mut other.errors);
+    }
+}
 impl MetadataOperation {
     pub fn apply(
-        &self,
+        self: &Rc<Self>,
         metadata: &mut PendingMetadata,
         nice_path: &Path,
         config: &LibraryConfig,
         copy_cache: &HashMap<ItemPath, Metadata>,
-    ) -> Vec<ValueError> {
-        let mut errors = vec![];
-        match self {
+    ) -> ApplyReport {
+        let mut report = ApplyReport { errors: vec![] };
+        match Rc::as_ref(self) {
             Self::Many(items) => {
                 for item in items {
-                    let mut more_errors = item.apply(metadata, nice_path, config, copy_cache);
-                    errors.append(&mut more_errors);
+                    let more = item.apply(metadata, nice_path, config, copy_cache);
+                    report.merge(more);
                 }
             }
             Self::Blank { remove } => {
@@ -87,7 +96,7 @@ impl MetadataOperation {
                     }
                 }
                 Err(err) => {
-                    errors.push(err);
+                    report.errors.push((self.clone(), err));
                 }
             },
             Self::SharedModify { fields, modify } => {
@@ -102,14 +111,17 @@ impl MetadataOperation {
                                     metadata.insert(field.clone(), modified);
                                 }
                                 Err(err) => {
-                                    errors.push(err);
+                                    report.errors.push((self.clone(), err));
                                 }
                             };
                         } else {
-                            errors.push(ValueError::MissingField {
-                                modifier: modify.clone(),
-                                field: field.clone(),
-                            });
+                            report.errors.push((
+                                self.clone(),
+                                ValueError::MissingField {
+                                    modifier: modify.clone(),
+                                    field: field.clone(),
+                                },
+                            ));
                         }
                     }
                 }
@@ -121,7 +133,7 @@ impl MetadataOperation {
                             metadata.insert(field.clone(), value);
                         }
                         Err(err) => {
-                            errors.push(err);
+                            report.errors.push((self.clone(), err));
                         }
                     }
                 }
@@ -134,13 +146,13 @@ impl MetadataOperation {
                                 metadata.insert(field.clone(), modified);
                             }
                             Err(err) => {
-                                errors.push(err);
+                                report.errors.push((self.clone(), err));
                             }
                         }
                     }
                 }
                 Err(err) => {
-                    errors.push(err);
+                    report.errors.push((self.clone(), err));
                 }
             },
             Self::Modify { modify } => {
@@ -151,19 +163,22 @@ impl MetadataOperation {
                                 metadata.insert(field.clone(), modified);
                             }
                             Err(err) => {
-                                errors.push(err);
+                                report.errors.push((self.clone(), err));
                             }
                         };
                     } else {
-                        errors.push(ValueError::MissingField {
-                            modifier: modifier.clone(),
-                            field: field.clone(),
-                        });
+                        report.errors.push((
+                            self.clone(),
+                            ValueError::MissingField {
+                                modifier: modifier.clone(),
+                                field: field.clone(),
+                            },
+                        ));
                     }
                 }
             }
         }
-        errors
+        report
     }
 }
 
@@ -273,10 +288,12 @@ pub enum LocalItemSelector {
     },
     DrillDown {
         from_root: Range,
+        #[serde(skip_serializing_if = "Option::is_none")]
         must_be: Option<MusicItemType>,
     },
     Selector {
         selector: ItemSelector,
+        #[serde(skip_serializing_if = "Option::is_none")]
         must_be: Option<MusicItemType>,
     },
 }
@@ -427,6 +444,7 @@ pub enum ValueGetter {
     Copy {
         from: Rc<LocalItemSelector>,
         copy: MetadataField,
+        #[serde(skip_serializing_if = "Option::is_none")]
         modify: Option<Rc<ValueModifier>>,
     },
     From {
@@ -435,6 +453,7 @@ pub enum ValueGetter {
         value: FieldValueGetter,
         #[serde(default = "default_missing")]
         if_missing: WarnBehavior,
+        #[serde(skip_serializing_if = "Option::is_none")]
         modify: Option<Rc<ValueModifier>>,
     },
 }

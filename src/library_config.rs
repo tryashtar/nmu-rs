@@ -1,5 +1,4 @@
 use chrono::{DateTime, Utc};
-use id3::frame::Lyrics;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, File};
@@ -572,6 +571,7 @@ impl LibraryConfig {
             .chain(set_fields)
             .chain(set_all)
             .chain(set)
+            .map(Rc::new)
             .collect::<Vec<_>>();
         let ordering = {
             if let Some(discs) = raw_config.discs {

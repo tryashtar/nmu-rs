@@ -85,7 +85,7 @@ fn do_scan(library_config: &mut LibraryConfig) {
         songs: scan_songs,
         folders: scan_folders,
         images: scan_images,
-    } = find_scan_songs(library_config);
+    } = find_scan_items(library_config);
     let mut copy_cache = HashMap::new();
     for folder_path in scan_folders {
         let nice_path = ItemPath::Folder(
@@ -160,7 +160,7 @@ fn process_path(
     copy_cache: &mut HashMap<ItemPath, Metadata>,
 ) {
     let mut metadata = Some(PendingMetadata::new());
-    let mut config_errors = vec![];
+    let mut config_reports = vec![];
     for (config_path, nice_folder) in relevant_config_paths(nice_path, library_config) {
         let loaded = config_cache
             .entry(config_path.clone())
@@ -176,11 +176,9 @@ fn process_path(
             Ok(config) => {
                 if let Some(metadata) = &mut metadata {
                     let select_path = nice_path.strip_prefix(nice_folder).unwrap_or(nice_folder);
-                    let errors =
+                    let report =
                         config.apply(nice_path, select_path, metadata, library_config, copy_cache);
-                    if !errors.is_empty() {
-                        config_errors.push((config_path, errors));
-                    }
+                    config_reports.push((config_path, report));
                 }
             }
             Err(err) => {
@@ -192,13 +190,19 @@ fn process_path(
     }
     if let Some(metadata) = metadata {
         println!("{}", nice_path.display());
-        for (path, errors) in config_errors {
-            eprintln!(
-                "{}",
-                cformat!("⚠️ <yellow>Errors applying config\n{}</>", path.display())
-            );
-            for error in errors {
-                eprintln!("{}", cformat!("\t<yellow>{}</>", error));
+        for (path, mut report) in config_reports {
+            report
+                .errors
+                .retain(|x| !matches!(x.1, ValueError::ExitRequested));
+            if !report.errors.is_empty() {
+                eprintln!(
+                    "{}",
+                    cformat!("⚠️ <yellow>Errors applying config\n{}</>", path.display())
+                );
+                for (op, error) in report.errors {
+                    let op_str = inline_data(&op);
+                    eprintln!("{}", cformat!("\t<yellow>{}\n\t{}</>", op_str, error));
+                }
             }
         }
     }
@@ -597,7 +601,7 @@ fn is_hidden(entry: &DirEntry) -> bool {
         .unwrap_or(false)
 }
 
-fn find_scan_songs(library_config: &LibraryConfig) -> ScanResults {
+fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
     let mut scan_songs = BTreeSet::<PathBuf>::new();
     let mut scan_folders = BTreeSet::<PathBuf>::new();
     let mut scan_images = BTreeSet::<PathBuf>::new();

@@ -12,7 +12,7 @@ use crate::{
     modifier::ValueError,
     strategy::{ItemSelector, MetadataOperation, MusicItemType, ValueGetter},
     util::ItemPath,
-    Metadata,
+    ApplyReport, Metadata,
 };
 
 #[derive(Deserialize, Serialize)]
@@ -51,7 +51,7 @@ pub struct RawFieldSetter {
 }
 
 pub struct SongConfig {
-    pub set: Vec<AllSetter>,
+    pub set: Vec<Rc<AllSetter>>,
     pub order: Option<OrderingSetter>,
 }
 pub enum OrderingSetter {
@@ -79,8 +79,8 @@ impl SongConfig {
         metadata: &mut PendingMetadata,
         library_config: &LibraryConfig,
         copy_cache: &HashMap<ItemPath, Metadata>,
-    ) -> Vec<ValueError> {
-        let mut errors = vec![];
+    ) -> ApplyReport {
+        let mut report = ApplyReport { errors: vec![] };
         if let Some(order) = &self.order {
             match order {
                 OrderingSetter::Order { map, total, .. } => {
@@ -123,14 +123,14 @@ impl SongConfig {
             if setter.names.matches(select)
                 && MusicItemType::matches(&nice_path.as_type(), setter.must_be.as_ref())
             {
-                let mut more_errors =
+                let more =
                     setter
                         .set
                         .apply(metadata, nice_path.as_ref(), library_config, copy_cache);
-                errors.append(&mut more_errors);
+                report.merge(more);
             }
         }
-        errors
+        report
     }
 }
 

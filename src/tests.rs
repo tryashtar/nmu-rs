@@ -416,6 +416,24 @@ fn dummy_config() -> LibraryConfig {
 }
 
 #[test]
+fn copy_field_resolution() {
+    let path = PathBuf::from("a/b/c");
+    let config = dummy_config();
+    let getter = ValueGetter::Copy {
+        from: Rc::new(LocalItemSelector::This),
+        copy: BuiltinMetadataField::Performers.into(),
+        modify: None,
+    };
+    let copy_cache = HashMap::new();
+    let result = getter
+        .get(&path, &config, &copy_cache)
+        .unwrap_or_else(|_| panic!("should resolve"));
+    assert!(
+        matches!(result, PendingValue::Ready(MetadataValue::List(x)) if x.as_slice() == ["item"])
+    );
+}
+
+#[test]
 fn selector_matches() {
     let tmp_dir = tempdir::TempDir::new("nmu-tests").unwrap();
     let config = dummy_config();

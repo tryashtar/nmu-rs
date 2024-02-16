@@ -16,10 +16,12 @@ use crate::{
 pub enum ValueModifier {
     Prepend {
         prepend: Box<ValueGetter>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         index: Option<Range>,
     },
     Append {
         append: Box<ValueGetter>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         index: Option<Range>,
     },
     InsertBefore {
@@ -147,7 +149,7 @@ impl ValueModifier {
         }
     }
     fn checked_append(
-        self: &Rc<ValueModifier>,
+        self: &Rc<Self>,
         value: PendingValue,
         append: &ValueGetter,
         path: &Path,
@@ -196,7 +198,7 @@ impl ValueModifier {
         }
     }
     fn checked_insert(
-        self: &Rc<ValueModifier>,
+        self: &Rc<Self>,
         value: PendingValue,
         insert: &ValueGetter,
         point: &Range,
