@@ -193,15 +193,14 @@ fn process_path(
         for (path, mut report) in config_reports {
             report
                 .errors
-                .retain(|x| !matches!(x.1, ValueError::ExitRequested));
+                .retain(|x| !matches!(x, ValueError::ExitRequested));
             if !report.errors.is_empty() {
                 eprintln!(
                     "{}",
                     cformat!("⚠️ <yellow>Errors applying config\n{}</>", path.display())
                 );
-                for (op, error) in report.errors {
-                    let op_str = inline_data(&op);
-                    eprintln!("{}", cformat!("\t<yellow>{}\n\t{}</>", op_str, error));
+                for error in report.errors {
+                    eprintln!("{}", cformat!("\t<yellow>{}</>", error));
                 }
             }
         }

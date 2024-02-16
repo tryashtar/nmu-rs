@@ -48,7 +48,7 @@ pub enum MetadataOperation {
     Many(Vec<Rc<MetadataOperation>>),
 }
 pub struct ApplyReport {
-    pub errors: Vec<(Rc<MetadataOperation>, ValueError)>,
+    pub errors: Vec<ValueError>,
 }
 impl ApplyReport {
     pub fn merge(&mut self, mut other: ApplyReport) {
@@ -57,14 +57,14 @@ impl ApplyReport {
 }
 impl MetadataOperation {
     pub fn apply(
-        self: &Rc<Self>,
+        &self,
         metadata: &mut PendingMetadata,
         nice_path: &Path,
         config: &LibraryConfig,
         copy_cache: &HashMap<ItemPath, Metadata>,
     ) -> ApplyReport {
         let mut report = ApplyReport { errors: vec![] };
-        match Rc::as_ref(self) {
+        match self {
             Self::Many(items) => {
                 for item in items {
                     let more = item.apply(metadata, nice_path, config, copy_cache);
@@ -96,7 +96,7 @@ impl MetadataOperation {
                     }
                 }
                 Err(err) => {
-                    report.errors.push((self.clone(), err));
+                    report.errors.push(err);
                 }
             },
             Self::SharedModify { fields, modify } => {
@@ -111,17 +111,14 @@ impl MetadataOperation {
                                     metadata.insert(field.clone(), modified);
                                 }
                                 Err(err) => {
-                                    report.errors.push((self.clone(), err));
+                                    report.errors.push(err);
                                 }
                             };
                         } else {
-                            report.errors.push((
-                                self.clone(),
-                                ValueError::MissingField {
-                                    modifier: modify.clone(),
-                                    field: field.clone(),
-                                },
-                            ));
+                            report.errors.push(ValueError::MissingField {
+                                modifier: modify.clone(),
+                                field: field.clone(),
+                            });
                         }
                     }
                 }
@@ -133,7 +130,7 @@ impl MetadataOperation {
                             metadata.insert(field.clone(), value);
                         }
                         Err(err) => {
-                            report.errors.push((self.clone(), err));
+                            report.errors.push(err);
                         }
                     }
                 }
@@ -146,13 +143,13 @@ impl MetadataOperation {
                                 metadata.insert(field.clone(), modified);
                             }
                             Err(err) => {
-                                report.errors.push((self.clone(), err));
+                                report.errors.push(err);
                             }
                         }
                     }
                 }
                 Err(err) => {
-                    report.errors.push((self.clone(), err));
+                    report.errors.push(err);
                 }
             },
             Self::Modify { modify } => {
@@ -163,17 +160,14 @@ impl MetadataOperation {
                                 metadata.insert(field.clone(), modified);
                             }
                             Err(err) => {
-                                report.errors.push((self.clone(), err));
+                                report.errors.push(err);
                             }
                         };
                     } else {
-                        report.errors.push((
-                            self.clone(),
-                            ValueError::MissingField {
-                                modifier: modifier.clone(),
-                                field: field.clone(),
-                            },
-                        ));
+                        report.errors.push(ValueError::MissingField {
+                            modifier: modifier.clone(),
+                            field: field.clone(),
+                        });
                     }
                 }
             }
