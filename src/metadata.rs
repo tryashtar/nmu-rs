@@ -16,7 +16,7 @@ pub type Metadata = HashMap<MetadataField, MetadataValue>;
 pub type PendingMetadata = HashMap<MetadataField, PendingValue>;
 type MetadataCache = HashMap<PathBuf, GetMetadataResults>;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum PendingValue {
     Ready(MetadataValue),
     RegexMatches { source: String, regex: Regex },

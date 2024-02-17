@@ -3,6 +3,7 @@ use super::*;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 mod deserialize {
     use super::*;
@@ -431,6 +432,14 @@ fn copy_field_resolution() {
     assert!(
         matches!(result, PendingValue::Ready(MetadataValue::List(x)) if x.as_slice() == ["item"])
     );
+}
+
+#[test]
+fn path_equality() {
+    let path1 = ItemPath::Song(PathBuf::from_str("test thing").unwrap());
+    let path2 = ItemPath::Song(PathBuf::from_str("test thing").unwrap());
+    assert_eq!(path1, path2);
+    assert!(path1 == path2);
 }
 
 #[test]

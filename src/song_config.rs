@@ -9,10 +9,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     library_config::LibraryConfig,
     metadata::{BuiltinMetadataField, MetadataField, MetadataValue, PendingMetadata},
-    modifier::ValueError,
     strategy::{ItemSelector, MetadataOperation, MusicItemType, ValueGetter},
     util::ItemPath,
-    ApplyReport, Metadata,
+    ApplyReport,
 };
 
 #[derive(Deserialize, Serialize)]
@@ -78,7 +77,7 @@ impl SongConfig {
         select: &Path,
         metadata: &mut PendingMetadata,
         library_config: &LibraryConfig,
-        copy_cache: &HashMap<ItemPath, Metadata>,
+        copy_cache: &HashMap<PathBuf, PendingMetadata>,
     ) -> ApplyReport {
         let mut report = ApplyReport { errors: vec![] };
         if let Some(order) = &self.order {

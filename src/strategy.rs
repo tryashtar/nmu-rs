@@ -8,7 +8,6 @@ use std::{
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use strum::IntoEnumIterator;
 
 use crate::{
@@ -16,8 +15,7 @@ use crate::{
     library_config::LibraryConfig,
     metadata::{BuiltinMetadataField, MetadataField, MetadataValue, PendingMetadata, PendingValue},
     modifier::{ValueError, ValueModifier},
-    util::{ItemPath, OutOfBoundsDecision, Range},
-    Metadata,
+    util::{OutOfBoundsDecision, Range},
 };
 
 #[derive(Deserialize, Serialize)]
@@ -61,7 +59,7 @@ impl MetadataOperation {
         metadata: &mut PendingMetadata,
         nice_path: &Path,
         config: &LibraryConfig,
-        copy_cache: &HashMap<ItemPath, Metadata>,
+        copy_cache: &HashMap<PathBuf, PendingMetadata>,
     ) -> ApplyReport {
         let mut report = ApplyReport { errors: vec![] };
         match self {
@@ -319,17 +317,14 @@ where
     deserializer.deserialize_str(Visitor)
 }
 impl LocalItemSelector {
-    fn get(&self, start: &Path, config: &LibraryConfig) -> Vec<ItemPath> {
+    fn get(&self, start: &Path, config: &LibraryConfig) -> Vec<PathBuf> {
         match self {
-            Self::This => vec![ItemPath::Folder(start.to_owned())],
+            Self::This => vec![start.to_owned()],
             Self::DrillUp { up } => {
                 let ancestors = start.ancestors().collect::<Vec<_>>();
                 match up.slice(ancestors.as_slice(), OutOfBoundsDecision::Clamp) {
                     None => vec![],
-                    Some(slice) => slice
-                        .iter()
-                        .map(|x| ItemPath::Folder((*x).to_owned()))
-                        .collect(),
+                    Some(slice) => slice.iter().map(|x| (*x).to_owned()).collect(),
                 }
             }
             Self::DrillDown { must_be, from_root } => {
@@ -340,13 +335,13 @@ impl LocalItemSelector {
                     .rev()
                     .enumerate()
                     .map(|(i, x)| {
-                        let nice = if i == last {
-                            ItemPath::Song(x.to_owned())
+                        let item_type = if i == last {
+                            MusicItemType::Song
                         } else {
-                            ItemPath::Folder(x.to_owned())
+                            MusicItemType::Folder
                         };
-                        if MusicItemType::matches(&nice.as_type(), must_be.as_ref()) {
-                            Some(nice)
+                        if MusicItemType::matches(&item_type, must_be.as_ref()) {
+                            Some(x.to_owned())
                         } else {
                             None
                         }
@@ -365,6 +360,7 @@ impl LocalItemSelector {
                 file_stuff::find_matches(selector, start, config)
                     .into_iter()
                     .filter(|x| MusicItemType::matches(&x.as_type(), must_be.as_ref()))
+                    .map(|x| x.into())
                     .collect()
             }
         }
@@ -465,7 +461,7 @@ impl ValueGetter {
         &self,
         path: &Path,
         config: &LibraryConfig,
-        copy_cache: &HashMap<ItemPath, Metadata>,
+        copy_cache: &HashMap<PathBuf, PendingMetadata>,
     ) -> Result<PendingValue, ValueError> {
         match self {
             Self::Direct(value) => Ok(value.clone().into()),
@@ -489,22 +485,61 @@ impl ValueGetter {
                         .into_iter()
                         .map(|x| value.get(x.as_ref(), config).to_string())
                         .collect(),
-                );
+                )
+                .into();
                 match modify {
-                    None => Ok(result.into()),
-                    Some(modify) => modify.modify(result.into(), path, config, copy_cache),
+                    None => Ok(result),
+                    Some(modify) => modify.modify(result, path, config, copy_cache),
                 }
             }
             Self::Copy { from, copy, modify } => {
-                let sources = from
-                    .get(path, config)
-                    .into_iter()
-                    .filter_map(|x| copy_cache.get(&x))
-                    .collect::<Vec<_>>();
-                Err(ValueError::ResolutionFailed {
-                    field: copy.clone(),
-                    value: PendingValue::Ready(MetadataValue::Number(0)),
-                })
+                let sources = from.get(path, config);
+                if sources.is_empty() {
+                    return Err(ValueError::ItemNotFound {
+                        selector: from.clone(),
+                    });
+                }
+                let mut missing = vec![];
+                let mut present = vec![];
+                for source in sources {
+                    match copy_cache.get(&source).and_then(|x| x.get(copy)).cloned() {
+                        None => {
+                            missing.push(source);
+                        }
+                        Some(value) => {
+                            present.push(value);
+                        }
+                    }
+                }
+                if !missing.is_empty() {
+                    return Err(ValueError::CopyNotFound {
+                        field: copy.clone(),
+                        paths: missing,
+                    });
+                }
+                let result = Self::combine(present)?;
+                match modify {
+                    None => Ok(result),
+                    Some(modify) => modify.modify(result, path, config, copy_cache),
+                }
+            }
+        }
+    }
+    fn combine(values: Vec<PendingValue>) -> Result<PendingValue, ValueError> {
+        match values.len() {
+            0 => Err(ValueError::Uncombinable { values }),
+            1 => Ok(values[0].clone()),
+            _ => {
+                let mut list = vec![];
+                for value in values.clone() {
+                    match value {
+                        PendingValue::Ready(MetadataValue::List(mut vals)) => {
+                            list.append(&mut vals)
+                        }
+                        _ => return Err(ValueError::Uncombinable { values }),
+                    }
+                }
+                Ok(MetadataValue::List(list).into())
             }
         }
     }

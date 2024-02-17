@@ -186,7 +186,7 @@ impl Range {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum ItemPath {
     Song(PathBuf),
     Folder(PathBuf),

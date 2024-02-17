@@ -1,4 +1,8 @@
-use std::{collections::HashMap, path::Path, rc::Rc};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    rc::Rc,
+};
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -8,7 +12,7 @@ use crate::{
     metadata::{MetadataField, MetadataValue, PendingValue},
     strategy::{LocalItemSelector, ValueGetter},
     util::{OutOfBoundsDecision, Range},
-    ItemPath, Metadata,
+    PendingMetadata,
 };
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -57,6 +61,10 @@ pub enum ValueModifier {
 
 pub enum ValueError {
     ExitRequested,
+    CopyNotFound {
+        field: MetadataField,
+        paths: Vec<PathBuf>,
+    },
     UnexpectedType {
         modifier: Rc<ValueModifier>,
         got: PendingValue,
@@ -69,14 +77,13 @@ pub enum ValueError {
     ItemNotFound {
         selector: Rc<LocalItemSelector>,
     },
-    ResolutionFailed {
-        field: MetadataField,
-        value: PendingValue,
-    },
     WrongFieldType {
         field: MetadataField,
         got: MetadataValue,
         expected: &'static str,
+    },
+    Uncombinable {
+        values: Vec<PendingValue>,
     },
 }
 pub fn inline_data<T>(item: &T) -> String
@@ -119,11 +126,22 @@ impl std::fmt::Display for ValueError {
                 let sel_str = inline_data(&selector);
                 write!(f, "Selector {} didn't find anything", sel_str)
             }
-            ValueError::ResolutionFailed { field, value } => {
-                write!(f, "{} value {} couldn't be resolved", field, value)
-            }
             ValueError::ExitRequested => {
                 write!(f, "Conditions not met, skipping")
+            }
+            ValueError::CopyNotFound { field, paths } => {
+                write!(
+                    f,
+                    "Tried to copy {}, but no value was found: {:?}",
+                    field, paths
+                )
+            }
+            ValueError::Uncombinable { values } => {
+                if values.is_empty() {
+                    write!(f, "Got no values to combine")
+                } else {
+                    write!(f, "Can't combine mismatching values: {:?}", values)
+                }
             }
         }
     }
@@ -156,7 +174,7 @@ impl ValueModifier {
         config: &LibraryConfig,
         index: Option<&Range>,
         appending: bool,
-        copy_cache: &HashMap<ItemPath, Metadata>,
+        copy_cache: &HashMap<PathBuf, PendingMetadata>,
     ) -> Result<PendingValue, ValueError> {
         if let PendingValue::Ready(MetadataValue::List(mut list)) = value {
             let extra = append.get(path, config, copy_cache)?;
@@ -182,7 +200,7 @@ impl ValueModifier {
             })
         }
     }
-    fn append(list: &mut Vec<String>, extra: &str, index: Option<&Range>, appending: bool) {
+    fn append(list: &mut [String], extra: &str, index: Option<&Range>, appending: bool) {
         for i in 0..list.len() {
             let should_modify = match index {
                 None => true,
@@ -206,7 +224,7 @@ impl ValueModifier {
         add: usize,
         path: &Path,
         config: &LibraryConfig,
-        copy_cache: &HashMap<ItemPath, Metadata>,
+        copy_cache: &HashMap<PathBuf, PendingMetadata>,
     ) -> Result<PendingValue, ValueError> {
         if let PendingValue::Ready(MetadataValue::List(val)) =
             insert.get(path, config, copy_cache)?
@@ -233,7 +251,7 @@ impl ValueModifier {
         mut value: PendingValue,
         path: &Path,
         config: &LibraryConfig,
-        copy_cache: &HashMap<ItemPath, Metadata>,
+        copy_cache: &HashMap<PathBuf, PendingMetadata>,
     ) -> Result<PendingValue, ValueError> {
         match Rc::as_ref(self) {
             Self::Multiple(items) => {

@@ -157,35 +157,65 @@ fn process_path(
     library_config: &mut LibraryConfig,
     nice_path: &ItemPath,
     config_cache: &mut ConfigCache,
-    copy_cache: &mut HashMap<ItemPath, Metadata>,
+    copy_cache: &mut HashMap<PathBuf, PendingMetadata>,
 ) {
-    let mut metadata = Some(PendingMetadata::new());
-    let mut config_reports = vec![];
-    for (config_path, nice_folder) in relevant_config_paths(nice_path, library_config) {
-        let loaded = config_cache
-            .entry(config_path.clone())
-            .or_insert_with_key(|x| {
-                let loaded = load_config(x, nice_folder, library_config);
-                print_config_errors(&loaded, x, nice_folder, library_config);
-                if loaded.is_ok() {
-                    library_config.date_cache.mark_updated(x.to_owned());
+    let mut metadata;
+    let mut config_reports;
+    loop {
+        metadata = Some(PendingMetadata::new());
+        config_reports = vec![];
+        for (config_path, nice_folder) in relevant_config_paths(nice_path, library_config) {
+            let loaded = config_cache
+                .entry(config_path.clone())
+                .or_insert_with_key(|x| {
+                    let loaded = load_config(x, nice_folder, library_config);
+                    print_config_errors(&loaded, x, nice_folder, library_config);
+                    if loaded.is_ok() {
+                        library_config.date_cache.mark_updated(x.to_owned());
+                    }
+                    loaded
+                });
+            match loaded {
+                Ok(config) => {
+                    if let Some(metadata) = &mut metadata {
+                        let select_path =
+                            nice_path.strip_prefix(nice_folder).unwrap_or(nice_folder);
+                        let report = config.apply(
+                            nice_path,
+                            select_path,
+                            metadata,
+                            library_config,
+                            copy_cache,
+                        );
+                        config_reports.push((config_path, report));
+                    }
                 }
-                loaded
-            });
-        match loaded {
-            Ok(config) => {
-                if let Some(metadata) = &mut metadata {
-                    let select_path = nice_path.strip_prefix(nice_folder).unwrap_or(nice_folder);
-                    let report =
-                        config.apply(nice_path, select_path, metadata, library_config, copy_cache);
-                    config_reports.push((config_path, report));
+                Err(err) => {
+                    if !is_not_found(err) {
+                        metadata = None;
+                    }
                 }
             }
-            Err(err) => {
-                if !is_not_found(err) {
-                    metadata = None;
+        }
+        let mut redo = false;
+        for error in config_reports.iter().flat_map(|x| &x.1.errors) {
+            if let ValueError::CopyNotFound { field, paths } = error {
+                for path in paths {
+                    if !copy_cache.contains_key(path) {
+                        redo = true;
+                        if (nice_path as &Path) == path.as_path() {
+                            if let Some(metadata) = &metadata {
+                                copy_cache.insert(path.clone(), metadata.clone());
+                            }
+                        } else {
+                            copy_cache.insert(path.clone(), HashMap::new());
+                        }
+                    }
                 }
             }
+        }
+        if !redo {
+            break;
         }
     }
     if let Some(metadata) = metadata {
