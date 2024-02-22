@@ -11,6 +11,7 @@ use crate::{
     metadata::{Metadata, MetadataField, MetadataValue},
     strategy::{ApplyReport, ItemSelector, MetadataOperation, MusicItemType, ValueGetter},
     util::ItemPath,
+    CopyCache,
 };
 
 #[derive(Deserialize, Serialize)]
@@ -76,7 +77,7 @@ impl SongConfig {
         select: &Path,
         metadata: &mut Metadata,
         library_config: &LibraryConfig,
-        copy_cache: &HashMap<PathBuf, Metadata>,
+        copy_cache: &CopyCache,
     ) -> ApplyReport {
         let mut report = ApplyReport { errors: vec![] };
         if let Some(order) = &self.order {

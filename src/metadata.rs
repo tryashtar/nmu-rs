@@ -1,5 +1,5 @@
 use core::fmt;
-use std::{collections::HashMap, rc::Rc};
+use std::{collections::HashMap, fmt::Display, rc::Rc};
 
 use image::DynamicImage;
 use regex::Regex;
@@ -14,7 +14,7 @@ use crate::{
 
 pub type Metadata = HashMap<MetadataField, MetadataValue>;
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(untagged)]
 pub enum MetadataValue {
     Number(u32),
@@ -23,9 +23,30 @@ pub enum MetadataValue {
     #[serde(skip)]
     RegexMatches {
         source: String,
-        regex: Regex,
+        regex: RegexWrap,
     },
 }
+
+// stupid stuff required to derive Eq/Ord for MetadataValue
+#[derive(Debug, Clone)]
+pub struct RegexWrap(pub Regex);
+impl PartialEq for RegexWrap {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+impl Eq for RegexWrap {}
+impl PartialOrd for RegexWrap {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for RegexWrap {
+    fn cmp(&self, _other: &Self) -> std::cmp::Ordering {
+        std::cmp::Ordering::Equal
+    }
+}
+
 pub static BLANK_VALUE: MetadataValue = MetadataValue::List(vec![]);
 impl Serialize for MetadataValue {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -79,7 +100,9 @@ impl fmt::Display for MetadataValue {
             Self::List(l) if l.is_empty() => write!(f, "[]"),
             Self::List(l) if l.len() == 1 => write!(f, "{}", l[0]),
             Self::List(l) => write!(f, "[{}]", l.join("; ")),
-            Self::RegexMatches { source, regex } => write!(f, "regex '{}' on '{}'", regex, source),
+            Self::RegexMatches { source, regex } => {
+                write!(f, "regex '{}' on '{}'", regex.0, source)
+            }
         }
     }
 }
@@ -248,9 +271,7 @@ impl From<FinalMetadata> for Metadata {
     }
 }
 
-#[derive(
-    Deserialize, Serialize, Debug, Display, EnumIter, Hash, PartialEq, Eq, PartialOrd, Ord, Clone,
-)]
+#[derive(Deserialize, Serialize, Debug, EnumIter, Hash, PartialEq, Eq, PartialOrd, Ord, Clone)]
 #[serde(rename_all = "lowercase")]
 pub enum MetadataField {
     Title,
@@ -283,4 +304,27 @@ pub enum MetadataField {
     SimpleLyrics,
     #[serde(untagged)]
     Custom(String),
+}
+impl std::fmt::Display for MetadataField {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MetadataField::Title => write!(f, "Title"),
+            MetadataField::Album => write!(f, "Album"),
+            MetadataField::Performers => write!(f, "Performers"),
+            MetadataField::AlbumArtist => write!(f, "Album Artist"),
+            MetadataField::Composers => write!(f, "Composers"),
+            MetadataField::Arranger => write!(f, "Arranger"),
+            MetadataField::Comment => write!(f, "Comment"),
+            MetadataField::Track => write!(f, "Track"),
+            MetadataField::TrackTotal => write!(f, "Track Total"),
+            MetadataField::Disc => write!(f, "Disc"),
+            MetadataField::DiscTotal => write!(f, "Disc Total"),
+            MetadataField::Year => write!(f, "Year"),
+            MetadataField::Language => write!(f, "Language"),
+            MetadataField::Genres => write!(f, "Genres"),
+            MetadataField::Art => write!(f, "Art"),
+            MetadataField::SimpleLyrics => write!(f, "Simple Lyrics"),
+            MetadataField::Custom(val) => write!(f, "Custom ({val})"),
+        }
+    }
 }

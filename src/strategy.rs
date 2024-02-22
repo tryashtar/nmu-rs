@@ -16,6 +16,7 @@ use crate::{
     metadata::{Metadata, MetadataField, MetadataValue},
     modifier::{ValueError, ValueModifier},
     util::{OutOfBoundsDecision, Range},
+    CopyCache,
 };
 
 #[derive(Deserialize, Serialize)]
@@ -59,7 +60,7 @@ impl MetadataOperation {
         metadata: &mut Metadata,
         nice_path: &Path,
         config: &LibraryConfig,
-        copy_cache: &HashMap<PathBuf, Metadata>,
+        copy_cache: &CopyCache,
     ) -> ApplyReport {
         let mut report = ApplyReport { errors: vec![] };
         match self {
@@ -455,7 +456,7 @@ impl ValueGetter {
         &self,
         path: &Path,
         config: &LibraryConfig,
-        copy_cache: &HashMap<PathBuf, Metadata>,
+        copy_cache: &CopyCache,
     ) -> Result<MetadataValue, ValueError> {
         match self {
             Self::Direct(value) => Ok(value.clone()),

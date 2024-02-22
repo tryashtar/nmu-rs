@@ -5,7 +5,7 @@ use itertools::Itertools;
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     env,
-    io::{ErrorKind, IsTerminal},
+    io::{ErrorKind, IsTerminal, Write},
     ops::Deref,
     path::{Path, PathBuf},
     rc::Rc,
@@ -17,7 +17,7 @@ use crate::{
     file_stuff::YamlError,
     library_config::LibraryReport,
     library_config::{LibraryConfig, RawLibraryConfig},
-    metadata::{FinalMetadata, Metadata, SetValue},
+    metadata::{FinalMetadata, Metadata, MetadataField, MetadataValue, SetValue},
     modifier::ValueError,
     song_config::SongConfig,
     song_config::{OrderingSetter, RawSongConfig},
@@ -64,14 +64,23 @@ fn main() {
         }
         Ok(raw_config) => {
             let library_config_folder = library_config_path.parent().unwrap_or(Path::new(""));
-            let mut library_config: LibraryConfig =
-                LibraryConfig::new(library_config_folder, raw_config);
-            do_scan(&mut library_config);
+            match LibraryConfig::new(library_config_folder, raw_config) {
+                Err(error) => {
+                    eprintln!(
+                        "{}",
+                        cformat!("❌ <red>Error loading library config\n{}</>", error)
+                    );
+                }
+                Ok(mut library_config) => {
+                    do_scan(&mut library_config);
+                }
+            }
         }
     }
 }
 
 type ConfigCache = HashMap<PathBuf, Result<SongConfig, ConfigError>>;
+type CopyCache = HashMap<PathBuf, Metadata>;
 struct WorkProgress {
     changed: u32,
     failed: u32,
@@ -98,12 +107,26 @@ fn do_scan(library_config: &mut LibraryConfig) {
                 .unwrap_or(&folder_path)
                 .to_owned(),
         );
-        process_path(
+        if let Some(mut metadata) = process_path(
             library_config,
             &nice_path,
             &mut config_cache,
             &mut copy_cache,
-        );
+        ) {
+            if let Some(repo) = &mut library_config.art_repo {
+                let art = repo.resolve_art(
+                    &mut metadata,
+                    &scan_images,
+                    &mut art_config_cache,
+                    &mut processed_art_cache,
+                );
+                repo.used_templates.add(&folder_path, &art);
+                print_art_errors(&art, library_config);
+            }
+            for (field, value) in metadata.iter().sorted() {
+                println!("\t{field}: {value}");
+            }
+        }
     }
     for song_path in scan_songs {
         let nice_path = ItemPath::Song(
@@ -178,7 +201,7 @@ fn process_path(
     library_config: &mut LibraryConfig,
     nice_path: &ItemPath,
     config_cache: &mut ConfigCache,
-    copy_cache: &mut HashMap<PathBuf, Metadata>,
+    copy_cache: &mut CopyCache,
 ) -> Option<Metadata> {
     let mut metadata;
     let mut config_reports;
@@ -190,7 +213,7 @@ fn process_path(
                 .entry(config_path.clone())
                 .or_insert_with_key(|x| {
                     let loaded = load_config(x, nice_folder, library_config);
-                    print_config_errors(&loaded, x, nice_folder, library_config);
+                    print_config_errors(loaded.as_ref(), x, nice_folder, library_config);
                     if loaded.is_ok() {
                         library_config.date_cache.mark_updated(x.to_owned());
                     }
@@ -430,12 +453,8 @@ fn get_unselected_items(
     library_config: &LibraryConfig,
 ) -> BTreeSet<PathBuf> {
     let found = match order {
-        OrderingSetter::Discs { map, .. } => {
-            map.keys().map(|x| x.to_owned()).collect::<HashSet<_>>()
-        }
-        OrderingSetter::Order { map, .. } => {
-            map.keys().map(|x| x.to_owned()).collect::<HashSet<_>>()
-        }
+        OrderingSetter::Discs { map, .. } => map.keys().collect::<HashSet<_>>(),
+        OrderingSetter::Order { map, .. } => map.keys().collect::<HashSet<_>>(),
     };
     let parents = found
         .iter()
@@ -458,13 +477,13 @@ fn get_unselected_items(
         })
         .collect::<BTreeSet<_>>();
     for item in found {
-        all_children.remove(&item);
+        all_children.remove(item);
     }
     all_children
 }
 
 fn print_config_errors(
-    result: &Result<SongConfig, ConfigError>,
+    result: Result<&SongConfig, &ConfigError>,
     full_path: &Path,
     nice_folder: &Path,
     library_config: &LibraryConfig,
@@ -620,6 +639,7 @@ fn is_hidden(entry: &DirEntry) -> bool {
 }
 
 fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
+    let mut lock = std::io::stdout().lock();
     let mut scan_songs = BTreeSet::<PathBuf>::new();
     let mut scan_folders = BTreeSet::<PathBuf>::new();
     let mut scan_images = BTreeSet::<PathBuf>::new();
@@ -655,7 +675,7 @@ fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
                         && scan_songs.insert(path)
                         && std::io::stdout().is_terminal()
                     {
-                        print!("\rFound {}", scan_songs.len())
+                        _ = write!(lock, "\rFound {}", scan_songs.len());
                     }
                 }
             }
@@ -704,7 +724,7 @@ fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
                     if path.is_dir() {
                         scan_folders.insert(path.clone());
                     } else if scan_songs.insert(path.clone()) && std::io::stdout().is_terminal() {
-                        print!("\rFound {}", scan_songs.len())
+                        _ = write!(lock, "\rFound {}", scan_songs.len());
                     }
                 }
             }
@@ -715,7 +735,7 @@ fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
                     if path.is_dir() {
                         scan_folders.insert(path.clone());
                     } else if scan_songs.insert(path.clone()) && std::io::stdout().is_terminal() {
-                        print!("\rFound {}", scan_songs.len())
+                        _ = write!(lock, "\rFound {}", scan_songs.len());
                     }
                 }
             }
@@ -737,7 +757,7 @@ fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
                 && scan_songs.insert(path)
                 && std::io::stdout().is_terminal()
             {
-                print!("\rFound {}, skipped {}", scan_songs.len(), skipped);
+                _ = write!(lock, "\rFound {}, skipped {}", scan_songs.len(), skipped);
             }
         } else if !is_dir
             && file_stuff::match_extension(&path, &library_config.song_extensions)
@@ -745,12 +765,12 @@ fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
         {
             skipped += 1;
             if std::io::stdout().is_terminal() {
-                print!("\rFound {}, skipped {}", scan_songs.len(), skipped);
+                _ = write!(lock, "\rFound {}, skipped {}", scan_songs.len(), skipped);
             }
         }
     }
     if std::io::stdout().is_terminal() {
-        print!("\r")
+        _ = write!(lock, "\r");
     }
     println!("Found {}, skipped {}", scan_songs.len(), skipped);
     scan_folders.remove(&library_config.library_folder);

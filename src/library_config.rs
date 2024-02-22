@@ -15,10 +15,12 @@ use crate::{
     file_stuff::{self, load_yaml, YamlError},
     lyrics::{RichLyrics, SyncedLyrics},
     metadata::{FinalMetadata, Metadata, MetadataField, MetadataValue, SetValue, BLANK_VALUE},
+    modifier::ValueModifier,
     song_config::{
-        AllSetter, DiscSet, OrderingSetter, RawSongConfig, ReferencableOperation, SongConfig,
+        AllSetter, DiscSet, OrderingSetter, RawFieldSetter, RawSongConfig, ReferencableOperation,
+        SongConfig,
     },
-    strategy::{FieldSelector, ItemSelector, MetadataOperation, MusicItemType},
+    strategy::{FieldSelector, ItemSelector, MetadataOperation, MusicItemType, ValueGetter},
 };
 
 #[derive(Deserialize)]
@@ -438,8 +440,8 @@ pub struct LibraryConfig {
     pub artist_separator: String,
 }
 impl LibraryConfig {
-    pub fn new(folder: &Path, raw: RawLibraryConfig) -> Self {
-        Self {
+    pub fn new(folder: &Path, raw: RawLibraryConfig) -> Result<Self, LibraryError> {
+        let result = Self {
             library_folder: folder.join(raw.library),
             reports: raw
                 .reports
@@ -479,7 +481,11 @@ impl LibraryConfig {
                 .collect(),
             find_replace: raw.find_replace,
             artist_separator: raw.artist_separator,
+        };
+        for strat in result.named_strategies.values() {
+            result.check_operation(strat)?;
         }
+        Ok(result)
     }
     pub fn resolve_config(
         &self,
@@ -516,28 +522,36 @@ impl LibraryConfig {
                 })
             })
             .transpose()?;
+        // this type uniquely doesn't use operations to resolve, but still needs its fields checked
         let set_fields = raw_config
             .set_fields
             .map(|sets| {
                 sets.into_iter()
-                    .flat_map(|setter| {
+                    .map(|setter| {
+                        self.check_field(&setter.field)?;
                         setter
                             .set
                             .into_iter()
                             .map(|(path, getter)| {
-                                AllSetter::new(
+                                self.check_getter(&getter)?;
+                                Ok(AllSetter::new(
                                     ItemSelector::Path(path),
                                     MetadataOperation::Set(HashMap::from([(
                                         setter.field.clone(),
                                         getter,
                                     )])),
-                                )
+                                ))
                             })
-                            .collect::<Vec<_>>()
+                            .collect::<Result<Vec<_>, _>>()
                     })
-                    .collect::<Vec<_>>()
+                    .collect::<Result<Vec<_>, _>>()
             })
-            .unwrap_or_default();
+            .transpose()?
+            .unwrap_or_default()
+            // couldn't figure out how to avoid this
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
         let set_all = raw_config
             .set_all
             .map(|x| {
@@ -620,12 +634,120 @@ impl LibraryConfig {
             order: ordering,
         })
     }
+    fn check_fields(&self, selector: &FieldSelector) -> Result<(), LibraryError> {
+        match selector {
+            FieldSelector::All => Ok(()),
+            FieldSelector::Single(field) => self.check_field(field),
+            FieldSelector::Multiple(fields) => {
+                for field in fields {
+                    self.check_field(field)?;
+                }
+                Ok(())
+            }
+        }
+    }
+    fn check_field(&self, field: &MetadataField) -> Result<(), LibraryError> {
+        match field {
+            MetadataField::Custom(str) => {
+                if self.custom_fields.contains(field) {
+                    Ok(())
+                } else {
+                    Err(LibraryError::UnlistedCustomField(str.clone()))
+                }
+            }
+            _ => Ok(()),
+        }
+    }
+    fn check_operation(&self, operation: &MetadataOperation) -> Result<(), LibraryError> {
+        match &operation {
+            MetadataOperation::Blank { remove } => self.check_fields(remove),
+            MetadataOperation::Keep { keep } => self.check_fields(keep),
+            MetadataOperation::Shared { fields, set } => {
+                self.check_fields(fields)?;
+                self.check_getter(set)?;
+                Ok(())
+            }
+            MetadataOperation::SharedModify { fields, modify } => {
+                self.check_fields(fields)?;
+                self.check_modifier(modify)?;
+                Ok(())
+            }
+            MetadataOperation::Context { source, modify } => {
+                self.check_getter(source)?;
+                for (field, modify) in modify {
+                    self.check_field(field)?;
+                    self.check_modifier(modify)?;
+                }
+                Ok(())
+            }
+            MetadataOperation::Modify { modify } => {
+                for (field, modify) in modify {
+                    self.check_field(field)?;
+                    self.check_modifier(modify)?;
+                }
+                Ok(())
+            }
+            MetadataOperation::Set(map) => {
+                for (field, getter) in map {
+                    self.check_field(field)?;
+                    self.check_getter(getter)?;
+                }
+                Ok(())
+            }
+            MetadataOperation::Many(list) => {
+                for op in list {
+                    self.check_operation(op)?;
+                }
+                Ok(())
+            }
+        }
+    }
+    fn check_getter(&self, getter: &ValueGetter) -> Result<(), LibraryError> {
+        match getter {
+            ValueGetter::Direct(_) => Ok(()),
+            ValueGetter::Copy { copy, modify, .. } => {
+                self.check_field(copy)?;
+                if let Some(modify) = modify {
+                    self.check_modifier(modify)?;
+                }
+                Ok(())
+            }
+            ValueGetter::From { modify, .. } => {
+                if let Some(modify) = modify {
+                    self.check_modifier(modify)?;
+                }
+                Ok(())
+            }
+        }
+    }
+    fn check_modifier(&self, modifier: &ValueModifier) -> Result<(), LibraryError> {
+        match modifier {
+            ValueModifier::Prepend { prepend, .. } => self.check_getter(prepend),
+            ValueModifier::Append { append, .. } => self.check_getter(append),
+            ValueModifier::InsertBefore { insert, .. } => self.check_getter(insert),
+            ValueModifier::InsertAfter { insert, .. } => self.check_getter(insert),
+            ValueModifier::Join { join } => self.check_getter(join),
+            ValueModifier::Split { .. } => Ok(()),
+            ValueModifier::Regex { .. } => Ok(()),
+            ValueModifier::Replace { .. } => Ok(()),
+            ValueModifier::Take { .. } => Ok(()),
+            ValueModifier::Multiple(list) => {
+                for item in list {
+                    self.check_modifier(item)?;
+                }
+                Ok(())
+            }
+        }
+    }
     fn resolve_operation(
         &self,
         operation: ReferencableOperation,
     ) -> Result<Rc<MetadataOperation>, LibraryError> {
         match operation {
-            ReferencableOperation::Direct(direct) => Ok(Rc::new(direct)),
+            ReferencableOperation::Direct(direct) => {
+                self.check_operation(&direct)?;
+                Ok(Rc::new(direct))
+            }
             ReferencableOperation::Reference(reference) => self
                 .named_strategies
                 .get(&reference)
@@ -641,9 +763,21 @@ impl LibraryConfig {
 }
 
 #[derive(Error, Debug)]
-#[error("{0}")]
 pub enum LibraryError {
     MissingNamedStrategy(String),
+    UnlistedCustomField(String),
+}
+impl std::fmt::Display for LibraryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LibraryError::MissingNamedStrategy(str) => {
+                write!(f, "No named strategy with name '{str}'")
+            }
+            LibraryError::UnlistedCustomField(str) => {
+                write!(f, "No field with name '{str}'")
+            }
+        }
+    }
 }
 
 pub struct DateCache {

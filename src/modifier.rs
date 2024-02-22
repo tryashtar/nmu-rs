@@ -9,9 +9,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     library_config::LibraryConfig,
-    metadata::{Metadata, MetadataField, MetadataValue},
+    metadata::{Metadata, MetadataField, MetadataValue, RegexWrap},
     strategy::{LocalItemSelector, ValueGetter},
     util::{OutOfBoundsDecision, Range},
+    CopyCache,
 };
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -173,7 +174,7 @@ impl ValueModifier {
         config: &LibraryConfig,
         index: Option<&Range>,
         appending: bool,
-        copy_cache: &HashMap<PathBuf, Metadata>,
+        copy_cache: &CopyCache,
     ) -> Result<MetadataValue, ValueError> {
         if let MetadataValue::List(mut list) = value {
             let extra = append.get(path, config, copy_cache)?;
@@ -218,7 +219,7 @@ impl ValueModifier {
         add: usize,
         path: &Path,
         config: &LibraryConfig,
-        copy_cache: &HashMap<PathBuf, Metadata>,
+        copy_cache: &CopyCache,
     ) -> Result<MetadataValue, ValueError> {
         if let MetadataValue::List(val) = insert.get(path, config, copy_cache)? {
             if let MetadataValue::List(mut list) = value {
@@ -243,7 +244,7 @@ impl ValueModifier {
         mut value: MetadataValue,
         path: &Path,
         config: &LibraryConfig,
-        copy_cache: &HashMap<PathBuf, Metadata>,
+        copy_cache: &CopyCache,
     ) -> Result<MetadataValue, ValueError> {
         match Rc::as_ref(self) {
             Self::Multiple(items) => {
@@ -254,9 +255,10 @@ impl ValueModifier {
             }
             Self::Replace { replace } => {
                 if let MetadataValue::RegexMatches { source, regex } = value {
-                    return Ok(
-                        MetadataValue::string(regex.replace(&source, replace).into_owned()).into(),
-                    );
+                    return Ok(MetadataValue::string(
+                        regex.0.replace(&source, replace).into_owned(),
+                    )
+                    .into());
                 }
                 Err(ValueError::UnexpectedType {
                     modifier: self.clone(),
@@ -268,7 +270,7 @@ impl ValueModifier {
                 if let Some(str) = value.as_string() {
                     return Ok(MetadataValue::RegexMatches {
                         source: str.to_owned(),
-                        regex: regex.clone(),
+                        regex: RegexWrap(regex.clone()),
                     });
                 }
                 Err(ValueError::UnexpectedType {
