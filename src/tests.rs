@@ -16,7 +16,7 @@ mod deserialize {
             MetadataOperation::Blank {
                 remove: FieldSelector::Multiple(x)
             }
-            if x == HashSet::from([BuiltinMetadataField::Title.into()])
+            if x == HashSet::from([MetadataField::Title])
         ));
     }
 
@@ -28,7 +28,7 @@ mod deserialize {
             MetadataOperation::Keep {
                 keep: FieldSelector::Multiple(x)
             }
-            if x == HashSet::from([BuiltinMetadataField::Title.into()])
+            if x == HashSet::from([MetadataField::Title])
         ));
     }
 
@@ -102,10 +102,7 @@ mod deserialize {
     #[test]
     fn field_title() {
         let result = serde_yaml::from_str::<MetadataField>("title").unwrap();
-        assert!(matches!(
-            result,
-            MetadataField::Builtin(BuiltinMetadataField::Title)
-        ));
+        assert!(matches!(result, MetadataField::Title));
     }
 
     #[test]
@@ -422,16 +419,14 @@ fn copy_field_resolution() {
     let config = dummy_config();
     let getter = ValueGetter::Copy {
         from: Rc::new(LocalItemSelector::This),
-        copy: BuiltinMetadataField::Performers.into(),
+        copy: MetadataField::Performers,
         modify: None,
     };
     let copy_cache = HashMap::new();
     let result = getter
         .get(&path, &config, &copy_cache)
         .unwrap_or_else(|_| panic!("should resolve"));
-    assert!(
-        matches!(result, PendingValue::Ready(MetadataValue::List(x)) if x.as_slice() == ["item"])
-    );
+    assert!(matches!(result, MetadataValue::List(x) if x.as_slice() == ["item"]));
 }
 
 #[test]

@@ -167,18 +167,20 @@ impl LibraryReport {
             MetadataValue::Number(n) => Some(n.to_string()),
             MetadataValue::List(l) if l.is_empty() => None,
             MetadataValue::List(l) => Some(l.join(sep)),
+            MetadataValue::RegexMatches { .. } => None,
         }
     }
     fn val_to_strs(value: &MetadataValue) -> Vec<String> {
         match value {
             MetadataValue::Number(n) => vec![n.to_string()],
             MetadataValue::List(l) => l.clone(),
+            MetadataValue::RegexMatches { .. } => vec![],
         }
     }
     fn is_blank(value: &MetadataValue) -> bool {
         match value {
-            MetadataValue::Number(_) => false,
             MetadataValue::List(l) => l.is_empty(),
+            _ => false,
         }
     }
     pub fn record(

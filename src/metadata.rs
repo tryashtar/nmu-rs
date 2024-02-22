@@ -1,5 +1,5 @@
 use core::fmt;
-use std::{collections::HashMap, path::PathBuf, rc::Rc};
+use std::{collections::HashMap, rc::Rc};
 
 use image::DynamicImage;
 use regex::Regex;
@@ -9,38 +9,22 @@ use strum::{Display, EnumIter};
 use crate::{
     lyrics::{RichLyrics, SyncedLyrics},
     modifier::ValueError,
-    GetMetadataResults, Results,
+    Results,
 };
 
 pub type Metadata = HashMap<MetadataField, MetadataValue>;
-pub type PendingMetadata = HashMap<MetadataField, PendingValue>;
-type MetadataCache = HashMap<PathBuf, GetMetadataResults>;
 
-#[derive(Clone, Debug)]
-pub enum PendingValue {
-    Ready(MetadataValue),
-    RegexMatches { source: String, regex: Regex },
-}
-impl From<MetadataValue> for PendingValue {
-    fn from(value: MetadataValue) -> Self {
-        PendingValue::Ready(value)
-    }
-}
-impl fmt::Display for PendingValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Ready(r) => r.fmt(f),
-            Self::RegexMatches { source, regex } => write!(f, "regex {} on {}", source, regex),
-        }
-    }
-}
-
-#[derive(Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Deserialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum MetadataValue {
     Number(u32),
     #[serde(deserialize_with = "crate::util::string_or_seq_string")]
     List(Vec<String>),
+    #[serde(skip)]
+    RegexMatches {
+        source: String,
+        regex: Regex,
+    },
 }
 pub static BLANK_VALUE: MetadataValue = MetadataValue::List(vec![]);
 impl Serialize for MetadataValue {
@@ -52,6 +36,7 @@ impl Serialize for MetadataValue {
             MetadataValue::Number(num) => serializer.serialize_u32(*num),
             MetadataValue::List(list) if list.len() == 1 => serializer.serialize_str(&list[0]),
             MetadataValue::List(list) => list.serialize(serializer),
+            _ => serializer.serialize_unit(),
         }
     }
 }
@@ -76,7 +61,6 @@ impl MetadataValue {
     }
     pub fn as_string(&self) -> Option<&str> {
         match self {
-            Self::Number(_) => None,
             Self::List(list) => {
                 if list.len() == 1 {
                     Some(list[0].as_ref())
@@ -84,6 +68,7 @@ impl MetadataValue {
                     None
                 }
             }
+            _ => None,
         }
     }
 }
@@ -94,21 +79,7 @@ impl fmt::Display for MetadataValue {
             Self::List(l) if l.is_empty() => write!(f, "[]"),
             Self::List(l) if l.len() == 1 => write!(f, "{}", l[0]),
             Self::List(l) => write!(f, "[{}]", l.join("; ")),
-        }
-    }
-}
-
-#[derive(Deserialize, Serialize, Hash, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-#[serde(untagged)]
-pub enum MetadataField {
-    Builtin(BuiltinMetadataField),
-    Custom(String),
-}
-impl fmt::Display for MetadataField {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Custom(s) => write!(f, "{s}"),
-            Self::Builtin(b) => write!(f, "{b}"),
+            Self::RegexMatches { source, regex } => write!(f, "regex '{}' on '{}'", regex, source),
         }
     }
 }
@@ -140,74 +111,65 @@ pub struct FinalMetadata {
 impl FinalMetadata {
     pub fn create(metadata: &Metadata) -> Results<FinalMetadata, ValueError> {
         let mut errors = vec![];
-        let mut convert_string = |field: BuiltinMetadataField| {
-            let field = field.into();
-            match metadata.get(&field) {
-                None => SetValue::Skip,
-                Some(MetadataValue::List(list)) if list.is_empty() => SetValue::Set(None),
-                Some(value) => match value.as_string() {
-                    Some(val) => SetValue::Set(Some(val.to_owned())),
-                    None => {
-                        errors.push(ValueError::WrongFieldType {
-                            field,
-                            got: value.clone(),
-                            expected: "single string",
-                        });
-                        SetValue::Skip
-                    }
-                },
-            }
+        let mut convert_string = |field: MetadataField| match metadata.get(&field) {
+            None => SetValue::Skip,
+            Some(MetadataValue::List(list)) if list.is_empty() => SetValue::Set(None),
+            Some(value) => match value.as_string() {
+                Some(val) => SetValue::Set(Some(val.to_owned())),
+                None => {
+                    errors.push(ValueError::WrongFieldType {
+                        field,
+                        got: value.clone(),
+                        expected: "single string",
+                    });
+                    SetValue::Skip
+                }
+            },
         };
-        let title = convert_string(BuiltinMetadataField::Title);
-        let album = convert_string(BuiltinMetadataField::Album);
-        let album_artist = convert_string(BuiltinMetadataField::AlbumArtist);
-        let arranger = convert_string(BuiltinMetadataField::Arranger);
-        let language = convert_string(BuiltinMetadataField::Language);
-        let simple_lyrics = convert_string(BuiltinMetadataField::SimpleLyrics);
-        let mut convert_vec = |field: BuiltinMetadataField| {
-            let field = field.into();
-            match metadata.get(&field) {
-                None => SetValue::Skip,
-                Some(value) => match value {
-                    MetadataValue::List(list) => SetValue::Set(list.clone()),
-                    MetadataValue::Number(_) => {
-                        errors.push(ValueError::WrongFieldType {
-                            field,
-                            got: value.clone(),
-                            expected: "list",
-                        });
-                        SetValue::Skip
-                    }
-                },
-            }
+        let title = convert_string(MetadataField::Title);
+        let album = convert_string(MetadataField::Album);
+        let album_artist = convert_string(MetadataField::AlbumArtist);
+        let arranger = convert_string(MetadataField::Arranger);
+        let language = convert_string(MetadataField::Language);
+        let simple_lyrics = convert_string(MetadataField::SimpleLyrics);
+        let mut convert_vec = |field: MetadataField| match metadata.get(&field) {
+            None => SetValue::Skip,
+            Some(value) => match value {
+                MetadataValue::List(list) => SetValue::Set(list.clone()),
+                _ => {
+                    errors.push(ValueError::WrongFieldType {
+                        field,
+                        got: value.clone(),
+                        expected: "list",
+                    });
+                    SetValue::Skip
+                }
+            },
         };
-        let performers = convert_vec(BuiltinMetadataField::Performers);
-        let composers = convert_vec(BuiltinMetadataField::Composers);
-        let comments = convert_vec(BuiltinMetadataField::Comment);
-        let genres = convert_vec(BuiltinMetadataField::Genres);
-        let mut convert_num = |field: BuiltinMetadataField| {
-            let field = field.into();
-            match metadata.get(&field) {
-                None => SetValue::Skip,
-                Some(MetadataValue::List(list)) if list.is_empty() => SetValue::Set(None),
-                Some(value) => match value {
-                    MetadataValue::Number(num) => SetValue::Set(Some(*num)),
-                    MetadataValue::List(_) => {
-                        errors.push(ValueError::WrongFieldType {
-                            field,
-                            got: value.clone(),
-                            expected: "number",
-                        });
-                        SetValue::Skip
-                    }
-                },
-            }
+        let performers = convert_vec(MetadataField::Performers);
+        let composers = convert_vec(MetadataField::Composers);
+        let comments = convert_vec(MetadataField::Comment);
+        let genres = convert_vec(MetadataField::Genres);
+        let mut convert_num = |field: MetadataField| match metadata.get(&field) {
+            None => SetValue::Skip,
+            Some(MetadataValue::List(list)) if list.is_empty() => SetValue::Set(None),
+            Some(value) => match value {
+                MetadataValue::Number(num) => SetValue::Set(Some(*num)),
+                _ => {
+                    errors.push(ValueError::WrongFieldType {
+                        field,
+                        got: value.clone(),
+                        expected: "number",
+                    });
+                    SetValue::Skip
+                }
+            },
         };
-        let track = convert_num(BuiltinMetadataField::Track);
-        let track_total = convert_num(BuiltinMetadataField::TrackTotal);
-        let disc = convert_num(BuiltinMetadataField::Disc);
-        let disc_total = convert_num(BuiltinMetadataField::DiscTotal);
-        let year = convert_num(BuiltinMetadataField::Year);
+        let track = convert_num(MetadataField::Track);
+        let track_total = convert_num(MetadataField::TrackTotal);
+        let disc = convert_num(MetadataField::Disc);
+        let disc_total = convert_num(MetadataField::DiscTotal);
+        let year = convert_num(MetadataField::Year);
         Results {
             result: FinalMetadata {
                 title,
@@ -237,94 +199,49 @@ impl From<FinalMetadata> for Metadata {
     fn from(value: FinalMetadata) -> Self {
         let mut metadata = Self::new();
         if let SetValue::Set(val) = value.title {
-            metadata.insert(
-                BuiltinMetadataField::Title.into(),
-                MetadataValue::option(val),
-            );
+            metadata.insert(MetadataField::Title, MetadataValue::option(val));
         }
         if let SetValue::Set(val) = value.album {
-            metadata.insert(
-                BuiltinMetadataField::Album.into(),
-                MetadataValue::option(val),
-            );
+            metadata.insert(MetadataField::Album, MetadataValue::option(val));
         }
         if let SetValue::Set(val) = value.performers {
-            metadata.insert(
-                BuiltinMetadataField::Performers.into(),
-                MetadataValue::List(val),
-            );
+            metadata.insert(MetadataField::Performers, MetadataValue::List(val));
         }
         if let SetValue::Set(val) = value.album_artist {
-            metadata.insert(
-                BuiltinMetadataField::AlbumArtist.into(),
-                MetadataValue::option(val),
-            );
+            metadata.insert(MetadataField::AlbumArtist, MetadataValue::option(val));
         }
         if let SetValue::Set(val) = value.composers {
-            metadata.insert(
-                BuiltinMetadataField::Composers.into(),
-                MetadataValue::List(val),
-            );
+            metadata.insert(MetadataField::Composers, MetadataValue::List(val));
         }
         if let SetValue::Set(val) = value.arranger {
-            metadata.insert(
-                BuiltinMetadataField::Arranger.into(),
-                MetadataValue::option(val),
-            );
+            metadata.insert(MetadataField::Arranger, MetadataValue::option(val));
         }
         if let SetValue::Set(val) = value.comments {
-            metadata.insert(
-                BuiltinMetadataField::Comment.into(),
-                MetadataValue::List(val),
-            );
+            metadata.insert(MetadataField::Comment, MetadataValue::List(val));
         }
         if let SetValue::Set(val) = value.track {
-            metadata.insert(
-                BuiltinMetadataField::Track.into(),
-                MetadataValue::option_num(val),
-            );
+            metadata.insert(MetadataField::Track, MetadataValue::option_num(val));
         }
         if let SetValue::Set(val) = value.track_total {
-            metadata.insert(
-                BuiltinMetadataField::TrackTotal.into(),
-                MetadataValue::option_num(val),
-            );
+            metadata.insert(MetadataField::TrackTotal, MetadataValue::option_num(val));
         }
         if let SetValue::Set(val) = value.disc {
-            metadata.insert(
-                BuiltinMetadataField::Disc.into(),
-                MetadataValue::option_num(val),
-            );
+            metadata.insert(MetadataField::Disc, MetadataValue::option_num(val));
         }
         if let SetValue::Set(val) = value.disc_total {
-            metadata.insert(
-                BuiltinMetadataField::DiscTotal.into(),
-                MetadataValue::option_num(val),
-            );
+            metadata.insert(MetadataField::DiscTotal, MetadataValue::option_num(val));
         }
         if let SetValue::Set(val) = value.year {
-            metadata.insert(
-                BuiltinMetadataField::Year.into(),
-                MetadataValue::option_num(val),
-            );
+            metadata.insert(MetadataField::Year, MetadataValue::option_num(val));
         }
         if let SetValue::Set(val) = value.language {
-            metadata.insert(
-                BuiltinMetadataField::Language.into(),
-                MetadataValue::option(val),
-            );
+            metadata.insert(MetadataField::Language, MetadataValue::option(val));
         }
         if let SetValue::Set(val) = value.genres {
-            metadata.insert(
-                BuiltinMetadataField::Genres.into(),
-                MetadataValue::List(val),
-            );
+            metadata.insert(MetadataField::Genres, MetadataValue::List(val));
         }
         if let SetValue::Set(val) = value.simple_lyrics {
-            metadata.insert(
-                BuiltinMetadataField::SimpleLyrics.into(),
-                MetadataValue::option(val),
-            );
+            metadata.insert(MetadataField::SimpleLyrics, MetadataValue::option(val));
         }
 
         metadata
@@ -332,21 +249,10 @@ impl From<FinalMetadata> for Metadata {
 }
 
 #[derive(
-    Deserialize,
-    Serialize,
-    Debug,
-    Display,
-    EnumIter,
-    Hash,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Clone,
-    Copy,
+    Deserialize, Serialize, Debug, Display, EnumIter, Hash, PartialEq, Eq, PartialOrd, Ord, Clone,
 )]
 #[serde(rename_all = "lowercase")]
-pub enum BuiltinMetadataField {
+pub enum MetadataField {
     Title,
     Album,
     #[serde(alias = "performer")]
@@ -375,9 +281,6 @@ pub enum BuiltinMetadataField {
     #[serde(rename = "simple lyrics")]
     #[serde(alias = "lyrics")]
     SimpleLyrics,
-}
-impl From<BuiltinMetadataField> for MetadataField {
-    fn from(value: BuiltinMetadataField) -> Self {
-        Self::Builtin(value)
-    }
+    #[serde(untagged)]
+    Custom(String),
 }

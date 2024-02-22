@@ -12,8 +12,8 @@ use crate::{
     file_stuff::{self, ConfigError, YamlError},
     is_not_found,
     library_config::LibraryError,
-    metadata::{BuiltinMetadataField, Metadata, MetadataValue},
-    ConfigLoadResults,
+    metadata::{Metadata, MetadataValue},
+    ConfigLoadResults, MetadataField,
 };
 
 pub type ArtConfigCache = HashMap<PathBuf, Rc<Result<ArtConfig, ConfigError>>>;
@@ -346,8 +346,7 @@ impl ArtRepo {
         processed_cache: &mut ProcessedArtCache,
     ) -> ProcessArtResult {
         let mut newly_loaded = vec![];
-        if let Some(MetadataValue::List(art)) = metadata.get_mut(&BuiltinMetadataField::Art.into())
-        {
+        if let Some(MetadataValue::List(art)) = metadata.get_mut(&MetadataField::Art) {
             if art.is_empty() {
                 return ProcessArtResult::NoArtNeeded;
             }

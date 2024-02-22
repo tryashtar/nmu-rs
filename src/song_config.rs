@@ -8,10 +8,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     library_config::LibraryConfig,
-    metadata::{BuiltinMetadataField, MetadataField, MetadataValue, PendingMetadata},
+    metadata::{MetadataField, MetadataValue},
     strategy::{ItemSelector, MetadataOperation, MusicItemType, ValueGetter},
     util::ItemPath,
-    ApplyReport,
+    ApplyReport, Metadata,
 };
 
 #[derive(Deserialize, Serialize)]
@@ -75,44 +75,30 @@ impl SongConfig {
         &self,
         nice_path: &ItemPath,
         select: &Path,
-        metadata: &mut PendingMetadata,
+        metadata: &mut Metadata,
         library_config: &LibraryConfig,
-        copy_cache: &HashMap<PathBuf, PendingMetadata>,
+        copy_cache: &HashMap<PathBuf, Metadata>,
     ) -> ApplyReport {
         let mut report = ApplyReport { errors: vec![] };
         if let Some(order) = &self.order {
             match order {
                 OrderingSetter::Order { map, total, .. } => {
                     if let Some(track) = map.get(select) {
-                        metadata.insert(
-                            BuiltinMetadataField::Track.into(),
-                            MetadataValue::Number(*track).into(),
-                        );
-                        metadata.insert(
-                            BuiltinMetadataField::TrackTotal.into(),
-                            MetadataValue::Number(*total).into(),
-                        );
+                        metadata.insert(MetadataField::Track, MetadataValue::Number(*track));
+                        metadata.insert(MetadataField::TrackTotal, MetadataValue::Number(*total));
                     }
                 }
                 OrderingSetter::Discs {
                     map, disc_total, ..
                 } => {
                     if let Some(values) = map.get(select) {
+                        metadata.insert(MetadataField::Disc, MetadataValue::Number(values.disc));
+                        metadata
+                            .insert(MetadataField::DiscTotal, MetadataValue::Number(*disc_total));
+                        metadata.insert(MetadataField::Track, MetadataValue::Number(values.track));
                         metadata.insert(
-                            BuiltinMetadataField::Disc.into(),
-                            MetadataValue::Number(values.disc).into(),
-                        );
-                        metadata.insert(
-                            BuiltinMetadataField::DiscTotal.into(),
-                            MetadataValue::Number(*disc_total).into(),
-                        );
-                        metadata.insert(
-                            BuiltinMetadataField::Track.into(),
-                            MetadataValue::Number(values.track).into(),
-                        );
-                        metadata.insert(
-                            BuiltinMetadataField::TrackTotal.into(),
-                            MetadataValue::Number(values.track_total).into(),
+                            MetadataField::TrackTotal,
+                            MetadataValue::Number(values.track_total),
                         );
                     }
                 }

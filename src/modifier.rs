@@ -9,10 +9,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     library_config::LibraryConfig,
-    metadata::{MetadataField, MetadataValue, PendingValue},
+    metadata::{MetadataField, MetadataValue},
     strategy::{LocalItemSelector, ValueGetter},
     util::{OutOfBoundsDecision, Range},
-    PendingMetadata,
+    Metadata,
 };
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -67,7 +67,7 @@ pub enum ValueError {
     },
     UnexpectedType {
         modifier: Rc<ValueModifier>,
-        got: PendingValue,
+        got: MetadataValue,
         expected: &'static str,
     },
     MissingField {
@@ -83,7 +83,7 @@ pub enum ValueError {
         expected: &'static str,
     },
     Uncombinable {
-        values: Vec<PendingValue>,
+        values: Vec<MetadataValue>,
     },
 }
 pub fn inline_data<T>(item: &T) -> String
@@ -168,24 +168,19 @@ impl ValueModifier {
     }
     fn checked_append(
         self: &Rc<Self>,
-        value: PendingValue,
+        value: MetadataValue,
         append: &ValueGetter,
         path: &Path,
         config: &LibraryConfig,
         index: Option<&Range>,
         appending: bool,
-        copy_cache: &HashMap<PathBuf, PendingMetadata>,
-    ) -> Result<PendingValue, ValueError> {
-        if let PendingValue::Ready(MetadataValue::List(mut list)) = value {
+        copy_cache: &HashMap<PathBuf, Metadata>,
+    ) -> Result<MetadataValue, ValueError> {
+        if let MetadataValue::List(mut list) = value {
             let extra = append.get(path, config, copy_cache)?;
-            match extra {
-                PendingValue::Ready(ref val) => {
-                    if let Some(str) = val.as_string() {
-                        Self::append(&mut list, str, index, appending);
-                        return Ok(MetadataValue::List(list).into());
-                    }
-                }
-                _ => {}
+            if let Some(str) = extra.as_string() {
+                Self::append(&mut list, str, index, appending);
+                return Ok(MetadataValue::List(list).into());
             }
             Err(ValueError::UnexpectedType {
                 modifier: self.clone(),
@@ -217,19 +212,17 @@ impl ValueModifier {
     }
     fn checked_insert(
         self: &Rc<Self>,
-        value: PendingValue,
+        value: MetadataValue,
         insert: &ValueGetter,
         point: &Range,
         out_of_bounds: OutOfBoundsDecision,
         add: usize,
         path: &Path,
         config: &LibraryConfig,
-        copy_cache: &HashMap<PathBuf, PendingMetadata>,
-    ) -> Result<PendingValue, ValueError> {
-        if let PendingValue::Ready(MetadataValue::List(val)) =
-            insert.get(path, config, copy_cache)?
-        {
-            if let PendingValue::Ready(MetadataValue::List(mut list)) = value {
+        copy_cache: &HashMap<PathBuf, Metadata>,
+    ) -> Result<MetadataValue, ValueError> {
+        if let MetadataValue::List(val) = insert.get(path, config, copy_cache)? {
+            if let MetadataValue::List(mut list) = value {
                 return match Range::wrap_both(point, list.len(), out_of_bounds) {
                     None => Err(ValueError::ExitRequested),
                     Some((start, stop)) => {
@@ -248,11 +241,11 @@ impl ValueModifier {
     }
     pub fn modify(
         self: &Rc<Self>,
-        mut value: PendingValue,
+        mut value: MetadataValue,
         path: &Path,
         config: &LibraryConfig,
-        copy_cache: &HashMap<PathBuf, PendingMetadata>,
-    ) -> Result<PendingValue, ValueError> {
+        copy_cache: &HashMap<PathBuf, Metadata>,
+    ) -> Result<MetadataValue, ValueError> {
         match Rc::as_ref(self) {
             Self::Multiple(items) => {
                 for item in items {
@@ -261,7 +254,7 @@ impl ValueModifier {
                 Ok(value)
             }
             Self::Replace { replace } => {
-                if let PendingValue::RegexMatches { source, regex } = value {
+                if let MetadataValue::RegexMatches { source, regex } = value {
                     return Ok(
                         MetadataValue::string(regex.replace(&source, replace).into_owned()).into(),
                     );
@@ -273,13 +266,11 @@ impl ValueModifier {
                 })
             }
             Self::Regex { regex } => {
-                if let PendingValue::Ready(val) = &value {
-                    if let Some(str) = val.as_string() {
-                        return Ok(PendingValue::RegexMatches {
-                            source: str.to_owned(),
-                            regex: regex.clone(),
-                        });
-                    }
+                if let Some(str) = value.as_string() {
+                    return Ok(MetadataValue::RegexMatches {
+                        source: str.to_owned(),
+                        regex: regex.clone(),
+                    });
                 }
                 Err(ValueError::UnexpectedType {
                     modifier: self.clone(),
@@ -316,7 +307,7 @@ impl ValueModifier {
                 copy_cache,
             ),
             Self::Take { take } => {
-                if let PendingValue::Ready(MetadataValue::List(list)) = value {
+                if let MetadataValue::List(list) = value {
                     return match take {
                         TakeModifier::Defined {
                             index,
@@ -354,11 +345,10 @@ impl ValueModifier {
                 copy_cache,
             ),
             Self::Join { join } => {
-                if let PendingValue::Ready(extra) = join.get(path, config, copy_cache)? {
-                    if let Some(str) = extra.as_string() {
-                        if let PendingValue::Ready(MetadataValue::List(list)) = value {
-                            return Ok(MetadataValue::string(list.join(str)).into());
-                        }
+                let extra = join.get(path, config, copy_cache)?;
+                if let Some(str) = extra.as_string() {
+                    if let MetadataValue::List(list) = value {
+                        return Ok(MetadataValue::string(list.join(str)).into());
                     }
                 }
                 Err(ValueError::UnexpectedType {
@@ -368,7 +358,7 @@ impl ValueModifier {
                 })
             }
             Self::Split { split } => {
-                if let PendingValue::Ready(MetadataValue::List(list)) = value {
+                if let MetadataValue::List(list) = value {
                     let vec = list
                         .iter()
                         .flat_map(|x| x.split(split))

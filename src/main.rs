@@ -108,12 +108,29 @@ fn do_scan(library_config: &mut LibraryConfig) {
                 .unwrap_or(&song_path)
                 .with_extension(""),
         );
-        process_path(
+        let metadata = process_path(
             library_config,
             &nice_path,
             &mut config_cache,
             &mut copy_cache,
         );
+        match metadata {
+            None => {
+                progress.failed += 1;
+            }
+            Some(metadata) => {
+                //if add_to_song(
+                //    &song_path,
+                //    &nice_path,
+                //    metadata,
+                //    None,
+                //    library_config,
+                //    &mut progress,
+                //) {
+                //    library_config.date_cache.mark_updated(song_path);
+                //}
+            }
+        }
     }
     if progress.failed == 0 {
         println!("Updated {}", progress.changed);
@@ -157,12 +174,12 @@ fn process_path(
     library_config: &mut LibraryConfig,
     nice_path: &ItemPath,
     config_cache: &mut ConfigCache,
-    copy_cache: &mut HashMap<PathBuf, PendingMetadata>,
-) {
+    copy_cache: &mut HashMap<PathBuf, Metadata>,
+) -> Option<Metadata> {
     let mut metadata;
     let mut config_reports;
     loop {
-        metadata = Some(PendingMetadata::new());
+        metadata = Some(Metadata::new());
         config_reports = vec![];
         for (config_path, nice_folder) in relevant_config_paths(nice_path, library_config) {
             let loaded = config_cache
@@ -218,7 +235,7 @@ fn process_path(
             break;
         }
     }
-    if let Some(metadata) = metadata {
+    if metadata.is_some() {
         println!("{}", nice_path.display());
         for (path, mut report) in config_reports {
             report
@@ -235,6 +252,7 @@ fn process_path(
             }
         }
     }
+    metadata
 }
 
 fn add_to_song(
@@ -258,10 +276,8 @@ fn add_to_song(
                 lyric_config.handle(nice_path, &existing, &mut final_metadata.result);
             }
             let existing = existing.into();
-            if print_differences("ID3 Tag", &existing, &metadata) {
-                progress.changed += 1;
-                set_metadata_id3(&mut id3, &final_metadata.result, &config.artist_separator);
-            }
+            progress.changed += 1;
+            set_metadata_id3(&mut id3, &final_metadata.result, &config.artist_separator);
             existing_metadata = Some(existing);
         }
         Err(err) if matches!(err.kind, id3::ErrorKind::NoTag) => {}
@@ -282,10 +298,8 @@ fn add_to_song(
                 lyric_config.handle(nice_path, &existing, &mut final_metadata.result);
             }
             let existing = existing.into();
-            if print_differences("Flac Tag", &existing, &metadata) {
-                progress.changed += 1;
-                set_metadata_flac(&mut flac, &final_metadata.result);
-            }
+            progress.changed += 1;
+            set_metadata_flac(&mut flac, &final_metadata.result);
             existing_metadata = Some(existing);
         }
         Err(err) if matches!(err.kind, metaflac::ErrorKind::InvalidInput) => {}
@@ -306,24 +320,15 @@ fn add_to_song(
             &config.artist_separator,
         );
     }
-    print_value_errors(&final_metadata.errors);
+    for err in &final_metadata.errors {
+        eprintln!("{}", cformat!("\t⚠️ <yellow>{}</>", err));
+    }
     if !any {
         eprintln!("{}", cformat!("❌ <red>No tags found in file</>"));
         success = false;
         progress.failed += 1;
     }
     success
-}
-
-fn print_value_errors(errors: &[ValueError]) {
-    for err in errors {
-        match err {
-            ValueError::ExitRequested => {}
-            other => {
-                eprintln!("{}", cformat!("\t⚠️ <yellow>{}</>", other));
-            }
-        }
-    }
 }
 
 fn print_art_errors(result: &ProcessArtResult, library_config: &mut LibraryConfig) {
@@ -590,30 +595,6 @@ fn relevant_config_paths<'a>(
         }
     }
     list
-}
-
-fn print_differences(name: &str, existing: &Metadata, incoming: &Metadata) -> bool {
-    let mut any = false;
-    for key in existing.keys().chain(incoming.keys()).unique().sorted() {
-        match key {
-            MetadataField::Builtin(BuiltinMetadataField::SimpleLyrics)
-            | MetadataField::Builtin(BuiltinMetadataField::Art)
-            | MetadataField::Custom(_) => {}
-            _ => {
-                if let Some(new) = incoming.get(key) {
-                    let current = existing.get(key).unwrap_or(&BLANK_VALUE);
-                    if current != new {
-                        if !any {
-                            any = true;
-                            println!("\t{name}:")
-                        }
-                        println!("\t\t{key}: {current} -> {new}");
-                    }
-                }
-            }
-        }
-    }
-    any
 }
 
 struct ScanResults {

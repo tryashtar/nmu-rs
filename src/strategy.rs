@@ -11,11 +11,12 @@ use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
 
 use crate::{
-    file_stuff::{self},
+    file_stuff,
     library_config::LibraryConfig,
-    metadata::{BuiltinMetadataField, MetadataField, MetadataValue, PendingMetadata, PendingValue},
+    metadata::{MetadataField, MetadataValue},
     modifier::{ValueError, ValueModifier},
     util::{OutOfBoundsDecision, Range},
+    Metadata,
 };
 
 #[derive(Deserialize, Serialize)]
@@ -56,10 +57,10 @@ impl ApplyReport {
 impl MetadataOperation {
     pub fn apply(
         &self,
-        metadata: &mut PendingMetadata,
+        metadata: &mut Metadata,
         nice_path: &Path,
         config: &LibraryConfig,
-        copy_cache: &HashMap<PathBuf, PendingMetadata>,
+        copy_cache: &HashMap<PathBuf, Metadata>,
     ) -> ApplyReport {
         let mut report = ApplyReport { errors: vec![] };
         match self {
@@ -70,9 +71,7 @@ impl MetadataOperation {
                 }
             }
             Self::Blank { remove } => {
-                let builtin = BuiltinMetadataField::iter()
-                    .map(|x| x.into())
-                    .collect::<Vec<_>>();
+                let builtin = MetadataField::iter().map(|x| x.into()).collect::<Vec<_>>();
                 for field in config.custom_fields.iter().chain(builtin.iter()) {
                     if remove.is_match(field) {
                         metadata.insert(field.clone(), MetadataValue::blank().into());
@@ -84,9 +83,7 @@ impl MetadataOperation {
             }
             Self::Shared { fields, set } => match set.get(nice_path, config, copy_cache) {
                 Ok(value) => {
-                    let builtin = BuiltinMetadataField::iter()
-                        .map(|x| x.into())
-                        .collect::<Vec<_>>();
+                    let builtin = MetadataField::iter().map(|x| x.into()).collect::<Vec<_>>();
                     for field in config.custom_fields.iter().chain(builtin.iter()) {
                         if fields.is_match(field) {
                             metadata.insert(field.clone(), value.clone());
@@ -98,9 +95,7 @@ impl MetadataOperation {
                 }
             },
             Self::SharedModify { fields, modify } => {
-                let builtin = BuiltinMetadataField::iter()
-                    .map(|x| x.into())
-                    .collect::<Vec<_>>();
+                let builtin = MetadataField::iter().map(|x| x.into()).collect::<Vec<_>>();
                 for field in config.custom_fields.iter().chain(builtin.iter()) {
                     if fields.is_match(field) {
                         if let Some(existing) = metadata.get(field) {
@@ -461,10 +456,10 @@ impl ValueGetter {
         &self,
         path: &Path,
         config: &LibraryConfig,
-        copy_cache: &HashMap<PathBuf, PendingMetadata>,
-    ) -> Result<PendingValue, ValueError> {
+        copy_cache: &HashMap<PathBuf, Metadata>,
+    ) -> Result<MetadataValue, ValueError> {
         match self {
-            Self::Direct(value) => Ok(value.clone().into()),
+            Self::Direct(value) => Ok(value.clone()),
             Self::From {
                 from,
                 value,
@@ -525,7 +520,7 @@ impl ValueGetter {
             }
         }
     }
-    fn combine(values: Vec<PendingValue>) -> Result<PendingValue, ValueError> {
+    fn combine(values: Vec<MetadataValue>) -> Result<MetadataValue, ValueError> {
         match values.len() {
             0 => Err(ValueError::Uncombinable { values }),
             1 => Ok(values[0].clone()),
@@ -533,9 +528,7 @@ impl ValueGetter {
                 let mut list = vec![];
                 for value in values.clone() {
                     match value {
-                        PendingValue::Ready(MetadataValue::List(mut vals)) => {
-                            list.append(&mut vals)
-                        }
+                        MetadataValue::List(mut vals) => list.append(&mut vals),
                         _ => return Err(ValueError::Uncombinable { values }),
                     }
                 }
