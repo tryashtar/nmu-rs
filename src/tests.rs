@@ -1,9 +1,19 @@
-use super::*;
-
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::path::PathBuf;
-use std::str::FromStr;
+use crate::{
+    library_config::{DateCache, LibraryConfig},
+    metadata::{MetadataField, MetadataValue},
+    modifier::ValueModifier,
+    strategy::{
+        FieldSelector, FieldValueGetter, ItemSelector, LocalItemSelector, MetadataOperation,
+        PathSegment, ValueGetter,
+    },
+    util::{ItemPath, OutOfBoundsDecision, Range},
+};
+use std::{
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
+    rc::Rc,
+    str::FromStr,
+};
 
 mod deserialize {
     use super::*;
@@ -452,7 +462,7 @@ fn selector_matches() {
     };
     let assert_results = |selector: ItemSelector, start: &str, desired: &[&str]| {
         let desired = desired.iter().map(PathBuf::from).collect::<Vec<_>>();
-        let actual: Vec<PathBuf> = file_stuff::find_matches(
+        let actual: Vec<PathBuf> = crate::file_stuff::find_matches(
             &selector,
             &if start.is_empty() {
                 tmp_dir.path().to_owned()

@@ -13,10 +13,9 @@ use strum::IntoEnumIterator;
 use crate::{
     file_stuff,
     library_config::LibraryConfig,
-    metadata::{MetadataField, MetadataValue},
+    metadata::{Metadata, MetadataField, MetadataValue},
     modifier::{ValueError, ValueModifier},
     util::{OutOfBoundsDecision, Range},
-    Metadata,
 };
 
 #[derive(Deserialize, Serialize)]

@@ -8,10 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     library_config::LibraryConfig,
-    metadata::{MetadataField, MetadataValue},
-    strategy::{ItemSelector, MetadataOperation, MusicItemType, ValueGetter},
+    metadata::{Metadata, MetadataField, MetadataValue},
+    strategy::{ApplyReport, ItemSelector, MetadataOperation, MusicItemType, ValueGetter},
     util::ItemPath,
-    ApplyReport, Metadata,
 };
 
 #[derive(Deserialize, Serialize)]

@@ -2,38 +2,42 @@ use color_print::cformat;
 use file_stuff::ConfigError;
 use image::DynamicImage;
 use itertools::Itertools;
-use std::collections::{BTreeSet, HashMap, HashSet};
-use std::env;
-use std::io::{ErrorKind, IsTerminal};
-use std::ops::Deref;
-use std::path::{Path, PathBuf};
-use std::rc::Rc;
+use std::{
+    collections::{BTreeSet, HashMap, HashSet},
+    env,
+    io::{ErrorKind, IsTerminal},
+    ops::Deref,
+    path::{Path, PathBuf},
+    rc::Rc,
+};
 use walkdir::DirEntry;
 
-mod strategy;
-use strategy::*;
+use crate::{
+    art::{ArtConfigCache, ArtError, ProcessArtResult, ProcessedArtCache},
+    file_stuff::YamlError,
+    library_config::LibraryReport,
+    library_config::{LibraryConfig, RawLibraryConfig},
+    metadata::{FinalMetadata, Metadata, SetValue},
+    modifier::ValueError,
+    song_config::SongConfig,
+    song_config::{OrderingSetter, RawSongConfig},
+    strategy::ItemSelector,
+    util::ItemPath,
+};
+
+mod art;
 mod file_stuff;
 mod library_config;
-use library_config::*;
-mod metadata;
-use metadata::*;
-mod modifier;
-use modifier::*;
-mod util;
-use util::*;
-mod song_config;
-use song_config::*;
-mod tag_interop;
-use tag_interop::*;
-mod art;
-use art::*;
 mod lyrics;
-use lyrics::*;
+mod metadata;
+mod modifier;
+mod song_config;
+mod strategy;
+mod tag_interop;
+mod util;
 
 #[cfg(test)]
 mod tests;
-
-use crate::file_stuff::{match_extension, YamlError};
 
 fn main() {
     println!("NAIVE MUSIC UPDATER");
@@ -271,13 +275,17 @@ fn add_to_song(
     match id3::Tag::read_from_path(file_path) {
         Ok(mut id3) => {
             any = true;
-            let existing = get_metadata_id3(&id3, &config.artist_separator);
+            let existing = tag_interop::get_metadata_id3(&id3, &config.artist_separator);
             if let Some(lyric_config) = &config.lyrics {
                 lyric_config.handle(nice_path, &existing, &mut final_metadata.result);
             }
             let existing = existing.into();
             progress.changed += 1;
-            set_metadata_id3(&mut id3, &final_metadata.result, &config.artist_separator);
+            tag_interop::set_metadata_id3(
+                &mut id3,
+                &final_metadata.result,
+                &config.artist_separator,
+            );
             existing_metadata = Some(existing);
         }
         Err(err) if matches!(err.kind, id3::ErrorKind::NoTag) => {}
@@ -293,13 +301,13 @@ fn add_to_song(
     match metaflac::Tag::read_from_path(file_path) {
         Ok(mut flac) => {
             any = true;
-            let existing = get_metadata_flac(&flac);
+            let existing = tag_interop::get_metadata_flac(&flac);
             if let Some(lyric_config) = &config.lyrics {
                 lyric_config.handle(nice_path, &existing, &mut final_metadata.result);
             }
             let existing = existing.into();
             progress.changed += 1;
-            set_metadata_flac(&mut flac, &final_metadata.result);
+            tag_interop::set_metadata_flac(&mut flac, &final_metadata.result);
             existing_metadata = Some(existing);
         }
         Err(err) if matches!(err.kind, metaflac::ErrorKind::InvalidInput) => {}
@@ -480,7 +488,7 @@ fn print_config_errors(
             if !unused.is_empty() {
                 warnings.push(cformat!("<yellow>Selectors that didn't find anything:</>"));
                 for selector in unused {
-                    warnings.push(cformat!("\t<yellow>{}</>", inline_data(selector)));
+                    warnings.push(cformat!("\t<yellow>{}</>", modifier::inline_data(selector)));
                 }
             }
             if let Some(order) = &config.order {
@@ -643,7 +651,7 @@ fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
                     let path = entry.into_path();
                     if is_dir {
                         scan_folders.insert(path);
-                    } else if match_extension(&path, &library_config.song_extensions)
+                    } else if file_stuff::match_extension(&path, &library_config.song_extensions)
                         && scan_songs.insert(path)
                         && std::io::stdout().is_terminal()
                     {
@@ -677,11 +685,11 @@ fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
                         .filter(|x| x.file_type().is_file())
                 {
                     let path = image.into_path();
-                    if match_extension(&path, &art_repo.image_extensions) {
+                    if file_stuff::match_extension(&path, &art_repo.image_extensions) {
                         scan_images.insert(path);
                     }
                 }
-            } else if match_extension(&template_file_path, &art_repo.image_extensions)
+            } else if file_stuff::match_extension(&template_file_path, &art_repo.image_extensions)
                 && library_config
                     .date_cache
                     .changed_recently(&template_file_path)
@@ -725,14 +733,14 @@ fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
         if library_config.date_cache.changed_recently(&path) {
             if is_dir {
                 scan_folders.insert(path);
-            } else if match_extension(&path, &library_config.song_extensions)
+            } else if file_stuff::match_extension(&path, &library_config.song_extensions)
                 && scan_songs.insert(path)
                 && std::io::stdout().is_terminal()
             {
                 print!("\rFound {}, skipped {}", scan_songs.len(), skipped);
             }
         } else if !is_dir
-            && match_extension(&path, &library_config.song_extensions)
+            && file_stuff::match_extension(&path, &library_config.song_extensions)
             && !scan_songs.contains(&path)
         {
             skipped += 1;

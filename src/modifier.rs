@@ -9,10 +9,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     library_config::LibraryConfig,
-    metadata::{MetadataField, MetadataValue},
+    metadata::{Metadata, MetadataField, MetadataValue},
     strategy::{LocalItemSelector, ValueGetter},
     util::{OutOfBoundsDecision, Range},
-    Metadata,
 };
 
 #[derive(Deserialize, Serialize, Clone)]

@@ -12,8 +12,8 @@ use crate::{
     file_stuff::{self, ConfigError, YamlError},
     is_not_found,
     library_config::LibraryError,
-    metadata::{Metadata, MetadataValue},
-    ConfigLoadResults, MetadataField,
+    metadata::{Metadata, MetadataField, MetadataValue},
+    ConfigLoadResults,
 };
 
 pub type ArtConfigCache = HashMap<PathBuf, Rc<Result<ArtConfig, ConfigError>>>;

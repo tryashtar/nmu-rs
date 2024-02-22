@@ -1,23 +1,25 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::fs::{self, File};
-use std::io::{BufRead, BufReader, BufWriter, Read, Write};
-use std::path::{Path, PathBuf};
-use std::rc::Rc;
-use std::time::SystemTime;
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    fs::{self, File},
+    io::{BufRead, BufReader, BufWriter, Read, Write},
+    path::{Path, PathBuf},
+    rc::Rc,
+    time::SystemTime,
+};
 use thiserror::Error;
 
-use crate::art::{ArtRepo, RawArtRepo};
-use crate::file_stuff::{self, load_yaml, YamlError};
-use crate::lyrics::{RichLyrics, SyncedLyrics};
-use crate::metadata::{
-    FinalMetadata, Metadata, MetadataField, MetadataValue, SetValue, BLANK_VALUE,
+use crate::{
+    art::{ArtRepo, RawArtRepo},
+    file_stuff::{self, load_yaml, YamlError},
+    lyrics::{RichLyrics, SyncedLyrics},
+    metadata::{FinalMetadata, Metadata, MetadataField, MetadataValue, SetValue, BLANK_VALUE},
+    song_config::{
+        AllSetter, DiscSet, OrderingSetter, RawSongConfig, ReferencableOperation, SongConfig,
+    },
+    strategy::{FieldSelector, ItemSelector, MetadataOperation, MusicItemType},
 };
-use crate::song_config::{
-    AllSetter, DiscSet, OrderingSetter, RawSongConfig, ReferencableOperation, SongConfig,
-};
-use crate::strategy::{FieldSelector, ItemSelector, MetadataOperation, MusicItemType};
 
 #[derive(Deserialize)]
 pub struct RawLibraryConfig {
