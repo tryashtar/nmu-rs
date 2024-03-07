@@ -345,8 +345,8 @@ pub struct ArtRepo {
     pub used_templates: ArtUsageCache,
     pub named_settings: HashMap<String, Rc<ArtSettings>>,
     pub image_extensions: HashSet<String>,
+    pub processed_cache: ProcessedArtCache,
     config_cache: ArtConfigCache,
-    processed_cache: ProcessedArtCache,
 }
 impl ArtRepo {
     pub fn new(folder: &Path, raw: RawArtRepo) -> Self {

@@ -1,4 +1,4 @@
-use art::{ArtRepo, GetArtResults};
+use art::GetArtResults;
 use color_print::cformat;
 use file_stuff::ConfigError;
 use image::DynamicImage;
@@ -101,6 +101,7 @@ fn do_scan(library_config: &mut LibraryConfig) {
     } = find_scan_items(library_config);
     if let Some(art_repo) = &mut library_config.art_repo {
         if let Some(disk) = &mut art_repo.disk_cache {
+            let mut deleted = 0;
             for image in &scan_images {
                 let nice = image
                     .strip_prefix(&art_repo.templates_folder)
@@ -119,8 +120,14 @@ fn do_scan(library_config: &mut LibraryConfig) {
                         );
                         disk.nice_evicted.insert(nice);
                     }
+                    Ok(_) => {
+                        deleted += 1;
+                    }
                     _ => {}
                 }
+            }
+            if deleted > 0 {
+                println!("Deleted {deleted} cached images");
             }
         }
     }
@@ -210,6 +217,39 @@ fn do_scan(library_config: &mut LibraryConfig) {
                     err
                 )
             );
+        }
+    }
+    if let Some(art_repo) = &mut library_config.art_repo {
+        if let Some(disk) = &mut art_repo.disk_cache {
+            let mut wrote = 0;
+            for (nice, image) in &art_repo.processed_cache {
+                if let Ok(img) = Rc::deref(image) {
+                    let full = disk.get_path(nice);
+                    if !full.exists() || disk.nice_evicted.contains(nice) {
+                        if let Some(parent) = full.parent() {
+                            _ = std::fs::create_dir_all(parent);
+                        }
+                        match img.save_with_format(&full, image::ImageFormat::Png) {
+                            Err(err) => {
+                                eprintln!(
+                                    "{}",
+                                    cformat!(
+                                        "❌ <red>Error saving cached image {}\n{}",
+                                        full.display(),
+                                        err
+                                    )
+                                );
+                            }
+                            Ok(_) => {
+                                wrote += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            if wrote > 0 {
+                println!("Saved {wrote} cached images");
+            }
         }
     }
 }
