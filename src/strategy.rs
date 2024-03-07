@@ -7,7 +7,7 @@ use std::{
 };
 
 use regex::Regex;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use strum::IntoEnumIterator;
 
 use crate::{
@@ -71,10 +71,10 @@ impl MetadataOperation {
                 }
             }
             Self::Blank { remove } => {
-                let builtin = MetadataField::iter().map(|x| x.into()).collect::<Vec<_>>();
+                let builtin = MetadataField::iter().collect::<Vec<_>>();
                 for field in config.custom_fields.iter().chain(builtin.iter()) {
                     if remove.is_match(field) {
-                        metadata.insert(field.clone(), MetadataValue::blank().into());
+                        metadata.insert(field.clone(), MetadataValue::blank());
                     }
                 }
             }
@@ -83,7 +83,7 @@ impl MetadataOperation {
             }
             Self::Shared { fields, set } => match set.get(nice_path, config, copy_cache) {
                 Ok(value) => {
-                    let builtin = MetadataField::iter().map(|x| x.into()).collect::<Vec<_>>();
+                    let builtin = MetadataField::iter().collect::<Vec<_>>();
                     for field in config.custom_fields.iter().chain(builtin.iter()) {
                         if fields.is_match(field) {
                             metadata.insert(field.clone(), value.clone());
@@ -95,7 +95,7 @@ impl MetadataOperation {
                 }
             },
             Self::SharedModify { fields, modify } => {
-                let builtin = MetadataField::iter().map(|x| x.into()).collect::<Vec<_>>();
+                let builtin = MetadataField::iter().collect::<Vec<_>>();
                 for field in config.custom_fields.iter().chain(builtin.iter()) {
                     if fields.is_match(field) {
                         if let Some(existing) = metadata.get(field) {
@@ -268,7 +268,10 @@ impl PathSegment {
 #[serde(rename_all = "lowercase")]
 #[serde(untagged)]
 pub enum LocalItemSelector {
-    #[serde(deserialize_with = "item_selector_this")]
+    #[serde(
+        deserialize_with = "item_selector_this_de",
+        serialize_with = "item_selector_this_ser"
+    )]
     This,
     DrillUp {
         up: Range,
@@ -284,7 +287,7 @@ pub enum LocalItemSelector {
         must_be: Option<MusicItemType>,
     },
 }
-fn item_selector_this<'de, D>(deserializer: D) -> Result<(), D::Error>
+fn item_selector_this_de<'de, D>(deserializer: D) -> Result<(), D::Error>
 where
     D: serde::de::Deserializer<'de>,
 {
@@ -310,6 +313,12 @@ where
     }
 
     deserializer.deserialize_str(Visitor)
+}
+fn item_selector_this_ser<S>(s: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    s.serialize_str("this")
 }
 impl LocalItemSelector {
     fn get(&self, start: &Path, config: &LibraryConfig) -> Vec<PathBuf> {
@@ -480,8 +489,7 @@ impl ValueGetter {
                         .into_iter()
                         .map(|x| value.get(x.as_ref(), config).to_string())
                         .collect(),
-                )
-                .into();
+                );
                 match modify {
                     None => Ok(result),
                     Some(modify) => modify.modify(result, path, config, copy_cache),
@@ -532,7 +540,7 @@ impl ValueGetter {
                         _ => return Err(ValueError::Uncombinable { values }),
                     }
                 }
-                Ok(MetadataValue::List(list).into())
+                Ok(MetadataValue::List(list))
             }
         }
     }

@@ -244,6 +244,12 @@ mod deserialize {
         let result = serde_yaml::from_str::<ValueModifier>("take: {index: first}").unwrap();
         assert!(matches!(result, ValueModifier::Take { .. }));
     }
+
+    #[test]
+    fn this_ser() {
+        let str = serde_yaml::to_string(&LocalItemSelector::This).unwrap();
+        assert_eq!(str, "this\n");
+    }
 }
 
 #[test]

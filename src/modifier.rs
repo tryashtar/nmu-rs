@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     path::{Path, PathBuf},
     rc::Rc,
 };
@@ -9,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     library_config::LibraryConfig,
-    metadata::{Metadata, MetadataField, MetadataValue, RegexWrap},
+    metadata::{MetadataField, MetadataValue, RegexWrap},
     strategy::{LocalItemSelector, ValueGetter},
     util::{OutOfBoundsDecision, Range},
     CopyCache,
@@ -180,7 +179,7 @@ impl ValueModifier {
             let extra = append.get(path, config, copy_cache)?;
             if let Some(str) = extra.as_string() {
                 Self::append(&mut list, str, index, appending);
-                return Ok(MetadataValue::List(list).into());
+                return Ok(MetadataValue::List(list));
             }
             Err(ValueError::UnexpectedType {
                 modifier: self.clone(),
@@ -228,7 +227,7 @@ impl ValueModifier {
                     Some((start, stop)) => {
                         let range = (start + add)..(stop + add);
                         list.splice(range, val);
-                        Ok(MetadataValue::List(list).into())
+                        Ok(MetadataValue::List(list))
                     }
                 };
             }
@@ -257,8 +256,7 @@ impl ValueModifier {
                 if let MetadataValue::RegexMatches { source, regex } = value {
                     return Ok(MetadataValue::string(
                         regex.0.replace(&source, replace).into_owned(),
-                    )
-                    .into());
+                    ));
                 }
                 Err(ValueError::UnexpectedType {
                     modifier: self.clone(),
@@ -318,8 +316,7 @@ impl ValueModifier {
                         TakeModifier::Simple(range) => {
                             Self::take(&list, range, OutOfBoundsDecision::Exit, None)
                         }
-                    }
-                    .map(|x| x.into());
+                    };
                 }
                 Err(ValueError::UnexpectedType {
                     modifier: self.clone(),
@@ -349,7 +346,7 @@ impl ValueModifier {
                 let extra = join.get(path, config, copy_cache)?;
                 if let Some(str) = extra.as_string() {
                     if let MetadataValue::List(list) = value {
-                        return Ok(MetadataValue::string(list.join(str)).into());
+                        return Ok(MetadataValue::string(list.join(str)));
                     }
                 }
                 Err(ValueError::UnexpectedType {
@@ -365,7 +362,7 @@ impl ValueModifier {
                         .flat_map(|x| x.split(split))
                         .map(|x| x.to_owned())
                         .collect::<Vec<_>>();
-                    return Ok(MetadataValue::List(vec).into());
+                    return Ok(MetadataValue::List(vec));
                 }
                 Err(ValueError::UnexpectedType {
                     modifier: self.clone(),

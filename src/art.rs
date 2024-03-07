@@ -1,10 +1,11 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    io,
     path::{Path, PathBuf},
     rc::Rc,
 };
 
-use image::{DynamicImage, GenericImageView, ImageError};
+use image::{DynamicImage, GenericImageView, ImageError, ImageResult};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -12,8 +13,6 @@ use crate::{
     file_stuff::{self, ConfigError, YamlError},
     is_not_found,
     library_config::LibraryError,
-    metadata::{Metadata, MetadataField, MetadataValue},
-    ConfigLoadResults,
 };
 
 pub type ArtConfigCache = HashMap<PathBuf, Rc<Result<ArtConfig, ConfigError>>>;
@@ -286,43 +285,79 @@ pub struct RawArtRepo {
     extensions: HashSet<String>,
 }
 
-pub enum ProcessArtResult {
-    NoArtNeeded,
-    NoTemplateFound {
-        tried: Vec<PathBuf>,
-    },
-    Processed {
-        full_path: PathBuf,
-        newly_loaded: Vec<ConfigLoadResults<ArtConfig>>,
-        result: Rc<Result<Rc<DynamicImage>, ArtError>>,
-    },
-}
-
 pub struct GetProcessedResult {
-    newly_loaded: Vec<ConfigLoadResults<ArtConfig>>,
+    newly_loaded: Vec<ArtConfigLoadResults>,
     result: Result<Rc<DynamicImage>, ArtError>,
 }
 
 pub struct GetSettingsResults {
-    newly_loaded: Vec<ConfigLoadResults<ArtConfig>>,
+    newly_loaded: Vec<ArtConfigLoadResults>,
     result: Option<FinalArtSettings>,
+}
+
+pub struct ArtConfigLoadResults {
+    pub result: Rc<Result<ArtConfig, ConfigError>>,
+    pub nice_folder: PathBuf,
+    pub full_path: PathBuf,
+}
+
+pub enum GetArtResults {
+    NoTemplateFound {
+        tried: Vec<PathBuf>,
+    },
+    Processed {
+        result: Rc<Result<Rc<DynamicImage>, ArtError>>,
+        nice_path: PathBuf,
+        full_path: PathBuf,
+        loaded: Vec<ArtConfigLoadResults>,
+    },
+}
+
+pub struct ArtDiskCache {
+    pub folder: PathBuf,
+    pub nice_evicted: HashSet<PathBuf>,
+}
+impl ArtDiskCache {
+    pub fn get_path(&self, nice: &Path) -> PathBuf {
+        let mut joined = self
+            .folder
+            .join(nice)
+            .to_string_lossy()
+            .replace(|c: char| !c.is_ascii(), "_");
+        joined.push_str(".png");
+        PathBuf::from(joined)
+    }
+    pub fn get(&self, nice: &Path) -> ImageResult<DynamicImage> {
+        if self.nice_evicted.contains(nice) {
+            return Err(ImageError::IoError(io::Error::new(
+                io::ErrorKind::NotFound,
+                "evicted from cache",
+            )));
+        }
+        image::open(self.get_path(nice))
+    }
 }
 
 pub struct ArtRepo {
     pub templates_folder: PathBuf,
-    pub cache_folder: Option<PathBuf>,
+    pub disk_cache: Option<ArtDiskCache>,
     pub icon_folder: Option<PathBuf>,
-    pub used_templates: ArtCache,
+    pub used_templates: ArtUsageCache,
     pub named_settings: HashMap<String, Rc<ArtSettings>>,
     pub image_extensions: HashSet<String>,
+    config_cache: ArtConfigCache,
+    processed_cache: ProcessedArtCache,
 }
 impl ArtRepo {
     pub fn new(folder: &Path, raw: RawArtRepo) -> Self {
         Self {
             templates_folder: folder.join(raw.templates),
-            cache_folder: raw.cache.map(|x| folder.join(x)),
+            disk_cache: raw.cache.map(|x| ArtDiskCache {
+                folder: folder.join(x),
+                nice_evicted: HashSet::new(),
+            }),
             icon_folder: raw.icons.map(|x| folder.join(x)),
-            used_templates: ArtCache::new(raw.file_cache.map(|x| folder.join(x))),
+            used_templates: ArtUsageCache::new(raw.file_cache.map(|x| folder.join(x))),
             named_settings: raw
                 .named_settings
                 .into_iter()
@@ -336,91 +371,66 @@ impl ArtRepo {
                     None => x,
                 })
                 .collect(),
+            config_cache: HashMap::new(),
+            processed_cache: HashMap::new(),
         }
     }
-    pub fn resolve_art(
-        &self,
-        metadata: &mut Metadata,
-        scan_paths: &BTreeSet<PathBuf>,
-        config_cache: &mut ArtConfigCache,
-        processed_cache: &mut ProcessedArtCache,
-    ) -> ProcessArtResult {
-        let mut newly_loaded = vec![];
-        if let Some(MetadataValue::List(art)) = metadata.get_mut(&MetadataField::Art) {
-            if art.is_empty() {
-                return ProcessArtResult::NoArtNeeded;
-            }
-            let template = self.find_first_template(art);
-            if let Some((nice, template)) = template {
-                art.clear();
-                art.push(nice.to_string_lossy().into_owned());
-                let result = processed_cache.entry(nice).or_insert_with_key(|nice| {
-                    let mut result = self.get_processed(
-                        &template,
-                        nice,
-                        config_cache,
-                        scan_paths.contains(&template),
-                    );
-                    newly_loaded.append(&mut result.newly_loaded);
-                    Rc::new(result.result)
-                });
-                ProcessArtResult::Processed {
+    pub fn get_image(&mut self, art: &[String]) -> GetArtResults {
+        let mut loaded = vec![];
+        let template = self.find_first_template(art);
+        match template {
+            Some((nice, template)) => {
+                // partial borrow hack
+                let mut cache = std::mem::take(&mut self.processed_cache);
+                let result = cache
+                    .entry(nice.clone())
+                    .or_insert_with_key(|nice| {
+                        let mut processed = self.get_processed(&template, nice);
+                        loaded.append(&mut processed.newly_loaded);
+                        Rc::new(processed.result)
+                    })
+                    .clone();
+                self.processed_cache = cache;
+                GetArtResults::Processed {
+                    result,
+                    nice_path: nice,
                     full_path: template,
-                    newly_loaded,
-                    result: result.clone(),
-                }
-            } else {
-                ProcessArtResult::NoTemplateFound {
-                    tried: art.iter().map(PathBuf::from).collect(),
+                    loaded,
                 }
             }
-        } else {
-            ProcessArtResult::NoArtNeeded
+            None => GetArtResults::NoTemplateFound {
+                tried: art.iter().map(PathBuf::from).collect(),
+            },
         }
     }
-    fn get_processed(
-        &self,
-        template: &Path,
-        nice: &Path,
-        config_cache: &mut ArtConfigCache,
-        full_load: bool,
-    ) -> GetProcessedResult {
-        let cached_path = self.cache_folder.as_ref().map(|x| {
-            let mut joined = x
-                .join(nice)
-                .to_string_lossy()
-                .replace(|c: char| !c.is_ascii(), "_");
-            joined.push_str(".png");
-            PathBuf::from(joined)
-        });
-        if !full_load {
-            if let Some(cached_path) = cached_path {
+    pub fn get_processed(&mut self, template: &Path, nice: &Path) -> GetProcessedResult {
+        if let Some(disk) = &self.disk_cache {
+            if let Ok(img) = disk.get(nice) {
                 return GetProcessedResult {
                     newly_loaded: vec![],
-                    result: image::open(cached_path)
-                        .map(Rc::new)
-                        .map_err(ArtError::Image),
+                    result: Ok(Rc::new(img)),
                 };
             }
         }
-        let mut template_result = image::open(template);
-        let settings = self.get_settings(nice, config_cache);
-        match &settings.result {
-            None => GetProcessedResult {
-                newly_loaded: settings.newly_loaded,
-                result: Err(ArtError::Config),
+        match image::open(template) {
+            Err(err) => GetProcessedResult {
+                newly_loaded: vec![],
+                result: Err(ArtError::Image(err)),
             },
-            Some(config) => {
-                if let Ok(mut template) = template_result {
-                    template = config.apply(template);
-                    if let Some(cached_path) = cached_path {
-                        let _ = template.save_with_format(cached_path, image::ImageFormat::Png);
+            Ok(img) => {
+                let settings = self.get_settings(nice);
+                match &settings.result {
+                    None => GetProcessedResult {
+                        newly_loaded: settings.newly_loaded,
+                        result: Err(ArtError::Config),
+                    },
+                    Some(config) => {
+                        let modified = config.apply(img);
+                        GetProcessedResult {
+                            newly_loaded: settings.newly_loaded,
+                            result: Ok(Rc::new(modified)),
+                        }
                     }
-                    template_result = Ok(template);
-                }
-                GetProcessedResult {
-                    newly_loaded: settings.newly_loaded,
-                    result: template_result.map(Rc::new).map_err(ArtError::Image),
                 }
             }
         }
@@ -467,7 +477,7 @@ impl ArtRepo {
                 .map(|x| x.into_iter().flatten().collect()),
         }
     }
-    fn find_first_template(&self, list: &Vec<String>) -> Option<(PathBuf, PathBuf)> {
+    pub fn find_first_template(&self, list: &[String]) -> Option<(PathBuf, PathBuf)> {
         for entry in list {
             let nice = PathBuf::from(entry.clone());
             if let Some(template) = self.find_template(&nice) {
@@ -496,11 +506,7 @@ impl ArtRepo {
         }
         None
     }
-    fn get_settings(
-        &self,
-        nice_path: &Path,
-        config_cache: &mut ArtConfigCache,
-    ) -> GetSettingsResults {
+    fn get_settings(&mut self, nice_path: &Path) -> GetSettingsResults {
         let mut settings = Some(ArtSettings::default());
         let mut newly_loaded = vec![];
         for ancestor in nice_path
@@ -513,18 +519,22 @@ impl ArtRepo {
         {
             let select_path = nice_path.strip_prefix(ancestor).unwrap_or(nice_path);
             let config_path = self.templates_folder.join(ancestor).join("images.yaml");
-            let config_load = config_cache
+            // partial borrow hack
+            let mut cache = std::mem::take(&mut self.config_cache);
+            let config_load = cache
                 .entry(config_path)
                 .or_insert_with_key(|config_path| {
                     let result = Rc::new(self.load_new_config(config_path));
-                    newly_loaded.push(ConfigLoadResults {
+                    newly_loaded.push(ArtConfigLoadResults {
                         nice_folder: ancestor.to_owned(),
                         full_path: config_path.to_owned(),
                         result: result.clone(),
                     });
                     result
-                });
-            match Rc::as_ref(config_load) {
+                })
+                .clone();
+            self.config_cache = cache;
+            match Rc::as_ref(&config_load) {
                 Ok(config) => {
                     if let Some(ref mut settings) = settings {
                         for replace in &config.all {
@@ -557,12 +567,12 @@ impl ArtRepo {
     }
 }
 
-pub struct ArtCache {
+pub struct ArtUsageCache {
     path: Option<PathBuf>,
     pub template_to_users: HashMap<PathBuf, HashSet<PathBuf>>,
     user_to_template: HashMap<PathBuf, PathBuf>,
 }
-impl ArtCache {
+impl ArtUsageCache {
     fn new(path: Option<PathBuf>) -> Self {
         match path {
             None => Self {
@@ -595,16 +605,16 @@ impl ArtCache {
             }
         }
     }
-    pub fn add(&mut self, song: &Path, art: &ProcessArtResult) {
+    pub fn add(&mut self, song: &Path, art: &GetArtResults) {
         match art {
-            ProcessArtResult::NoArtNeeded | ProcessArtResult::NoTemplateFound { .. } => {
+            GetArtResults::NoTemplateFound { .. } => {
                 if let Some(old) = self.user_to_template.remove(song) {
                     if let Some(set) = self.template_to_users.get_mut(&old) {
                         set.remove(song);
                     }
                 }
             }
-            ProcessArtResult::Processed { full_path, .. } => {
+            GetArtResults::Processed { full_path, .. } => {
                 if let Some(old) = self.user_to_template.remove(song) {
                     if let Some(set) = self.template_to_users.get_mut(&old) {
                         set.remove(song);

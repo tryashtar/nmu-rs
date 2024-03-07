@@ -1,10 +1,10 @@
 use core::fmt;
-use std::{collections::HashMap, fmt::Display, rc::Rc};
+use std::{collections::HashMap, rc::Rc};
 
 use image::DynamicImage;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use strum::{Display, EnumIter};
+use strum::EnumIter;
 
 use crate::{
     lyrics::{RichLyrics, SyncedLyrics},

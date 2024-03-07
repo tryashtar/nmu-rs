@@ -492,105 +492,63 @@ impl LibraryConfig {
         raw_config: RawSongConfig,
         nice_folder: &Path,
     ) -> Result<SongConfig, LibraryError> {
-        let songs = raw_config
-            .songs
-            .map(|x| {
-                self.resolve_operation(x).map(|ops| AllSetter {
-                    names: ItemSelector::All { recursive: true },
-                    must_be: Some(MusicItemType::Song),
-                    set: ops,
-                })
-            })
-            .transpose()?;
-        let folders = raw_config
-            .folders
-            .map(|x| {
-                self.resolve_operation(x).map(|ops| AllSetter {
-                    names: ItemSelector::All { recursive: true },
-                    must_be: Some(MusicItemType::Folder),
-                    set: ops,
-                })
-            })
-            .transpose()?;
-        let this = raw_config
-            .this
-            .map(|x| {
-                self.resolve_operation(x).map(|ops| AllSetter {
-                    names: ItemSelector::This,
+        let mut setters = vec![];
+        if let Some(songs) = raw_config.songs {
+            let resolved = self.resolve_operation(songs)?;
+            setters.push(Rc::new(AllSetter {
+                names: ItemSelector::All { recursive: true },
+                must_be: Some(MusicItemType::Song),
+                set: resolved,
+            }));
+        }
+        if let Some(folders) = raw_config.folders {
+            let resolved = self.resolve_operation(folders)?;
+            setters.push(Rc::new(AllSetter {
+                names: ItemSelector::All { recursive: true },
+                must_be: Some(MusicItemType::Folder),
+                set: resolved,
+            }));
+        }
+        if let Some(this) = raw_config.this {
+            let resolved = self.resolve_operation(this)?;
+            setters.push(Rc::new(AllSetter {
+                names: ItemSelector::This,
+                must_be: None,
+                set: resolved,
+            }));
+        }
+        if let Some(set_fields) = raw_config.set_fields {
+            for setter in set_fields {
+                self.check_field(&setter.field)?;
+                for (path, getter) in setter.set {
+                    self.check_getter(&getter)?;
+                    setters.push(Rc::new(AllSetter::new(
+                        ItemSelector::Path(path),
+                        MetadataOperation::Set(HashMap::from([(setter.field.clone(), getter)])),
+                    )));
+                }
+            }
+        }
+        if let Some(set_all) = raw_config.set_all {
+            for setter in set_all {
+                let resolved = self.resolve_operation(setter.set)?;
+                setters.push(Rc::new(AllSetter {
+                    names: setter.names,
                     must_be: None,
-                    set: ops,
-                })
-            })
-            .transpose()?;
-        // this type uniquely doesn't use operations to resolve, but still needs its fields checked
-        let set_fields = raw_config
-            .set_fields
-            .map(|sets| {
-                sets.into_iter()
-                    .map(|setter| {
-                        self.check_field(&setter.field)?;
-                        setter
-                            .set
-                            .into_iter()
-                            .map(|(path, getter)| {
-                                self.check_getter(&getter)?;
-                                Ok(AllSetter::new(
-                                    ItemSelector::Path(path),
-                                    MetadataOperation::Set(HashMap::from([(
-                                        setter.field.clone(),
-                                        getter,
-                                    )])),
-                                ))
-                            })
-                            .collect::<Result<Vec<_>, _>>()
-                    })
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .transpose()?
-            .unwrap_or_default()
-            // couldn't figure out how to avoid this
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-        let set_all = raw_config
-            .set_all
-            .map(|x| {
-                x.into_iter()
-                    .map(|y| {
-                        self.resolve_operation(y.set).map(|ops| AllSetter {
-                            names: y.names,
-                            must_be: None,
-                            set: ops,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .transpose()?
-            .unwrap_or_default();
-        let set = raw_config
-            .set
-            .map(|map| {
-                map.into_iter()
-                    .map(|(path, ops)| {
-                        self.resolve_operation(ops).map(|ops| AllSetter {
-                            names: ItemSelector::Path(path),
-                            must_be: None,
-                            set: ops,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .transpose()?
-            .unwrap_or(vec![]);
-        let merged = songs
-            .into_iter()
-            .chain(folders)
-            .chain(this)
-            .chain(set_fields)
-            .chain(set_all)
-            .chain(set)
-            .map(Rc::new)
-            .collect::<Vec<_>>();
+                    set: resolved,
+                }));
+            }
+        }
+        if let Some(set) = raw_config.set {
+            for (path, op) in set {
+                let resolved = self.resolve_operation(op)?;
+                setters.push(Rc::new(AllSetter {
+                    names: ItemSelector::Path(path),
+                    must_be: None,
+                    set: resolved,
+                }));
+            }
+        }
         let ordering = {
             if let Some(discs) = raw_config.discs {
                 let mut map = HashMap::new();
@@ -630,7 +588,7 @@ impl LibraryConfig {
             }
         };
         Ok(SongConfig {
-            set: merged,
+            set: setters,
             order: ordering,
         })
     }
@@ -805,6 +763,9 @@ impl DateCache {
     }
     pub fn mark_updated(&mut self, path: PathBuf) {
         self.updated.insert(path);
+    }
+    pub fn remove(&mut self, path: &Path) {
+        self.updated.remove(path);
     }
     pub fn save(&mut self) -> Result<(), YamlError> {
         match &self.path {
