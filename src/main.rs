@@ -139,14 +139,20 @@ fn do_scan(library_config: &mut LibraryConfig) {
                 .unwrap_or(&folder_path)
                 .to_owned(),
         );
-        if let Some(metadata) = process_path(
+        match process_path(
             library_config,
             &nice_path,
             &mut config_cache,
             &mut copy_cache,
         ) {
-            for (field, value) in metadata.iter().sorted() {
-                println!("\t{field}: {value}");
+            Some(metadata) => {
+                library_config.date_cache.mark_updated(folder_path);
+                for (field, value) in metadata.iter().sorted() {
+                    println!("\t{field}: {value}");
+                }
+            }
+            None => {
+                library_config.date_cache.remove(&folder_path);
             }
         }
     }
@@ -163,24 +169,15 @@ fn do_scan(library_config: &mut LibraryConfig) {
             &mut config_cache,
             &mut copy_cache,
         );
-        match metadata {
-            None => {
-                progress.failed += 1;
-            }
-            Some(metadata) => {
-                if add_to_song(
-                    &song_path,
-                    &nice_path,
-                    metadata,
-                    None,
-                    library_config,
-                    &mut progress,
-                ) {
-                    library_config.date_cache.mark_updated(song_path);
-                } else {
-                    library_config.date_cache.remove(&song_path);
-                }
-            }
+        let success = metadata
+            .map(|x| add_to_song(&song_path, &nice_path, x, None, library_config))
+            .unwrap_or(false);
+        if success {
+            progress.changed += 1;
+            library_config.date_cache.mark_updated(song_path);
+        } else {
+            progress.failed += 1;
+            library_config.date_cache.remove(&song_path);
         }
     }
     if progress.failed == 0 {
@@ -348,7 +345,7 @@ fn process_path(
 ) -> Option<Metadata> {
     let mut results = get_metadata(library_config, nice_path, config_cache, copy_cache);
     for load in results.loaded {
-        print_config_errors(
+        handle_config_loaded(
             load.result.deref().as_ref(),
             &load.full_path,
             &load.nice_folder,
@@ -360,7 +357,7 @@ fn process_path(
             if let Some(MetadataValue::List(art)) = metadata.get_mut(&MetadataField::Art) {
                 if !art.is_empty() {
                     let result = repo.get_image(art);
-                    print_art_errors(&result, library_config);
+                    handle_art_loaded(&result, library_config);
                     if let GetArtResults::Processed { nice_path, .. } = result {
                         art.clear();
                         art.push(nice_path.to_string_lossy().into_owned());
@@ -393,7 +390,6 @@ fn add_to_song(
     metadata: Metadata,
     art: Option<Rc<DynamicImage>>,
     config: &mut LibraryConfig,
-    progress: &mut WorkProgress,
 ) -> bool {
     let mut any = false;
     let mut success = true;
@@ -408,7 +404,6 @@ fn add_to_song(
                 lyric_config.handle(nice_path, &existing, &mut final_metadata.result);
             }
             let existing = existing.into();
-            progress.changed += 1;
             tag_interop::set_metadata_id3(
                 &mut id3,
                 &final_metadata.result,
@@ -421,7 +416,6 @@ fn add_to_song(
             if !any {
                 any = true;
                 success = false;
-                progress.failed += 1;
             }
             eprintln!("{}", cformat!("❌ <red>Error reading ID3 tag\n{}</>", err));
         }
@@ -434,7 +428,6 @@ fn add_to_song(
                 lyric_config.handle(nice_path, &existing, &mut final_metadata.result);
             }
             let existing = existing.into();
-            progress.changed += 1;
             tag_interop::set_metadata_flac(&mut flac, &final_metadata.result);
             existing_metadata = Some(existing);
         }
@@ -443,7 +436,6 @@ fn add_to_song(
             if !any {
                 any = true;
                 success = false;
-                progress.failed += 1;
             }
             eprintln!("{}", cformat!("❌ <red>Error reading flac tag\n{}</>", err));
         }
@@ -462,12 +454,11 @@ fn add_to_song(
     if !any {
         eprintln!("{}", cformat!("❌ <red>No tags found in file</>"));
         success = false;
-        progress.failed += 1;
     }
     success
 }
 
-fn print_art_errors(result: &GetArtResults, library_config: &mut LibraryConfig) {
+fn handle_art_loaded(result: &GetArtResults, library_config: &mut LibraryConfig) {
     match result {
         GetArtResults::NoTemplateFound { tried } => {
             eprintln!(
@@ -485,22 +476,25 @@ fn print_art_errors(result: &GetArtResults, library_config: &mut LibraryConfig) 
                 Ok(_) => {
                     library_config.date_cache.mark_updated(full_path.to_owned());
                 }
-                Err(ArtError::Image(error)) => {
-                    eprintln!(
-                        "{}",
-                        cformat!(
-                            "❌ <red>Error loading image {}:\n{}</>",
-                            full_path.display(),
-                            error
-                        )
-                    );
+                Err(err) => {
+                    library_config.date_cache.remove(full_path);
+                    if let ArtError::Image(error) = err {
+                        eprintln!(
+                            "{}",
+                            cformat!(
+                                "❌ <red>Error loading image {}:\n{}</>",
+                                full_path.display(),
+                                error
+                            )
+                        );
+                    }
                 }
-                Err(_) => {}
             }
             for load in loaded {
                 match Rc::as_ref(&load.result) {
                     Err(error) => {
                         if !is_not_found(error) {
+                            library_config.date_cache.remove(&load.full_path);
                             eprintln!(
                                 "{}",
                                 cformat!(
@@ -586,14 +580,15 @@ fn get_unselected_items(
     all_children
 }
 
-fn print_config_errors(
+fn handle_config_loaded(
     result: Result<&SongConfig, &ConfigError>,
     full_path: &Path,
     nice_folder: &Path,
-    library_config: &LibraryConfig,
+    library_config: &mut LibraryConfig,
 ) {
     match result {
         Err(error) => {
+            library_config.date_cache.remove(full_path);
             if !is_not_found(error) {
                 eprintln!(
                     "{}",
@@ -606,6 +601,7 @@ fn print_config_errors(
             }
         }
         Ok(config) => {
+            library_config.date_cache.mark_updated(full_path.to_owned());
             let mut warnings = vec![];
             let unused = get_unused_selectors(config, nice_folder, library_config);
             if !unused.is_empty() {
@@ -815,7 +811,10 @@ fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
                 for path in songs {
                     if path.is_dir() {
                         scan_folders.insert(path.clone());
-                    } else if scan_songs.insert(path.clone()) && std::io::stdout().is_terminal() {
+                    } else if path.is_file()
+                        && scan_songs.insert(path.clone())
+                        && std::io::stdout().is_terminal()
+                    {
                         _ = write!(lock, "\rFound {}", scan_songs.len());
                     }
                 }
@@ -826,7 +825,10 @@ fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
                 for path in songs {
                     if path.is_dir() {
                         scan_folders.insert(path.clone());
-                    } else if scan_songs.insert(path.clone()) && std::io::stdout().is_terminal() {
+                    } else if path.is_file()
+                        && scan_songs.insert(path.clone())
+                        && std::io::stdout().is_terminal()
+                    {
                         _ = write!(lock, "\rFound {}", scan_songs.len());
                     }
                 }
