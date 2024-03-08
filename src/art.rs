@@ -15,8 +15,8 @@ use crate::{
     library_config::LibraryError,
 };
 
-pub type ArtConfigCache = HashMap<PathBuf, Rc<Result<ArtConfig, ConfigError>>>;
-pub type ProcessedArtCache = HashMap<PathBuf, Rc<Result<Rc<DynamicImage>, ArtError>>>;
+pub type ArtConfigCache = HashMap<PathBuf, Result<Rc<ArtConfig>, Rc<ConfigError>>>;
+pub type ProcessedArtCache = HashMap<PathBuf, Result<Rc<DynamicImage>, Rc<ArtError>>>;
 
 #[derive(Error, Debug)]
 pub enum ArtError {
@@ -296,7 +296,7 @@ pub struct GetSettingsResults {
 }
 
 pub struct ArtConfigLoadResults {
-    pub result: Rc<Result<ArtConfig, ConfigError>>,
+    pub result: Result<Rc<ArtConfig>, Rc<ConfigError>>,
     pub nice_folder: PathBuf,
     pub full_path: PathBuf,
 }
@@ -306,7 +306,7 @@ pub enum GetArtResults {
         tried: Vec<PathBuf>,
     },
     Processed {
-        result: Rc<Result<Rc<DynamicImage>, ArtError>>,
+        result: Result<Rc<DynamicImage>, Rc<ArtError>>,
         nice_path: PathBuf,
         full_path: PathBuf,
         loaded: Vec<ArtConfigLoadResults>,
@@ -387,7 +387,7 @@ impl ArtRepo {
                     .or_insert_with_key(|nice| {
                         let mut processed = self.get_processed(&template, nice);
                         loaded.append(&mut processed.newly_loaded);
-                        Rc::new(processed.result)
+                        processed.result.map_err(Rc::new)
                     })
                     .clone();
                 self.processed_cache = cache;
@@ -524,7 +524,10 @@ impl ArtRepo {
             let config_load = cache
                 .entry(config_path)
                 .or_insert_with_key(|config_path| {
-                    let result = Rc::new(self.load_new_config(config_path));
+                    let result = self
+                        .load_new_config(config_path)
+                        .map(Rc::new)
+                        .map_err(Rc::new);
                     newly_loaded.push(ArtConfigLoadResults {
                         nice_folder: ancestor.to_owned(),
                         full_path: config_path.to_owned(),
@@ -534,7 +537,7 @@ impl ArtRepo {
                 })
                 .clone();
             self.config_cache = cache;
-            match Rc::as_ref(&config_load) {
+            match config_load {
                 Ok(config) => {
                     if let Some(ref mut settings) = settings {
                         for replace in &config.all {
@@ -548,7 +551,7 @@ impl ArtRepo {
                     }
                 }
                 Err(error) => {
-                    if !is_not_found(error) {
+                    if !is_not_found(&error) {
                         settings = None;
                     }
                 }

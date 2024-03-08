@@ -81,7 +81,7 @@ fn main() {
     }
 }
 
-type ConfigCache = HashMap<PathBuf, Rc<Result<SongConfig, ConfigError>>>;
+type ConfigCache = HashMap<PathBuf, Result<Rc<SongConfig>, Rc<ConfigError>>>;
 type CopyCache = HashMap<PathBuf, Metadata>;
 struct WorkProgress {
     changed: u32,
@@ -220,7 +220,7 @@ fn do_scan(library_config: &mut LibraryConfig) {
         if let Some(disk) = &mut art_repo.disk_cache {
             let mut wrote = 0;
             for (nice, image) in &art_repo.processed_cache {
-                if let Ok(img) = Rc::deref(image) {
+                if let Ok(img) = image {
                     let full = disk.get_path(nice);
                     if !full.exists() || disk.nice_evicted.contains(nice) {
                         if let Some(parent) = full.parent() {
@@ -258,7 +258,7 @@ struct GetMetadataResults {
 }
 
 pub struct ConfigLoadResults {
-    result: Rc<Result<SongConfig, ConfigError>>,
+    result: Result<Rc<SongConfig>, Rc<ConfigError>>,
     nice_folder: PathBuf,
     full_path: PathBuf,
 }
@@ -279,7 +279,9 @@ fn get_metadata(
             let loaded = config_cache
                 .entry(config_path.clone())
                 .or_insert_with_key(|x| {
-                    let config = Rc::new(load_config(x, nice_folder, library_config));
+                    let config = load_config(x, nice_folder, library_config)
+                        .map(Rc::new)
+                        .map_err(Rc::new);
                     loaded.push(ConfigLoadResults {
                         result: config.clone(),
                         full_path: x.clone(),
@@ -287,7 +289,7 @@ fn get_metadata(
                     });
                     config
                 });
-            match Rc::deref(loaded) {
+            match loaded {
                 Ok(config) => {
                     if let Some(metadata) = &mut metadata {
                         let select_path =
@@ -346,7 +348,7 @@ fn process_path(
     let mut results = get_metadata(library_config, nice_path, config_cache, copy_cache);
     for load in results.loaded {
         handle_config_loaded(
-            load.result.deref().as_ref(),
+            load.result.as_deref().map_err(|x| x.deref()),
             &load.full_path,
             &load.nice_folder,
             library_config,
@@ -472,13 +474,13 @@ fn handle_art_loaded(result: &GetArtResults, library_config: &mut LibraryConfig)
             loaded,
             ..
         } => {
-            match Rc::as_ref(result) {
+            match result {
                 Ok(_) => {
                     library_config.date_cache.mark_updated(full_path.to_owned());
                 }
                 Err(err) => {
                     library_config.date_cache.remove(full_path);
-                    if let ArtError::Image(error) = err {
+                    if let ArtError::Image(error) = Rc::deref(err) {
                         eprintln!(
                             "{}",
                             cformat!(
@@ -491,7 +493,7 @@ fn handle_art_loaded(result: &GetArtResults, library_config: &mut LibraryConfig)
                 }
             }
             for load in loaded {
-                match Rc::as_ref(&load.result) {
+                match &load.result {
                     Err(error) => {
                         if !is_not_found(error) {
                             library_config.date_cache.remove(&load.full_path);
