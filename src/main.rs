@@ -140,8 +140,9 @@ fn do_scan(library_config: &mut LibraryConfig) {
                 .to_owned(),
         );
         match process_path(
-            library_config,
             &nice_path,
+            &folder_path,
+            library_config,
             &mut config_cache,
             &mut copy_cache,
         ) {
@@ -164,8 +165,9 @@ fn do_scan(library_config: &mut LibraryConfig) {
                 .with_extension(""),
         );
         let metadata = process_path(
-            library_config,
             &nice_path,
+            &song_path,
+            library_config,
             &mut config_cache,
             &mut copy_cache,
         );
@@ -340,8 +342,9 @@ fn get_metadata(
 }
 
 fn process_path(
-    library_config: &mut LibraryConfig,
     nice_path: &ItemPath,
+    full_path: &Path,
+    library_config: &mut LibraryConfig,
     config_cache: &mut ConfigCache,
     copy_cache: &mut CopyCache,
 ) -> Option<Metadata> {
@@ -357,14 +360,16 @@ fn process_path(
     if let Some(metadata) = &mut results.metadata {
         if let Some(repo) = &mut library_config.art_repo {
             if let Some(MetadataValue::List(art)) = metadata.get_mut(&MetadataField::Art) {
-                if !art.is_empty() {
-                    let result = repo.get_image(art);
-                    handle_art_loaded(&result, library_config);
-                    if let GetArtResults::Processed { nice_path, .. } = result {
-                        art.clear();
-                        art.push(nice_path.to_string_lossy().into_owned());
-                    }
+                let result = repo.get_image(art);
+                repo.used_templates.add(full_path, &result);
+                handle_art_loaded(&result, library_config);
+                if let GetArtResults::Processed { nice_path, .. } = result {
+                    art.clear();
+                    art.push(nice_path.to_string_lossy().into_owned());
                 }
+            } else {
+                repo.used_templates
+                    .add(full_path, &GetArtResults::NoArtNeeded);
             }
         }
         println!("{}", nice_path.display());
@@ -462,6 +467,7 @@ fn add_to_song(
 
 fn handle_art_loaded(result: &GetArtResults, library_config: &mut LibraryConfig) {
     match result {
+        GetArtResults::NoArtNeeded => {}
         GetArtResults::NoTemplateFound { tried } => {
             eprintln!(
                 "{}",
@@ -800,9 +806,13 @@ fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
                     }
                 }
             } else if file_stuff::match_extension(&template_file_path, &art_repo.image_extensions)
-                && library_config
+                && (library_config
                     .date_cache
                     .changed_recently(&template_file_path)
+                    || !art_repo
+                        .used_templates
+                        .template_to_users
+                        .contains_key(&template_file_path))
             {
                 scan_images.insert(template_file_path);
             }

@@ -302,6 +302,7 @@ pub struct ArtConfigLoadResults {
 }
 
 pub enum GetArtResults {
+    NoArtNeeded,
     NoTemplateFound {
         tried: Vec<PathBuf>,
     },
@@ -610,7 +611,7 @@ impl ArtUsageCache {
     }
     pub fn add(&mut self, song: &Path, art: &GetArtResults) {
         match art {
-            GetArtResults::NoTemplateFound { .. } => {
+            GetArtResults::NoArtNeeded | GetArtResults::NoTemplateFound { .. } => {
                 if let Some(old) = self.user_to_template.remove(song) {
                     if let Some(set) = self.template_to_users.get_mut(&old) {
                         set.remove(song);
