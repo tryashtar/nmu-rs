@@ -1,12 +1,14 @@
 use crate::{
     library_config::{DateCache, LibraryConfig},
     metadata::{MetadataField, MetadataValue},
-    modifier::ValueModifier,
+    modifier::{ValueError, ValueModifier},
+    song_config::{AllSetter, SongConfig},
     strategy::{
         FieldSelector, FieldValueGetter, ItemSelector, LocalItemSelector, MetadataOperation,
-        PathSegment, ValueGetter,
+        PathSegment, ValueGetter, WarnBehavior,
     },
     util::{ItemPath, OutOfBoundsDecision, Range},
+    LoadedConfig,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -259,7 +261,7 @@ fn range_int_first() {
     assert_eq!(
         range.slice(&values, OutOfBoundsDecision::Exit).unwrap(),
         ['a']
-    )
+    );
 }
 
 #[test]
@@ -269,7 +271,7 @@ fn range_int_last() {
     assert_eq!(
         range.slice(&values, OutOfBoundsDecision::Exit).unwrap(),
         ['d']
-    )
+    );
 }
 
 #[test]
@@ -279,21 +281,21 @@ fn range_int_from_back() {
     assert_eq!(
         range.slice(&values, OutOfBoundsDecision::Exit).unwrap(),
         ['c']
-    )
+    );
 }
 
 #[test]
 fn range_int_too_big() {
     let range: Range = 5.into();
     let values = ['a', 'b', 'c', 'd'];
-    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), None)
+    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), None);
 }
 
 #[test]
 fn range_int_too_small() {
     let range: Range = (-5).into();
     let values = ['a', 'b', 'c', 'd'];
-    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), None)
+    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit), None);
 }
 
 #[test]
@@ -303,14 +305,14 @@ fn range_mult_all() {
     assert_eq!(
         range.slice(&values, OutOfBoundsDecision::Exit).unwrap(),
         ['a', 'b', 'c', 'd']
-    )
+    );
 }
 
 #[test]
 fn range_mult_backwards() {
     let range: Range = Range::new(1, 0);
     let values = ['a', 'b', 'c', 'd'];
-    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit).unwrap(), [])
+    assert_eq!(range.slice(&values, OutOfBoundsDecision::Exit).unwrap(), []);
 }
 
 #[test]
@@ -320,7 +322,7 @@ fn range_mult_some() {
     assert_eq!(
         range.slice(&values, OutOfBoundsDecision::Exit).unwrap(),
         ['b', 'c']
-    )
+    );
 }
 
 #[test]
@@ -330,7 +332,7 @@ fn range_mult_clamp() {
     assert_eq!(
         range.slice(&values, OutOfBoundsDecision::Clamp).unwrap(),
         ['c', 'd']
-    )
+    );
 }
 
 #[test]
@@ -430,7 +432,61 @@ fn dummy_config() -> LibraryConfig {
 }
 
 #[test]
-fn copy_field_resolution() {
+fn copy_field_simple() {
+    let path = PathBuf::from("a/b/c");
+    let config = dummy_config();
+    let getter = ValueGetter::Copy {
+        from: Rc::new(LocalItemSelector::This),
+        copy: MetadataField::Performers,
+        modify: None,
+    };
+    let mut copy_cache = HashMap::new();
+    copy_cache.insert(
+        path.clone(),
+        HashMap::from([(
+            MetadataField::Performers,
+            MetadataValue::List(vec!["item".to_string()]),
+        )]),
+    );
+    let result = getter
+        .get(&path, &config, &copy_cache)
+        .unwrap_or_else(|x| panic!("{}", x));
+    assert!(matches!(result, MetadataValue::List(x) if x.as_slice() == ["item"]));
+}
+
+#[test]
+fn copy_field_nested() {
+    let path = PathBuf::from("a/b/c");
+    let config = dummy_config();
+    let getter = ValueGetter::From {
+        from: Rc::new(LocalItemSelector::This),
+        value: FieldValueGetter::FileName,
+        if_missing: WarnBehavior::Exit,
+        modify: Some(Rc::new(ValueModifier::Append {
+            append: Box::new(ValueGetter::Copy {
+                from: Rc::new(LocalItemSelector::This),
+                copy: MetadataField::Performers,
+                modify: None,
+            }),
+            index: None,
+        })),
+    };
+    let mut copy_cache = HashMap::new();
+    copy_cache.insert(
+        path.clone(),
+        HashMap::from([(
+            MetadataField::Performers,
+            MetadataValue::List(vec!["item".to_string()]),
+        )]),
+    );
+    let result = getter
+        .get(&path, &config, &copy_cache)
+        .unwrap_or_else(|x| panic!("{}", x));
+    assert!(matches!(result, MetadataValue::List(x) if x.as_slice() == ["citem"]));
+}
+
+#[test]
+fn copy_field_missing() {
     let path = PathBuf::from("a/b/c");
     let config = dummy_config();
     let getter = ValueGetter::Copy {
@@ -439,10 +495,141 @@ fn copy_field_resolution() {
         modify: None,
     };
     let copy_cache = HashMap::new();
-    let result = getter
-        .get(&path, &config, &copy_cache)
-        .unwrap_or_else(|_| panic!("should resolve"));
-    assert!(matches!(result, MetadataValue::List(x) if x.as_slice() == ["item"]));
+    let result = getter.get(&path, &config, &copy_cache).unwrap_err();
+    assert!(matches!(result, ValueError::CopyNotFound { .. }));
+}
+
+fn fast_config(selector: ItemSelector, op: MetadataOperation) -> LoadedConfig {
+    LoadedConfig {
+        config: Rc::new(SongConfig {
+            set: vec![Rc::new(AllSetter {
+                names: selector,
+                must_be: None,
+                set: Rc::new(op),
+            })],
+            order: None,
+        }),
+        nice_folder: PathBuf::new(),
+        full_path: PathBuf::new(),
+    }
+}
+
+fn fast_copy(field: MetadataField) -> ValueGetter {
+    ValueGetter::Copy {
+        from: Rc::new(LocalItemSelector::This),
+        copy: field,
+        modify: None,
+    }
+}
+
+#[test]
+fn copy_full_simple() {
+    let config = dummy_config();
+    let path = ItemPath::Song(PathBuf::from("a/b/c"));
+    let mut copy_cache = HashMap::new();
+    let configs = [
+        fast_config(
+            ItemSelector::All { recursive: true },
+            MetadataOperation::Set(HashMap::from([(
+                MetadataField::Title,
+                ValueGetter::Direct(MetadataValue::string("test".to_string())),
+            )])),
+        ),
+        fast_config(
+            ItemSelector::All { recursive: true },
+            MetadataOperation::Set(HashMap::from([(
+                MetadataField::Performers,
+                fast_copy(MetadataField::Title),
+            )])),
+        ),
+    ];
+    let results = crate::get_metadata(&path, &configs, &config, &mut copy_cache);
+    let field = results.metadata.get(&MetadataField::Performers).unwrap();
+    assert!(matches!(field, MetadataValue::List(x) if x.as_slice() == ["test"]));
+    assert!(results.reports.into_iter().all(|x| x.errors.is_empty()));
+}
+
+#[test]
+fn copy_full_self() {
+    let config = dummy_config();
+    let path = ItemPath::Song(PathBuf::from("a/b/c"));
+    let mut copy_cache = HashMap::new();
+    let configs = [fast_config(
+        ItemSelector::All { recursive: true },
+        MetadataOperation::Set(HashMap::from([(
+            MetadataField::Title,
+            fast_copy(MetadataField::Title),
+        )])),
+    )];
+    let results = crate::get_metadata(&path, &configs, &config, &mut copy_cache);
+    let field = results.metadata.get(&MetadataField::Title);
+    assert!(field.is_none());
+    assert!(matches!(
+        results.reports[0].errors[0],
+        ValueError::CopyNotFound {
+            field: MetadataField::Title,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn copy_full_missing() {
+    let config = dummy_config();
+    let path = ItemPath::Song(PathBuf::from("a/b/c"));
+    let mut copy_cache = HashMap::new();
+    let configs = [fast_config(
+        ItemSelector::All { recursive: true },
+        MetadataOperation::Set(HashMap::from([(
+            MetadataField::Title,
+            fast_copy(MetadataField::Performers),
+        )])),
+    )];
+    let results = crate::get_metadata(&path, &configs, &config, &mut copy_cache);
+    let field = results.metadata.get(&MetadataField::Title);
+    assert!(field.is_none());
+    assert!(matches!(
+        results.reports[0].errors[0],
+        ValueError::CopyNotFound {
+            field: MetadataField::Performers,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn copy_full_other() {
+    let config = dummy_config();
+    let path1 = ItemPath::Song(PathBuf::from("a/b/c1"));
+    let path2 = ItemPath::Song(PathBuf::from("a/b/c2"));
+    let mut copy_cache = HashMap::new();
+    let configs = [
+        fast_config(
+            ItemSelector::Path(path1.to_path_buf()),
+            MetadataOperation::Set(HashMap::from([(
+                MetadataField::Title,
+                ValueGetter::Direct(MetadataValue::string("test".to_string())),
+            )])),
+        ),
+        fast_config(
+            ItemSelector::Path(path2.to_path_buf()),
+            MetadataOperation::Set(HashMap::from([(
+                MetadataField::Title,
+                ValueGetter::Copy {
+                    copy: MetadataField::Title,
+                    from: Rc::new(LocalItemSelector::Selector {
+                        selector: ItemSelector::Path(path1.to_path_buf()),
+                        must_be: None,
+                    }),
+                    modify: None,
+                },
+            )])),
+        ),
+    ];
+    let results = crate::get_metadata(&path2, &configs, &config, &mut copy_cache);
+    let field = results.metadata.get(&MetadataField::Title).unwrap();
+    assert!(matches!(field, MetadataValue::List(x) if x.as_slice() == ["test"]));
+    assert!(results.reports.into_iter().all(|x| x.errors.is_empty()));
 }
 
 #[test]
@@ -481,7 +668,7 @@ fn selector_matches() {
         .map(|x| x.into())
         .collect::<Vec<_>>();
         assert_eq!(actual, desired);
-        assert!(desired.into_iter().all(|x| selector.matches(&x)))
+        assert!(desired.into_iter().all(|x| selector.matches(&x)));
     };
     make_file("a");
     make_file("b");

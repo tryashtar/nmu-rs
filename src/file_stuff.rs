@@ -41,10 +41,9 @@ where
 }
 
 pub fn match_extension(path: &Path, extensions: &HashSet<String>) -> bool {
-    match path.extension().and_then(|x| x.to_str()) {
-        Some(ext) => extensions.contains(ext),
-        None => false,
-    }
+    path.extension()
+        .and_then(|x| x.to_str())
+        .map_or(false, |ext| extensions.contains(ext))
 }
 
 fn is_dir(entry: &DirEntry) -> bool {
@@ -52,13 +51,11 @@ fn is_dir(entry: &DirEntry) -> bool {
 }
 
 fn matches_segment(path: &Path, segment: &PathSegment) -> bool {
-    path.file_name()
-        .map(|x| segment.matches(x))
-        .unwrap_or(false)
+    path.file_name().is_some_and(|x| segment.matches(x))
 }
 
 pub fn matches_name(path: &Path, name: &str) -> bool {
-    path.file_name().map(|x| x == name).unwrap_or(false)
+    path.file_name().is_some_and(|x| x == name)
 }
 
 pub fn find_matches(

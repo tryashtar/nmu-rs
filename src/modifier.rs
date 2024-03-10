@@ -94,52 +94,46 @@ where
 impl std::fmt::Display for ValueError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ValueError::UnexpectedType {
+            Self::UnexpectedType {
                 modifier,
                 got,
                 expected,
             } => {
                 let mod_str = inline_data(&modifier);
-                write!(
-                    f,
-                    "Modifier {} expected {}, but got {}",
-                    mod_str, expected, got
-                )
+                write!(f, "Modifier {mod_str} expected {expected}, but got {got}")
             }
-            ValueError::WrongFieldType {
+            Self::WrongFieldType {
                 field,
                 expected,
                 got,
             } => {
-                write!(f, "Field {} expected {}, but got {}", field, expected, got)
+                write!(f, "Field {field} expected {expected}, but got {got}")
             }
-            ValueError::MissingField { modifier, field } => {
+            Self::MissingField { modifier, field } => {
                 let mod_str = inline_data(&modifier);
                 write!(
                     f,
-                    "Modifier {} tried to modify {}, but no value was found",
-                    mod_str, field,
+                    "Modifier {mod_str} tried to modify {field}, but no value was found",
                 )
             }
-            ValueError::ItemNotFound { selector } => {
+            Self::ItemNotFound { selector } => {
                 let sel_str = inline_data(&selector);
-                write!(f, "Selector {} didn't find anything", sel_str)
+                write!(f, "Selector {sel_str} didn't find anything")
             }
-            ValueError::ExitRequested => {
+            Self::ExitRequested => {
                 write!(f, "Conditions not met, skipping")
             }
-            ValueError::CopyNotFound { field, paths } => {
+            Self::CopyNotFound { field, paths } => {
                 write!(
                     f,
-                    "Tried to copy {}, but no value was found: {:?}",
-                    field, paths
+                    "Tried to copy {field}, but no value was found: {paths:?}",
                 )
             }
-            ValueError::Uncombinable { values } => {
+            Self::Uncombinable { values } => {
                 if values.is_empty() {
                     write!(f, "Got no values to combine")
                 } else {
-                    write!(f, "Can't combine mismatching values: {:?}", values)
+                    write!(f, "Can't combine mismatching values: {values:?}")
                 }
             }
         }
@@ -196,10 +190,9 @@ impl ValueModifier {
     }
     fn append(list: &mut [String], extra: &str, index: Option<&Range>, appending: bool) {
         for i in 0..list.len() {
-            let should_modify = match index {
-                None => true,
-                Some(index) => index.in_range(i, list.len(), OutOfBoundsDecision::Clamp),
-            };
+            let should_modify = index.map_or(true, |index| {
+                index.in_range(i, list.len(), OutOfBoundsDecision::Clamp)
+            });
             if should_modify {
                 if appending {
                     list[i].push_str(extra);
@@ -385,6 +378,6 @@ pub enum TakeModifier {
         min_length: Option<usize>,
     },
 }
-fn default_oob() -> OutOfBoundsDecision {
+const fn default_oob() -> OutOfBoundsDecision {
     OutOfBoundsDecision::Exit
 }

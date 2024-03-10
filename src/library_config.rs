@@ -17,8 +17,7 @@ use crate::{
     metadata::{FinalMetadata, Metadata, MetadataField, MetadataValue, SetValue, BLANK_VALUE},
     modifier::ValueModifier,
     song_config::{
-        AllSetter, DiscSet, OrderingSetter, RawFieldSetter, RawSongConfig, ReferencableOperation,
-        SongConfig,
+        AllSetter, DiscSet, OrderingSetter, RawSongConfig, ReferencableOperation, SongConfig,
     },
     strategy::{FieldSelector, ItemSelector, MetadataOperation, MusicItemType, ValueGetter},
 };
@@ -59,7 +58,7 @@ pub enum RawLibraryReport {
         blanks: bool,
     },
 }
-fn default_false() -> bool {
+const fn default_false() -> bool {
     false
 }
 
@@ -122,7 +121,7 @@ impl LibraryReport {
             }
         }
     }
-    fn load(source: RawLibraryReport, folder: &Path) -> LibraryReport {
+    fn load(source: RawLibraryReport, folder: &Path) -> Self {
         match source {
             RawLibraryReport::Fields {
                 path,
@@ -133,14 +132,14 @@ impl LibraryReport {
                 let file_path = folder.join(path);
                 let map = load_yaml(&file_path).unwrap_or_default();
                 if split {
-                    LibraryReport::SplitFields {
+                    Self::SplitFields {
                         path: file_path,
                         key,
                         include_blanks: blanks,
                         map,
                     }
                 } else {
-                    LibraryReport::MergedFields {
+                    Self::MergedFields {
                         path: file_path,
                         key,
                         include_blanks: blanks,
@@ -156,7 +155,7 @@ impl LibraryReport {
             } => {
                 let file_path = folder.join(path);
                 let map = load_yaml(&file_path).unwrap_or_default();
-                LibraryReport::ItemData {
+                Self::ItemData {
                     path: file_path,
                     values,
                     embedded,
@@ -270,7 +269,7 @@ pub struct LyricsConfig {
 }
 impl LyricsConfig {
     pub fn handle(&self, nice_path: &Path, source: &FinalMetadata, dest: &mut FinalMetadata) {
-        let best = self
+        let top = self
             .priority
             .iter()
             .find_map(|x| x.get(&self.folder, nice_path, source));
@@ -281,7 +280,7 @@ impl LyricsConfig {
                     lyric_type.set(&self.folder, nice_path, dest, None);
                 }
                 LyricsReplaceMode::Replace => {
-                    lyric_type.set(&self.folder, nice_path, dest, best.as_ref());
+                    lyric_type.set(&self.folder, nice_path, dest, top.as_ref());
                 }
             }
         }
@@ -307,8 +306,8 @@ impl LyricsType {
         value: Option<&RichLyrics>,
     ) {
         match self {
-            LyricsType::RichEmbedded => metadata.rich_lyrics = SetValue::Set(value.cloned()),
-            LyricsType::RichFile => {
+            Self::RichEmbedded => metadata.rich_lyrics = SetValue::Set(value.cloned()),
+            Self::RichFile => {
                 let mut path = folder.join(nice_path).to_string_lossy().into_owned();
                 path.push_str(".lrc.json");
                 let path = PathBuf::from(path);
@@ -326,10 +325,10 @@ impl LyricsType {
                     }
                 }
             }
-            LyricsType::SyncedEmbedded => {
+            Self::SyncedEmbedded => {
                 metadata.synced_lyrics = SetValue::Set(value.cloned().map(|x| x.into()))
             }
-            LyricsType::SyncedFile => {
+            Self::SyncedFile => {
                 let mut path = folder.join(nice_path).to_string_lossy().into_owned();
                 path.push_str(".lrc");
                 let path = PathBuf::from(path);
@@ -348,10 +347,10 @@ impl LyricsType {
                     }
                 }
             }
-            LyricsType::SimpleEmbedded => {
+            Self::SimpleEmbedded => {
                 metadata.simple_lyrics = SetValue::Set(value.cloned().map(|x| x.into()))
             }
-            LyricsType::SimpleFile => {
+            Self::SimpleFile => {
                 let mut path = folder.join(nice_path).to_string_lossy().into_owned();
                 path.push_str(".lrc.txt");
                 let path = PathBuf::from(path);
@@ -372,11 +371,11 @@ impl LyricsType {
     }
     fn get(&self, folder: &Path, nice_path: &Path, metadata: &FinalMetadata) -> Option<RichLyrics> {
         match self {
-            LyricsType::RichEmbedded => match &metadata.rich_lyrics {
+            Self::RichEmbedded => match &metadata.rich_lyrics {
                 SetValue::Skip => None,
                 SetValue::Set(val) => val.as_ref().cloned(),
             },
-            LyricsType::RichFile => {
+            Self::RichFile => {
                 let mut path = folder.join(nice_path).to_string_lossy().into_owned();
                 path.push_str(".lrc.json");
                 let path = PathBuf::from(path);
@@ -385,11 +384,11 @@ impl LyricsType {
                 let lyrics: RichLyrics = serde_json::de::from_reader(reader).ok()?;
                 Some(lyrics)
             }
-            LyricsType::SyncedEmbedded => match &metadata.synced_lyrics {
+            Self::SyncedEmbedded => match &metadata.synced_lyrics {
                 SetValue::Skip => None,
                 SetValue::Set(val) => val.as_ref().cloned().map(|x| x.into()),
             },
-            LyricsType::SyncedFile => {
+            Self::SyncedFile => {
                 let mut path = folder.join(nice_path).to_string_lossy().into_owned();
                 path.push_str(".lrc");
                 let path = PathBuf::from(path);
@@ -399,11 +398,11 @@ impl LyricsType {
                     SyncedLyrics::parse(reader.lines().filter_map(|x| x.ok()).collect()).ok()?;
                 Some(lyrics.into())
             }
-            LyricsType::SimpleEmbedded => match &metadata.simple_lyrics {
+            Self::SimpleEmbedded => match &metadata.simple_lyrics {
                 SetValue::Skip => None,
                 SetValue::Set(val) => val.as_ref().cloned().map(|x| x.into()),
             },
-            LyricsType::SimpleFile => {
+            Self::SimpleFile => {
                 let mut path = folder.join(nice_path).to_string_lossy().into_owned();
                 path.push_str(".lrc.txt");
                 let path = PathBuf::from(path);
@@ -682,13 +681,13 @@ impl LibraryConfig {
         match modifier {
             ValueModifier::Prepend { prepend, .. } => self.check_getter(prepend),
             ValueModifier::Append { append, .. } => self.check_getter(append),
-            ValueModifier::InsertBefore { insert, .. } => self.check_getter(insert),
-            ValueModifier::InsertAfter { insert, .. } => self.check_getter(insert),
+            ValueModifier::InsertBefore { insert, .. }
+            | ValueModifier::InsertAfter { insert, .. } => self.check_getter(insert),
             ValueModifier::Join { join } => self.check_getter(join),
-            ValueModifier::Split { .. } => Ok(()),
-            ValueModifier::Regex { .. } => Ok(()),
-            ValueModifier::Replace { .. } => Ok(()),
-            ValueModifier::Take { .. } => Ok(()),
+            ValueModifier::Split { .. }
+            | ValueModifier::Regex { .. }
+            | ValueModifier::Replace { .. }
+            | ValueModifier::Take { .. } => Ok(()),
             ValueModifier::Multiple(list) => {
                 for item in list {
                     self.check_modifier(item)?;
@@ -728,10 +727,10 @@ pub enum LibraryError {
 impl std::fmt::Display for LibraryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LibraryError::MissingNamedStrategy(str) => {
+            Self::MissingNamedStrategy(str) => {
                 write!(f, "No named strategy with name '{str}'")
             }
-            LibraryError::UnlistedCustomField(str) => {
+            Self::UnlistedCustomField(str) => {
                 write!(f, "No field with name '{str}'")
             }
         }
@@ -745,21 +744,18 @@ pub struct DateCache {
 }
 impl DateCache {
     pub fn new(path: Option<PathBuf>) -> Self {
-        match path {
-            None => Self {
+        path.map_or_else(
+            || Self {
                 path: None,
                 cache: HashMap::new(),
                 updated: HashSet::new(),
             },
-            Some(path) => Self {
+            |path| Self {
                 path: Some(path.clone()),
-                cache: match file_stuff::load_yaml(&path) {
-                    Err(_) => HashMap::new(),
-                    Ok(map) => map,
-                },
+                cache: file_stuff::load_yaml(&path).unwrap_or_default(),
                 updated: HashSet::new(),
             },
-        }
+        )
     }
     pub fn mark_updated(&mut self, path: PathBuf) {
         self.updated.insert(path);
@@ -784,12 +780,12 @@ impl DateCache {
         }
     }
     pub fn changed_recently(&self, path: &Path) -> bool {
-        match self.cache.get(path) {
-            None => true,
-            Some(cache_time) => match fs::metadata(path).and_then(|x| x.modified()) {
-                Err(_) => true,
-                Ok(file_time) => *cache_time < std::convert::Into::<DateTime<Utc>>::into(file_time),
-            },
-        }
+        self.cache.get(path).map_or(true, |cache_time| {
+            fs::metadata(path)
+                .and_then(|x| x.modified())
+                .map_or(true, |file_time| {
+                    *cache_time < std::convert::Into::<DateTime<Utc>>::into(file_time)
+                })
+        })
     }
 }

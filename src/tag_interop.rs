@@ -58,7 +58,7 @@ pub fn get_metadata_flac(tag: &metaflac::Tag) -> FinalMetadata {
             }
         }
         if let SetValue::Set(v) = flac_str(comment.get("RICH LYRICS")) {
-            metadata.rich_lyrics = SetValue::Set(v.and_then(|x| serde_json::de::from_str(&x).ok()))
+            metadata.rich_lyrics = SetValue::Set(v.and_then(|x| serde_json::de::from_str(&x).ok()));
         }
     }
     metadata
@@ -190,7 +190,7 @@ fn convert_id3_synced_lyrics(lyrics: &SynchronisedLyrics) -> Vec<SyncedLine> {
             .content
             .iter()
             .map(|(x, y)| SyncedLine {
-                timestamp: std::time::Duration::from_millis(*x as u64),
+                timestamp: std::time::Duration::from_millis(u64::from(*x)),
                 text: y.to_owned(),
             })
             .collect(),
@@ -251,7 +251,7 @@ pub fn set_metadata_id3(tag: &mut id3::Tag, metadata: &FinalMetadata, sep: &str)
             for comment in v {
                 tag.add_frame(id3::frame::Comment {
                     lang: lang.clone(),
-                    description: String::from(""),
+                    description: String::new(),
                     text: comment.to_owned(),
                 });
             }
@@ -312,7 +312,7 @@ pub fn set_metadata_id3(tag: &mut id3::Tag, metadata: &FinalMetadata, sep: &str)
                     SetValue::Skip | SetValue::Set(None) => String::from("XXX"),
                     SetValue::Set(Some(lang)) => lang.to_owned(),
                 },
-                description: String::from(""),
+                description: String::new(),
                 text: text.to_owned(),
             });
         }
@@ -325,7 +325,7 @@ pub fn set_metadata_id3(tag: &mut id3::Tag, metadata: &FinalMetadata, sep: &str)
                     SetValue::Skip | SetValue::Set(None) => String::from("XXX"),
                     SetValue::Set(Some(lang)) => lang.to_owned(),
                 },
-                description: String::from(""),
+                description: String::new(),
                 timestamp_format: frame::TimestampFormat::Ms,
                 content_type: frame::SynchronisedLyricsType::Lyrics,
                 content: text
@@ -379,7 +379,7 @@ fn id3_lyrics(item: Vec<&id3::frame::Lyrics>) -> Option<String> {
     if item.is_empty() {
         None
     } else {
-        Some(item.into_iter().map(|x| x.text.to_owned()).join("\n"))
+        Some(item.into_iter().map(|x| x.text.clone()).join("\n"))
     }
 }
 
@@ -409,8 +409,5 @@ fn flac_str(item: Option<&Vec<String>>) -> SetValue<Option<String>> {
 }
 
 fn flac_list(item: Option<&Vec<String>>) -> SetValue<Vec<String>> {
-    match item {
-        None => SetValue::Skip,
-        Some(list) => SetValue::Set(list.clone()),
-    }
+    item.map_or(SetValue::Skip, |list| SetValue::Set(list.clone()))
 }

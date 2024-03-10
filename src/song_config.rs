@@ -106,7 +106,7 @@ impl SongConfig {
         }
         for setter in &self.set {
             if setter.names.matches(select)
-                && MusicItemType::matches(&nice_path.as_type(), setter.must_be.as_ref())
+                && MusicItemType::matches(nice_path.as_type(), setter.must_be)
             {
                 let more =
                     setter

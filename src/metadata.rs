@@ -54,31 +54,25 @@ impl Serialize for MetadataValue {
         S: serde::Serializer,
     {
         match self {
-            MetadataValue::Number(num) => serializer.serialize_u32(*num),
-            MetadataValue::List(list) if list.len() == 1 => serializer.serialize_str(&list[0]),
-            MetadataValue::List(list) => list.serialize(serializer),
+            Self::Number(num) => serializer.serialize_u32(*num),
+            Self::List(list) if list.len() == 1 => serializer.serialize_str(&list[0]),
+            Self::List(list) => list.serialize(serializer),
             _ => serializer.serialize_unit(),
         }
     }
 }
 impl MetadataValue {
-    pub fn blank() -> MetadataValue {
-        MetadataValue::List(vec![])
+    pub const fn blank() -> Self {
+        Self::List(vec![])
     }
-    pub fn string(single: String) -> MetadataValue {
-        MetadataValue::List(vec![single])
+    pub fn string(single: String) -> Self {
+        Self::List(vec![single])
     }
-    pub fn option(value: Option<String>) -> MetadataValue {
-        match value {
-            None => Self::blank(),
-            Some(val) => Self::string(val),
-        }
+    pub fn option(value: Option<String>) -> Self {
+        value.map_or_else(Self::blank, Self::string)
     }
-    pub fn option_num(value: Option<u32>) -> MetadataValue {
-        match value {
-            None => Self::blank(),
-            Some(val) => Self::Number(val),
-        }
+    pub fn option_num(value: Option<u32>) -> Self {
+        value.map_or_else(Self::blank, Self::Number)
     }
     pub fn as_string(&self) -> Option<&str> {
         match self {
@@ -137,17 +131,17 @@ impl FinalMetadata {
         let mut convert_string = |field: MetadataField| match metadata.get(&field) {
             None => SetValue::Skip,
             Some(MetadataValue::List(list)) if list.is_empty() => SetValue::Set(None),
-            Some(value) => match value.as_string() {
-                Some(val) => SetValue::Set(Some(val.to_owned())),
-                None => {
+            Some(value) => value.as_string().map_or_else(
+                || {
                     errors.push(ValueError::WrongFieldType {
                         field,
                         got: value.clone(),
                         expected: "single string",
                     });
                     SetValue::Skip
-                }
-            },
+                },
+                |val| SetValue::Set(Some(val.to_owned())),
+            ),
         };
         let title = convert_string(MetadataField::Title);
         let album = convert_string(MetadataField::Album);
@@ -194,7 +188,7 @@ impl FinalMetadata {
         let disc_total = convert_num(MetadataField::DiscTotal);
         let year = convert_num(MetadataField::Year);
         Results {
-            result: FinalMetadata {
+            result: Self {
                 title,
                 album,
                 performers,
@@ -308,23 +302,23 @@ pub enum MetadataField {
 impl std::fmt::Display for MetadataField {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            MetadataField::Title => write!(f, "Title"),
-            MetadataField::Album => write!(f, "Album"),
-            MetadataField::Performers => write!(f, "Performers"),
-            MetadataField::AlbumArtist => write!(f, "Album Artist"),
-            MetadataField::Composers => write!(f, "Composers"),
-            MetadataField::Arranger => write!(f, "Arranger"),
-            MetadataField::Comment => write!(f, "Comment"),
-            MetadataField::Track => write!(f, "Track"),
-            MetadataField::TrackTotal => write!(f, "Track Total"),
-            MetadataField::Disc => write!(f, "Disc"),
-            MetadataField::DiscTotal => write!(f, "Disc Total"),
-            MetadataField::Year => write!(f, "Year"),
-            MetadataField::Language => write!(f, "Language"),
-            MetadataField::Genres => write!(f, "Genres"),
-            MetadataField::Art => write!(f, "Art"),
-            MetadataField::SimpleLyrics => write!(f, "Simple Lyrics"),
-            MetadataField::Custom(val) => write!(f, "Custom ({val})"),
+            Self::Title => write!(f, "Title"),
+            Self::Album => write!(f, "Album"),
+            Self::Performers => write!(f, "Performers"),
+            Self::AlbumArtist => write!(f, "Album Artist"),
+            Self::Composers => write!(f, "Composers"),
+            Self::Arranger => write!(f, "Arranger"),
+            Self::Comment => write!(f, "Comment"),
+            Self::Track => write!(f, "Track"),
+            Self::TrackTotal => write!(f, "Track Total"),
+            Self::Disc => write!(f, "Disc"),
+            Self::DiscTotal => write!(f, "Disc Total"),
+            Self::Year => write!(f, "Year"),
+            Self::Language => write!(f, "Language"),
+            Self::Genres => write!(f, "Genres"),
+            Self::Art => write!(f, "Art"),
+            Self::SimpleLyrics => write!(f, "Simple Lyrics"),
+            Self::Custom(val) => write!(f, "Custom ({val})"),
         }
     }
 }

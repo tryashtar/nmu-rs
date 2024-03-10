@@ -122,10 +122,10 @@ impl<'de> Deserialize<'de> for Range {
 }
 
 impl Range {
-    pub fn new(start: i32, stop: i32) -> Self {
+    pub const fn new(start: i32, stop: i32) -> Self {
         Self { start, stop }
     }
-    pub fn from_start(start: i32) -> Self {
+    pub const fn from_start(start: i32) -> Self {
         Self { start, stop: -1 }
     }
 }
@@ -146,10 +146,8 @@ pub enum OutOfBoundsDecision {
 }
 impl Range {
     pub fn in_range(&self, index: usize, length: usize, decision: OutOfBoundsDecision) -> bool {
-        match self.to_range(length, decision) {
-            None => false,
-            Some(range) => range.contains(&index),
-        }
+        self.to_range(length, decision)
+            .map_or(false, |range| range.contains(&index))
     }
     pub fn slice<'a, T>(&self, items: &'a [T], decision: OutOfBoundsDecision) -> Option<&'a [T]> {
         self.to_range(items.len(), decision)
@@ -192,7 +190,7 @@ pub enum ItemPath {
     Folder(PathBuf),
 }
 impl ItemPath {
-    pub fn as_type(&self) -> MusicItemType {
+    pub const fn as_type(&self) -> MusicItemType {
         match self {
             Self::Song(_) => MusicItemType::Song,
             Self::Folder(_) => MusicItemType::Folder,

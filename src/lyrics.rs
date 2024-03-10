@@ -22,7 +22,7 @@ impl SyncedLine {
         }
         let close = line.find(']').ok_or(ParseError::MissingColon)?;
         let timestamp = parse_duration(&line[1..close])?;
-        Ok(SyncedLine {
+        Ok(Self {
             timestamp,
             text: line[close + 1..].to_owned(),
         })
@@ -57,7 +57,7 @@ impl From<String> for RichLyrics {
 }
 impl From<RichLyrics> for SyncedLyrics {
     fn from(value: RichLyrics) -> Self {
-        SyncedLyrics {
+        Self {
             lines: value
                 .channels
                 .into_iter()
@@ -121,14 +121,16 @@ fn parse_duration(string: &str) -> Result<std::time::Duration, ParseError> {
     if colon_index == 0 {
         return Err(ParseError::MissingColon);
     }
-    let first_number = string[..colon_index]
-        .parse::<u8>()
-        .map_err(ParseError::Int)? as u64;
+    let first_number = u64::from(
+        string[..colon_index]
+            .parse::<u8>()
+            .map_err(ParseError::Int)?,
+    );
     let remaining = &string[colon_index + 1..];
     if remaining.len() < 2 {
         return Err(ParseError::WrongLength);
     }
-    let second_number = remaining[..2].parse::<u8>().map_err(ParseError::Int)? as u64;
+    let second_number = u64::from(remaining[..2].parse::<u8>().map_err(ParseError::Int)?);
     let remaining = &remaining[2..];
     match remaining.chars().next() {
         None => Ok(std::time::Duration::from_secs(
@@ -137,7 +139,7 @@ fn parse_duration(string: &str) -> Result<std::time::Duration, ParseError> {
         Some('.') => {
             let fraction = remaining.parse::<f64>().map_err(ParseError::Float)?;
             Ok(std::time::Duration::from_secs_f64(
-                (first_number as f64 * 60.0) + (second_number as f64 + fraction),
+                (first_number as f64).mul_add(60.0, second_number as f64 + fraction),
             ))
         }
         Some(':') => {
@@ -145,7 +147,7 @@ fn parse_duration(string: &str) -> Result<std::time::Duration, ParseError> {
             if remaining.len() < 2 {
                 return Err(ParseError::WrongLength);
             }
-            let third_number = remaining[..2].parse::<u8>().map_err(ParseError::Int)? as u64;
+            let third_number = u64::from(remaining[..2].parse::<u8>().map_err(ParseError::Int)?);
             let remaining = &remaining[2..];
             match remaining.chars().next() {
                 None => Ok(std::time::Duration::from_secs(
@@ -154,8 +156,7 @@ fn parse_duration(string: &str) -> Result<std::time::Duration, ParseError> {
                 Some('.') => {
                     let fraction = remaining.parse::<f64>().map_err(ParseError::Float)?;
                     Ok(std::time::Duration::from_secs_f64(
-                        (first_number as f64 * 60.0 * 60.0)
-                            + (second_number as f64 * 60.0)
+                        (first_number as f64 * 60.0).mul_add(60.0, second_number as f64 * 60.0)
                             + (third_number as f64 + fraction),
                     ))
                 }

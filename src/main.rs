@@ -1,6 +1,4 @@
-use art::GetArtResults;
 use color_print::cformat;
-use file_stuff::ConfigError;
 use image::DynamicImage;
 use itertools::Itertools;
 use std::{
@@ -11,12 +9,11 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
 };
-use strategy::ApplyReport;
 use walkdir::DirEntry;
 
 use crate::{
-    art::ArtError,
-    file_stuff::YamlError,
+    art::{ArtError, GetArtResults},
+    file_stuff::{ConfigError, YamlError},
     library_config::LibraryReport,
     library_config::{LibraryConfig, RawLibraryConfig},
     metadata::{FinalMetadata, Metadata, MetadataField, MetadataValue, SetValue},
@@ -253,10 +250,14 @@ fn do_scan(library_config: &mut LibraryConfig) {
     }
 }
 
-struct GetMetadataResults {
-    metadata: Option<Metadata>,
-    reports: Vec<(PathBuf, ApplyReport)>,
-    loaded: Vec<ConfigLoadResults>,
+pub struct GetMetadataResults {
+    metadata: Metadata,
+    reports: Vec<SourcedReport>,
+}
+
+pub struct SourcedReport {
+    full_path: PathBuf,
+    errors: Vec<ValueError>,
 }
 
 pub struct ConfigLoadResults {
@@ -265,64 +266,97 @@ pub struct ConfigLoadResults {
     full_path: PathBuf,
 }
 
-fn get_metadata(
+pub struct LoadedConfig {
+    config: Rc<SongConfig>,
+    nice_folder: PathBuf,
+    full_path: PathBuf,
+}
+
+struct GetConfigsResults {
+    result: Result<Vec<LoadedConfig>, Rc<ConfigError>>,
+    loaded: Vec<ConfigLoadResults>,
+}
+
+fn get_relevant_setters(
     library_config: &LibraryConfig,
     nice_path: &ItemPath,
     config_cache: &mut ConfigCache,
+) -> GetConfigsResults {
+    let mut newly_loaded = vec![];
+    let mut results = vec![];
+    for (config_path, nice_folder) in relevant_config_paths(nice_path, library_config) {
+        let loaded = config_cache
+            .entry(config_path.clone())
+            .or_insert_with_key(|x| {
+                let config = load_config(x, nice_folder, library_config)
+                    .map(Rc::new)
+                    .map_err(Rc::new);
+                newly_loaded.push(ConfigLoadResults {
+                    result: config.clone(),
+                    full_path: x.clone(),
+                    nice_folder: nice_folder.to_owned(),
+                });
+                config
+            });
+        match loaded {
+            Ok(config) => {
+                results.push(LoadedConfig {
+                    config: config.clone(),
+                    full_path: config_path,
+                    nice_folder: nice_folder.to_owned(),
+                });
+            }
+            Err(err) => {
+                if !is_not_found(err) {
+                    return GetConfigsResults {
+                        loaded: newly_loaded,
+                        result: Err(err.clone()),
+                    };
+                }
+            }
+        }
+    }
+    GetConfigsResults {
+        loaded: newly_loaded,
+        result: Ok(results),
+    }
+}
+
+pub fn get_metadata(
+    nice_path: &ItemPath,
+    configs: &[LoadedConfig],
+    library_config: &LibraryConfig,
     copy_cache: &mut CopyCache,
 ) -> GetMetadataResults {
     let mut metadata;
     let mut config_reports;
-    let mut loaded = vec![];
     loop {
-        metadata = Some(Metadata::new());
+        metadata = Metadata::new();
         config_reports = vec![];
-        for (config_path, nice_folder) in relevant_config_paths(nice_path, library_config) {
-            let loaded = config_cache
-                .entry(config_path.clone())
-                .or_insert_with_key(|x| {
-                    let config = load_config(x, nice_folder, library_config)
-                        .map(Rc::new)
-                        .map_err(Rc::new);
-                    loaded.push(ConfigLoadResults {
-                        result: config.clone(),
-                        full_path: x.clone(),
-                        nice_folder: nice_folder.to_owned(),
-                    });
-                    config
-                });
-            match loaded {
-                Ok(config) => {
-                    if let Some(metadata) = &mut metadata {
-                        let select_path =
-                            nice_path.strip_prefix(nice_folder).unwrap_or(nice_folder);
-                        let report = config.apply(
-                            nice_path,
-                            select_path,
-                            metadata,
-                            library_config,
-                            copy_cache,
-                        );
-                        config_reports.push((config_path, report));
-                    }
-                }
-                Err(err) => {
-                    if !is_not_found(err) {
-                        metadata = None;
-                    }
-                }
-            }
+        for config in configs {
+            let select_path = nice_path
+                .strip_prefix(&config.nice_folder)
+                .unwrap_or(&config.nice_folder);
+            let report = config.config.apply(
+                nice_path,
+                select_path,
+                &mut metadata,
+                library_config,
+                copy_cache,
+            );
+            config_reports.push(SourcedReport {
+                full_path: config.full_path.clone(),
+                errors: report.errors,
+            });
         }
         let mut redo = false;
-        for error in config_reports.iter().flat_map(|x| &x.1.errors) {
+        for error in config_reports.iter().flat_map(|x| &x.errors) {
             if let ValueError::CopyNotFound { field, paths } = error {
                 for path in paths {
                     if !copy_cache.contains_key(path) {
                         redo = true;
                         if (nice_path as &Path) == path.as_path() {
-                            if let Some(metadata) = &metadata {
-                                copy_cache.insert(path.clone(), metadata.clone());
-                            }
+                            copy_cache.insert(path.clone(), metadata.clone());
                         } else {
                             copy_cache.insert(path.clone(), HashMap::new());
                         }
@@ -337,7 +371,6 @@ fn get_metadata(
     GetMetadataResults {
         metadata,
         reports: config_reports,
-        loaded,
     }
 }
 
@@ -348,8 +381,8 @@ fn process_path(
     config_cache: &mut ConfigCache,
     copy_cache: &mut CopyCache,
 ) -> Option<Metadata> {
-    let mut results = get_metadata(library_config, nice_path, config_cache, copy_cache);
-    for load in results.loaded {
+    let configs = get_relevant_setters(library_config, nice_path, config_cache);
+    for load in configs.loaded {
         handle_config_loaded(
             load.result.as_deref().map_err(|x| x.deref()),
             &load.full_path,
@@ -357,9 +390,10 @@ fn process_path(
             library_config,
         );
     }
-    if let Some(metadata) = &mut results.metadata {
+    if let Ok(configs) = configs.result {
+        let mut results = get_metadata(nice_path, &configs, library_config, copy_cache);
         if let Some(repo) = &mut library_config.art_repo {
-            if let Some(MetadataValue::List(art)) = metadata.get_mut(&MetadataField::Art) {
+            if let Some(MetadataValue::List(art)) = results.metadata.get_mut(&MetadataField::Art) {
                 let result = repo.get_image(art);
                 repo.used_templates.add(full_path, &result);
                 handle_art_loaded(&result, library_config);
@@ -373,22 +407,26 @@ fn process_path(
             }
         }
         println!("{}", nice_path.display());
-        for (path, mut report) in results.reports {
+        for mut report in results.reports {
             report
                 .errors
                 .retain(|x| !matches!(x, ValueError::ExitRequested));
             if !report.errors.is_empty() {
                 eprintln!(
                     "{}",
-                    cformat!("⚠️ <yellow>Errors applying config\n{}</>", path.display())
+                    cformat!(
+                        "⚠️ <yellow>Errors applying config\n{}</>",
+                        report.full_path.display()
+                    )
                 );
                 for error in report.errors {
                     eprintln!("{}", cformat!("\t<yellow>{}</>", error));
                 }
             }
         }
+        return Some(results.metadata);
     }
-    results.metadata
+    None
 }
 
 fn add_to_song(
@@ -447,7 +485,7 @@ fn add_to_song(
             eprintln!("{}", cformat!("❌ <red>Error reading flac tag\n{}</>", err));
         }
     }
-    for report in config.reports.iter_mut() {
+    for report in &mut config.reports {
         report.record(
             nice_path,
             &metadata,
@@ -516,7 +554,7 @@ fn handle_art_loaded(result: &GetArtResults, library_config: &mut LibraryConfig)
                     Ok(_) => {
                         library_config
                             .date_cache
-                            .mark_updated(load.full_path.to_owned());
+                            .mark_updated(load.full_path.clone());
                     }
                 }
             }
@@ -636,7 +674,7 @@ fn handle_config_loaded(
                     )
                 );
                 for warning in warnings {
-                    eprintln!("{}", warning);
+                    eprintln!("{warning}");
                 }
             }
         }
@@ -730,8 +768,7 @@ fn is_hidden(entry: &DirEntry) -> bool {
     entry
         .file_name()
         .to_str()
-        .map(|s| s.starts_with('.'))
-        .unwrap_or(false)
+        .is_some_and(|s| s.starts_with('.'))
 }
 
 fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {

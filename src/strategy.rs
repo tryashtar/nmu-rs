@@ -50,7 +50,7 @@ pub struct ApplyReport {
     pub errors: Vec<ValueError>,
 }
 impl ApplyReport {
-    pub fn merge(&mut self, mut other: ApplyReport) {
+    pub fn merge(&mut self, mut other: Self) {
         self.errors.append(&mut other.errors);
     }
 }
@@ -195,7 +195,7 @@ impl ItemSelector {
                 if *recursive {
                     true
                 } else {
-                    check_path.components().take(2).collect::<Vec<_>>().len() == 1
+                    check_path.components().take(2).count() == 1
                 }
             }
             Self::This => check_path.as_os_str().is_empty(),
@@ -254,13 +254,10 @@ pub enum PathSegment {
 }
 impl PathSegment {
     pub fn matches(&self, component: &OsStr) -> bool {
-        match component.to_str() {
-            None => false,
-            Some(str) => match self {
-                Self::Literal(literal) => str == literal,
-                Self::Regex { regex } => regex.is_match(str),
-            },
-        }
+        component.to_str().map_or(false, |str| match self {
+            Self::Literal(literal) => str == literal,
+            Self::Regex { regex } => regex.is_match(str),
+        })
     }
 }
 
@@ -326,10 +323,10 @@ impl LocalItemSelector {
             Self::This => vec![start.to_owned()],
             Self::DrillUp { up } => {
                 let ancestors = start.ancestors().collect::<Vec<_>>();
-                match up.slice(ancestors.as_slice(), OutOfBoundsDecision::Clamp) {
-                    None => vec![],
-                    Some(slice) => slice.iter().map(|x| (*x).to_owned()).collect(),
-                }
+                up.slice(ancestors.as_slice(), OutOfBoundsDecision::Clamp)
+                    .map_or_else(Vec::new, |slice| {
+                        slice.iter().map(|x| (*x).to_owned()).collect()
+                    })
             }
             Self::DrillDown { must_be, from_root } => {
                 let ancestors = start.ancestors().collect::<Vec<_>>();
@@ -344,26 +341,27 @@ impl LocalItemSelector {
                         } else {
                             MusicItemType::Folder
                         };
-                        if MusicItemType::matches(&item_type, must_be.as_ref()) {
+                        if MusicItemType::matches(item_type, *must_be) {
                             Some(x.to_owned())
                         } else {
                             None
                         }
                     })
                     .collect::<Vec<_>>();
-                match from_root.slice(ancestors.as_slice(), OutOfBoundsDecision::Clamp) {
-                    None => vec![],
-                    Some(slice) => slice
-                        .iter()
-                        .filter_map(|x| x.as_ref())
-                        .map(|x| x.to_owned())
-                        .collect(),
-                }
+                from_root
+                    .slice(ancestors.as_slice(), OutOfBoundsDecision::Clamp)
+                    .map_or_else(Vec::new, |slice| {
+                        slice
+                            .iter()
+                            .filter_map(|x| x.as_ref())
+                            .map(|x| x.to_owned())
+                            .collect()
+                    })
             }
             Self::Selector { selector, must_be } => {
                 file_stuff::find_matches(selector, start, config)
                     .into_iter()
-                    .filter(|x| MusicItemType::matches(&x.as_type(), must_be.as_ref()))
+                    .filter(|x| MusicItemType::matches(x.as_type(), *must_be))
                     .map(|x| x.into())
                     .collect()
             }
@@ -378,11 +376,8 @@ pub enum MusicItemType {
     Folder,
 }
 impl MusicItemType {
-    pub fn matches(check: &MusicItemType, against: Option<&MusicItemType>) -> bool {
-        match against {
-            None => true,
-            Some(required) => check == required,
-        }
+    pub fn matches(self, against: Option<Self>) -> bool {
+        against.map_or(true, |required| self == required)
     }
 }
 
@@ -457,7 +452,7 @@ pub enum WarnBehavior {
     Warn,
     Exit,
 }
-fn default_missing() -> WarnBehavior {
+const fn default_missing() -> WarnBehavior {
     WarnBehavior::Warn
 }
 impl ValueGetter {
@@ -556,8 +551,7 @@ pub enum FieldValueGetter {
 impl FieldValueGetter {
     fn file_name(path: &Path) -> Cow<str> {
         path.file_name()
-            .map(|x| x.to_string_lossy())
-            .unwrap_or_else(|| path.to_string_lossy())
+            .map_or_else(|| path.to_string_lossy(), |x| x.to_string_lossy())
     }
     fn clean<'a>(name: Cow<'a, str>, config: &LibraryConfig) -> Cow<'a, str> {
         let mut result = name;
@@ -566,7 +560,7 @@ impl FieldValueGetter {
         }
         result
     }
-    fn get<'a>(&self, path: &'a Path, config: &LibraryConfig) -> Cow<'a, str> {
+    fn get<'a>(self, path: &'a Path, config: &LibraryConfig) -> Cow<'a, str> {
         match self {
             Self::CleanName => Self::clean(Self::file_name(path), config),
             Self::FileName => Self::file_name(path),
@@ -574,6 +568,6 @@ impl FieldValueGetter {
         }
     }
 }
-fn default_value() -> FieldValueGetter {
+const fn default_value() -> FieldValueGetter {
     FieldValueGetter::CleanName
 }

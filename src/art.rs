@@ -60,10 +60,10 @@ where
         where
             E: serde::de::Error,
         {
-            if !v {
-                Ok(())
-            } else {
+            if v {
                 Err(serde::de::Error::custom("invalid"))
+            } else {
+                Ok(())
             }
         }
     }
@@ -206,10 +206,10 @@ impl FinalArtSettings {
                 image::imageops::overlay(
                     &mut field,
                     &image,
-                    ((width - current_width) / 2) as i64,
-                    ((height - current_height) / 2) as i64,
+                    i64::from((width - current_width) / 2),
+                    i64::from((height - current_height) / 2),
                 );
-                image = field.into()
+                image = field.into();
             }
         }
         if let Some(buffer) = self.buffer {
@@ -218,8 +218,13 @@ impl FinalArtSettings {
                 width + buffer[0] + buffer[2],
                 height + buffer[1] + buffer[3],
             );
-            image::imageops::overlay(&mut field, &image, buffer[0] as i64, buffer[1] as i64);
-            image = field.into()
+            image::imageops::overlay(
+                &mut field,
+                &image,
+                i64::from(buffer[0]),
+                i64::from(buffer[1]),
+            );
+            image = field.into();
         } else if self.background.is_some() {
             let (width, height) = image.dimensions();
             let mut field = self.empty_field(width, height);
@@ -228,10 +233,10 @@ impl FinalArtSettings {
         image
     }
     fn empty_field(&self, width: u32, height: u32) -> image::RgbaImage {
-        match self.background {
-            None => image::RgbaImage::new(width, height),
-            Some(bg) => image::RgbaImage::from_pixel(width, height, image::Rgba::<u8>(bg)),
-        }
+        self.background.map_or_else(
+            || image::RgbaImage::new(width, height),
+            |bg| image::RgbaImage::from_pixel(width, height, image::Rgba::<u8>(bg)),
+        )
     }
     fn bounding_rectangle(image: &DynamicImage) -> (u32, u32, u32, u32) {
         let (mut left, mut top) = image.dimensions();
@@ -497,7 +502,7 @@ impl ArtRepo {
             ) {
                 for file in read.filter_map(|x| x.ok()) {
                     let path = file.path();
-                    if path.file_stem().map(|x| x == name).unwrap_or(false)
+                    if path.file_stem().is_some_and(|x| x == name)
                         && file_stuff::match_extension(&path, &self.image_extensions)
                     {
                         return Some(path);
@@ -560,7 +565,7 @@ impl ArtRepo {
         }
         GetSettingsResults {
             newly_loaded,
-            result: settings.map(|x| x.finalize()),
+            result: settings.map(ArtSettings::finalize),
         }
     }
     fn load_new_config(&self, full_path: &Path) -> Result<ArtConfig, ConfigError> {
