@@ -11,7 +11,6 @@ use crate::{
     metadata::{Metadata, MetadataField, MetadataValue},
     strategy::{ApplyReport, ItemSelector, MetadataOperation, MusicItemType, ValueGetter},
     util::ItemPath,
-    CopyCache,
 };
 
 #[derive(Deserialize, Serialize)]
@@ -77,7 +76,6 @@ impl SongConfig {
         select: &Path,
         metadata: &mut Metadata,
         library_config: &LibraryConfig,
-        copy_cache: &CopyCache,
     ) -> ApplyReport {
         let mut report = ApplyReport { errors: vec![] };
         if let Some(order) = &self.order {
@@ -108,10 +106,9 @@ impl SongConfig {
             if setter.names.matches(select)
                 && MusicItemType::matches(nice_path.as_type(), setter.must_be)
             {
-                let more =
-                    setter
-                        .set
-                        .apply(metadata, nice_path.as_ref(), library_config, copy_cache);
+                let more = setter
+                    .set
+                    .apply(metadata, nice_path.as_ref(), library_config);
                 report.merge(more);
             }
         }

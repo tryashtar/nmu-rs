@@ -12,7 +12,7 @@ use thiserror::Error;
 
 use crate::{
     art::{ArtRepo, RawArtRepo},
-    file_stuff::{self, load_yaml, YamlError},
+    file_stuff::{self, YamlError},
     lyrics::{RichLyrics, SyncedLyrics},
     metadata::{FinalMetadata, Metadata, MetadataField, MetadataValue, SetValue, BLANK_VALUE},
     modifier::ValueModifier,
@@ -130,7 +130,7 @@ impl LibraryReport {
                 blanks,
             } => {
                 let file_path = folder.join(path);
-                let map = load_yaml(&file_path).unwrap_or_default();
+                let map = file_stuff::load_yaml(&file_path).unwrap_or_default();
                 if split {
                     Self::SplitFields {
                         path: file_path,
@@ -154,7 +154,7 @@ impl LibraryReport {
                 blanks,
             } => {
                 let file_path = folder.join(path);
-                let map = load_yaml(&file_path).unwrap_or_default();
+                let map = file_stuff::load_yaml(&file_path).unwrap_or_default();
                 Self::ItemData {
                     path: file_path,
                     values,

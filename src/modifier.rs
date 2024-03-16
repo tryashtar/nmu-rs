@@ -1,17 +1,13 @@
-use std::{
-    path::{Path, PathBuf},
-    rc::Rc,
-};
+use std::{path::Path, rc::Rc};
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     library_config::LibraryConfig,
-    metadata::{MetadataField, MetadataValue, RegexWrap},
+    metadata::{Metadata, MetadataField, MetadataValue, RegexWrap},
     strategy::{LocalItemSelector, ValueGetter},
     util::{OutOfBoundsDecision, Range},
-    CopyCache,
 };
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -62,7 +58,6 @@ pub enum ValueError {
     ExitRequested,
     CopyNotFound {
         field: MetadataField,
-        paths: Vec<PathBuf>,
     },
     UnexpectedType {
         modifier: Rc<ValueModifier>,
@@ -123,11 +118,8 @@ impl std::fmt::Display for ValueError {
             Self::ExitRequested => {
                 write!(f, "Conditions not met, skipping")
             }
-            Self::CopyNotFound { field, paths } => {
-                write!(
-                    f,
-                    "Tried to copy {field}, but no value was found: {paths:?}",
-                )
+            Self::CopyNotFound { field } => {
+                write!(f, "Tried to copy {field}, but no value was found",)
             }
             Self::Uncombinable { values } => {
                 if values.is_empty() {
@@ -161,16 +153,16 @@ impl ValueModifier {
     }
     fn checked_append(
         self: &Rc<Self>,
+        copy_source: &Metadata,
         value: MetadataValue,
         append: &ValueGetter,
         path: &Path,
         config: &LibraryConfig,
         index: Option<&Range>,
         appending: bool,
-        copy_cache: &CopyCache,
     ) -> Result<MetadataValue, ValueError> {
         if let MetadataValue::List(mut list) = value {
-            let extra = append.get(path, config, copy_cache)?;
+            let extra = append.get(copy_source, path, config)?;
             if let Some(str) = extra.as_string() {
                 Self::append(&mut list, str, index, appending);
                 return Ok(MetadataValue::List(list));
@@ -204,6 +196,7 @@ impl ValueModifier {
     }
     fn checked_insert(
         self: &Rc<Self>,
+        copy_source: &Metadata,
         value: MetadataValue,
         insert: &ValueGetter,
         point: &Range,
@@ -211,9 +204,8 @@ impl ValueModifier {
         add: usize,
         path: &Path,
         config: &LibraryConfig,
-        copy_cache: &CopyCache,
     ) -> Result<MetadataValue, ValueError> {
-        if let MetadataValue::List(val) = insert.get(path, config, copy_cache)? {
+        if let MetadataValue::List(val) = insert.get(copy_source, path, config)? {
             if let MetadataValue::List(mut list) = value {
                 return match Range::wrap_both(point, list.len(), out_of_bounds) {
                     None => Err(ValueError::ExitRequested),
@@ -233,15 +225,15 @@ impl ValueModifier {
     }
     pub fn modify(
         self: &Rc<Self>,
+        copy_source: &Metadata,
         mut value: MetadataValue,
         path: &Path,
         config: &LibraryConfig,
-        copy_cache: &CopyCache,
     ) -> Result<MetadataValue, ValueError> {
         match Rc::as_ref(self) {
             Self::Multiple(items) => {
                 for item in items {
-                    value = item.modify(value, path, config, copy_cache)?;
+                    value = item.modify(copy_source, value, path, config)?;
                 }
                 Ok(value)
             }
@@ -275,6 +267,7 @@ impl ValueModifier {
                 before,
                 out_of_bounds,
             } => self.checked_insert(
+                copy_source,
                 value,
                 insert,
                 before,
@@ -282,13 +275,13 @@ impl ValueModifier {
                 0,
                 path,
                 config,
-                copy_cache,
             ),
             Self::InsertAfter {
                 insert,
                 after,
                 out_of_bounds,
             } => self.checked_insert(
+                copy_source,
                 value,
                 insert,
                 after,
@@ -296,7 +289,6 @@ impl ValueModifier {
                 1,
                 path,
                 config,
-                copy_cache,
             ),
             Self::Take { take } => {
                 if let MetadataValue::List(list) = value {
@@ -318,25 +310,25 @@ impl ValueModifier {
                 })
             }
             Self::Append { append, index } => self.checked_append(
+                copy_source,
                 value,
                 append,
                 path,
                 config,
                 index.as_ref(),
                 true,
-                copy_cache,
             ),
             Self::Prepend { prepend, index } => self.checked_append(
+                copy_source,
                 value,
                 prepend,
                 path,
                 config,
                 index.as_ref(),
                 false,
-                copy_cache,
             ),
             Self::Join { join } => {
-                let extra = join.get(path, config, copy_cache)?;
+                let extra = join.get(copy_source, path, config)?;
                 if let Some(str) = extra.as_string() {
                     if let MetadataValue::List(list) = value {
                         return Ok(MetadataValue::string(list.join(str)));

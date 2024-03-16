@@ -16,7 +16,6 @@ use crate::{
     metadata::{Metadata, MetadataField, MetadataValue},
     modifier::{ValueError, ValueModifier},
     util::{OutOfBoundsDecision, Range},
-    CopyCache,
 };
 
 #[derive(Deserialize, Serialize)]
@@ -60,13 +59,12 @@ impl MetadataOperation {
         metadata: &mut Metadata,
         nice_path: &Path,
         config: &LibraryConfig,
-        copy_cache: &CopyCache,
     ) -> ApplyReport {
         let mut report = ApplyReport { errors: vec![] };
         match self {
             Self::Many(items) => {
                 for item in items {
-                    let more = item.apply(metadata, nice_path, config, copy_cache);
+                    let more = item.apply(metadata, nice_path, config);
                     report.merge(more);
                 }
             }
@@ -81,7 +79,7 @@ impl MetadataOperation {
             Self::Keep { keep } => {
                 metadata.retain(|k, _| !keep.is_match(k));
             }
-            Self::Shared { fields, set } => match set.get(nice_path, config, copy_cache) {
+            Self::Shared { fields, set } => match set.get(metadata, nice_path, config) {
                 Ok(value) => {
                     let builtin = MetadataField::iter().collect::<Vec<_>>();
                     for field in config.custom_fields.iter().chain(builtin.iter()) {
@@ -99,7 +97,7 @@ impl MetadataOperation {
                 for field in config.custom_fields.iter().chain(builtin.iter()) {
                     if fields.is_match(field) {
                         if let Some(existing) = metadata.get(field) {
-                            match modify.modify(existing.clone(), nice_path, config, copy_cache) {
+                            match modify.modify(metadata, existing.clone(), nice_path, config) {
                                 Ok(modified) => {
                                     metadata.insert(field.clone(), modified);
                                 }
@@ -118,7 +116,7 @@ impl MetadataOperation {
             }
             Self::Set(set) => {
                 for (field, value) in set {
-                    match value.get(nice_path, config, copy_cache) {
+                    match value.get(metadata, nice_path, config) {
                         Ok(value) => {
                             metadata.insert(field.clone(), value);
                         }
@@ -128,10 +126,10 @@ impl MetadataOperation {
                     }
                 }
             }
-            Self::Context { source, modify } => match source.get(nice_path, config, copy_cache) {
+            Self::Context { source, modify } => match source.get(metadata, nice_path, config) {
                 Ok(value) => {
                     for (field, modifier) in modify {
-                        match modifier.modify(value.clone(), nice_path, config, copy_cache) {
+                        match modifier.modify(metadata, value.clone(), nice_path, config) {
                             Ok(modified) => {
                                 metadata.insert(field.clone(), modified);
                             }
@@ -148,7 +146,7 @@ impl MetadataOperation {
             Self::Modify { modify } => {
                 for (field, modifier) in modify {
                     if let Some(existing) = metadata.get(field) {
-                        match modifier.modify(existing.clone(), nice_path, config, copy_cache) {
+                        match modifier.modify(metadata, existing.clone(), nice_path, config) {
                             Ok(modified) => {
                                 metadata.insert(field.clone(), modified);
                             }
@@ -431,7 +429,6 @@ impl FieldSelector {
 pub enum ValueGetter {
     Direct(MetadataValue),
     Copy {
-        from: Rc<LocalItemSelector>,
         copy: MetadataField,
         #[serde(skip_serializing_if = "Option::is_none")]
         modify: Option<Rc<ValueModifier>>,
@@ -458,9 +455,9 @@ const fn default_missing() -> WarnBehavior {
 impl ValueGetter {
     pub fn get(
         &self,
-        path: &Path,
+        copy_source: &Metadata,
+        nice_path: &Path,
         config: &LibraryConfig,
-        copy_cache: &CopyCache,
     ) -> Result<MetadataValue, ValueError> {
         match self {
             Self::Direct(value) => Ok(value.clone()),
@@ -470,7 +467,7 @@ impl ValueGetter {
                 if_missing,
                 modify,
             } => {
-                let items = from.get(path, config);
+                let items = from.get(nice_path, config);
                 if items.is_empty() {
                     return match if_missing {
                         WarnBehavior::Warn => Err(ValueError::ItemNotFound {
@@ -487,55 +484,20 @@ impl ValueGetter {
                 );
                 match modify {
                     None => Ok(result),
-                    Some(modify) => modify.modify(result, path, config, copy_cache),
+                    Some(modify) => modify.modify(copy_source, result, nice_path, config),
                 }
             }
-            Self::Copy { from, copy, modify } => {
-                let sources = from.get(path, config);
-                if sources.is_empty() {
-                    return Err(ValueError::ItemNotFound {
-                        selector: from.clone(),
-                    });
-                }
-                let mut missing = vec![];
-                let mut present = vec![];
-                for source in sources {
-                    match copy_cache.get(&source).and_then(|x| x.get(copy)).cloned() {
-                        None => {
-                            missing.push(source);
-                        }
-                        Some(value) => {
-                            present.push(value);
-                        }
-                    }
-                }
-                if !missing.is_empty() {
-                    return Err(ValueError::CopyNotFound {
+            Self::Copy { copy, modify } => {
+                let result = copy_source
+                    .get(copy)
+                    .ok_or_else(|| ValueError::CopyNotFound {
                         field: copy.clone(),
-                        paths: missing,
-                    });
-                }
-                let result = Self::combine(present)?;
+                    })?
+                    .clone();
                 match modify {
                     None => Ok(result),
-                    Some(modify) => modify.modify(result, path, config, copy_cache),
+                    Some(modify) => modify.modify(copy_source, result, nice_path, config),
                 }
-            }
-        }
-    }
-    fn combine(values: Vec<MetadataValue>) -> Result<MetadataValue, ValueError> {
-        match values.len() {
-            0 => Err(ValueError::Uncombinable { values }),
-            1 => Ok(values[0].clone()),
-            _ => {
-                let mut list = vec![];
-                for value in values.clone() {
-                    match value {
-                        MetadataValue::List(mut vals) => list.append(&mut vals),
-                        _ => return Err(ValueError::Uncombinable { values }),
-                    }
-                }
-                Ok(MetadataValue::List(list))
             }
         }
     }

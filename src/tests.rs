@@ -436,20 +436,16 @@ fn copy_field_simple() {
     let path = PathBuf::from("a/b/c");
     let config = dummy_config();
     let getter = ValueGetter::Copy {
-        from: Rc::new(LocalItemSelector::This),
         copy: MetadataField::Performers,
         modify: None,
     };
-    let mut copy_cache = HashMap::new();
-    copy_cache.insert(
-        path.clone(),
-        HashMap::from([(
-            MetadataField::Performers,
-            MetadataValue::List(vec!["item".to_string()]),
-        )]),
+    let mut copy_source = HashMap::new();
+    copy_source.insert(
+        MetadataField::Performers,
+        MetadataValue::List(vec!["item".to_string()]),
     );
     let result = getter
-        .get(&path, &config, &copy_cache)
+        .get(&copy_source, &path, &config)
         .unwrap_or_else(|x| panic!("{}", x));
     assert!(matches!(result, MetadataValue::List(x) if x.as_slice() == ["item"]));
 }
@@ -464,23 +460,19 @@ fn copy_field_nested() {
         if_missing: WarnBehavior::Exit,
         modify: Some(Rc::new(ValueModifier::Append {
             append: Box::new(ValueGetter::Copy {
-                from: Rc::new(LocalItemSelector::This),
                 copy: MetadataField::Performers,
                 modify: None,
             }),
             index: None,
         })),
     };
-    let mut copy_cache = HashMap::new();
-    copy_cache.insert(
-        path.clone(),
-        HashMap::from([(
-            MetadataField::Performers,
-            MetadataValue::List(vec!["item".to_string()]),
-        )]),
+    let mut copy_source = HashMap::new();
+    copy_source.insert(
+        MetadataField::Performers,
+        MetadataValue::List(vec!["item".to_string()]),
     );
     let result = getter
-        .get(&path, &config, &copy_cache)
+        .get(&copy_source, &path, &config)
         .unwrap_or_else(|x| panic!("{}", x));
     assert!(matches!(result, MetadataValue::List(x) if x.as_slice() == ["citem"]));
 }
@@ -490,12 +482,11 @@ fn copy_field_missing() {
     let path = PathBuf::from("a/b/c");
     let config = dummy_config();
     let getter = ValueGetter::Copy {
-        from: Rc::new(LocalItemSelector::This),
         copy: MetadataField::Performers,
         modify: None,
     };
-    let copy_cache = HashMap::new();
-    let result = getter.get(&path, &config, &copy_cache).unwrap_err();
+    let copy_source = HashMap::new();
+    let result = getter.get(&copy_source, &path, &config).unwrap_err();
     assert!(matches!(result, ValueError::CopyNotFound { .. }));
 }
 
@@ -516,7 +507,6 @@ fn fast_config(selector: ItemSelector, op: MetadataOperation) -> LoadedConfig {
 
 fn fast_copy(field: MetadataField) -> ValueGetter {
     ValueGetter::Copy {
-        from: Rc::new(LocalItemSelector::This),
         copy: field,
         modify: None,
     }
@@ -526,7 +516,6 @@ fn fast_copy(field: MetadataField) -> ValueGetter {
 fn copy_full_simple() {
     let config = dummy_config();
     let path = ItemPath::Song(PathBuf::from("a/b/c"));
-    let mut copy_cache = HashMap::new();
     let configs = [
         fast_config(
             ItemSelector::All { recursive: true },
@@ -543,7 +532,7 @@ fn copy_full_simple() {
             )])),
         ),
     ];
-    let results = crate::get_metadata(&path, &configs, &config, &mut copy_cache);
+    let results = crate::get_metadata(&path, &configs, &config);
     let field = results.metadata.get(&MetadataField::Performers).unwrap();
     assert!(matches!(field, MetadataValue::List(x) if x.as_slice() == ["test"]));
     assert!(results.reports.into_iter().all(|x| x.errors.is_empty()));
@@ -553,7 +542,6 @@ fn copy_full_simple() {
 fn copy_full_self() {
     let config = dummy_config();
     let path = ItemPath::Song(PathBuf::from("a/b/c"));
-    let mut copy_cache = HashMap::new();
     let configs = [fast_config(
         ItemSelector::All { recursive: true },
         MetadataOperation::Set(HashMap::from([(
@@ -561,7 +549,7 @@ fn copy_full_self() {
             fast_copy(MetadataField::Title),
         )])),
     )];
-    let results = crate::get_metadata(&path, &configs, &config, &mut copy_cache);
+    let results = crate::get_metadata(&path, &configs, &config);
     let field = results.metadata.get(&MetadataField::Title);
     assert!(field.is_none());
     assert!(matches!(
@@ -577,7 +565,6 @@ fn copy_full_self() {
 fn copy_full_missing() {
     let config = dummy_config();
     let path = ItemPath::Song(PathBuf::from("a/b/c"));
-    let mut copy_cache = HashMap::new();
     let configs = [fast_config(
         ItemSelector::All { recursive: true },
         MetadataOperation::Set(HashMap::from([(
@@ -585,7 +572,7 @@ fn copy_full_missing() {
             fast_copy(MetadataField::Performers),
         )])),
     )];
-    let results = crate::get_metadata(&path, &configs, &config, &mut copy_cache);
+    let results = crate::get_metadata(&path, &configs, &config);
     let field = results.metadata.get(&MetadataField::Title);
     assert!(field.is_none());
     assert!(matches!(
@@ -595,41 +582,6 @@ fn copy_full_missing() {
             ..
         }
     ));
-}
-
-#[test]
-fn copy_full_other() {
-    let config = dummy_config();
-    let path1 = ItemPath::Song(PathBuf::from("a/b/c1"));
-    let path2 = ItemPath::Song(PathBuf::from("a/b/c2"));
-    let mut copy_cache = HashMap::new();
-    let configs = [
-        fast_config(
-            ItemSelector::Path(path1.to_path_buf()),
-            MetadataOperation::Set(HashMap::from([(
-                MetadataField::Title,
-                ValueGetter::Direct(MetadataValue::string("test".to_string())),
-            )])),
-        ),
-        fast_config(
-            ItemSelector::Path(path2.to_path_buf()),
-            MetadataOperation::Set(HashMap::from([(
-                MetadataField::Title,
-                ValueGetter::Copy {
-                    copy: MetadataField::Title,
-                    from: Rc::new(LocalItemSelector::Selector {
-                        selector: ItemSelector::Path(path1.to_path_buf()),
-                        must_be: None,
-                    }),
-                    modify: None,
-                },
-            )])),
-        ),
-    ];
-    let results = crate::get_metadata(&path2, &configs, &config, &mut copy_cache);
-    let field = results.metadata.get(&MetadataField::Title).unwrap();
-    assert!(matches!(field, MetadataValue::List(x) if x.as_slice() == ["test"]));
-    assert!(results.reports.into_iter().all(|x| x.errors.is_empty()));
 }
 
 #[test]

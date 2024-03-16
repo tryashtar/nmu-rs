@@ -545,7 +545,7 @@ impl ArtRepo {
             self.config_cache = cache;
             match config_load {
                 Ok(config) => {
-                    if let Some(ref mut settings) = settings {
+                    if let Some(settings) = &mut settings {
                         for replace in &config.all {
                             settings.merge_in(replace);
                         }

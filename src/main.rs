@@ -14,12 +14,10 @@ use walkdir::DirEntry;
 use crate::{
     art::{ArtError, GetArtResults},
     file_stuff::{ConfigError, YamlError},
-    library_config::LibraryReport,
-    library_config::{LibraryConfig, RawLibraryConfig},
+    library_config::{LibraryConfig, LibraryReport, RawLibraryConfig},
     metadata::{FinalMetadata, Metadata, MetadataField, MetadataValue, SetValue},
     modifier::ValueError,
-    song_config::SongConfig,
-    song_config::{OrderingSetter, RawSongConfig},
+    song_config::{OrderingSetter, RawSongConfig, SongConfig},
     strategy::ItemSelector,
     util::ItemPath,
 };
@@ -79,7 +77,6 @@ fn main() {
 }
 
 type ConfigCache = HashMap<PathBuf, Result<Rc<SongConfig>, Rc<ConfigError>>>;
-type CopyCache = HashMap<PathBuf, Metadata>;
 struct WorkProgress {
     changed: u32,
     failed: u32,
@@ -128,7 +125,6 @@ fn do_scan(library_config: &mut LibraryConfig) {
             }
         }
     }
-    let mut copy_cache = HashMap::new();
     for folder_path in scan_folders {
         let nice_path = ItemPath::Folder(
             folder_path
@@ -136,13 +132,7 @@ fn do_scan(library_config: &mut LibraryConfig) {
                 .unwrap_or(&folder_path)
                 .to_owned(),
         );
-        match process_path(
-            &nice_path,
-            &folder_path,
-            library_config,
-            &mut config_cache,
-            &mut copy_cache,
-        ) {
+        match process_path(&nice_path, &folder_path, library_config, &mut config_cache) {
             Some(metadata) => {
                 library_config.date_cache.mark_updated(folder_path);
                 for (field, value) in metadata.iter().sorted() {
@@ -161,13 +151,7 @@ fn do_scan(library_config: &mut LibraryConfig) {
                 .unwrap_or(&song_path)
                 .with_extension(""),
         );
-        let metadata = process_path(
-            &nice_path,
-            &song_path,
-            library_config,
-            &mut config_cache,
-            &mut copy_cache,
-        );
+        let metadata = process_path(&nice_path, &song_path, library_config, &mut config_cache);
         let success = metadata
             .map(|x| add_to_song(&song_path, &nice_path, x, None, library_config))
             .unwrap_or(false);
@@ -326,7 +310,6 @@ pub fn get_metadata(
     nice_path: &ItemPath,
     configs: &[LoadedConfig],
     library_config: &LibraryConfig,
-    copy_cache: &mut CopyCache,
 ) -> GetMetadataResults {
     let mut metadata;
     let mut config_reports;
@@ -337,13 +320,9 @@ pub fn get_metadata(
             let select_path = nice_path
                 .strip_prefix(&config.nice_folder)
                 .unwrap_or(&config.nice_folder);
-            let report = config.config.apply(
-                nice_path,
-                select_path,
-                &mut metadata,
-                library_config,
-                copy_cache,
-            );
+            let report = config
+                .config
+                .apply(nice_path, select_path, &mut metadata, library_config);
             config_reports.push(SourcedReport {
                 full_path: config.full_path.clone(),
                 errors: report.errors,
@@ -351,16 +330,9 @@ pub fn get_metadata(
         }
         let mut redo = false;
         for error in config_reports.iter().flat_map(|x| &x.errors) {
-            if let ValueError::CopyNotFound { field, paths } = error {
-                for path in paths {
-                    if !copy_cache.contains_key(path) {
-                        redo = true;
-                        if (nice_path as &Path) == path.as_path() {
-                            copy_cache.insert(path.clone(), metadata.clone());
-                        } else {
-                            copy_cache.insert(path.clone(), HashMap::new());
-                        }
-                    }
+            if let ValueError::CopyNotFound { field } = error {
+                if metadata.contains_key(field) {
+                    redo = true;
                 }
             }
         }
@@ -379,7 +351,6 @@ fn process_path(
     full_path: &Path,
     library_config: &mut LibraryConfig,
     config_cache: &mut ConfigCache,
-    copy_cache: &mut CopyCache,
 ) -> Option<Metadata> {
     let configs = get_relevant_setters(library_config, nice_path, config_cache);
     for load in configs.loaded {
@@ -391,7 +362,7 @@ fn process_path(
         );
     }
     if let Ok(configs) = configs.result {
-        let mut results = get_metadata(nice_path, &configs, library_config, copy_cache);
+        let mut results = get_metadata(nice_path, &configs, library_config);
         if let Some(repo) = &mut library_config.art_repo {
             if let Some(MetadataValue::List(art)) = results.metadata.get_mut(&MetadataField::Art) {
                 let result = repo.get_image(art);
@@ -682,7 +653,7 @@ fn handle_config_loaded(
 }
 
 fn is_not_found(result: &ConfigError) -> bool {
-    matches!(result, ConfigError::Yaml(YamlError::Io(ref error)) if error.kind() == ErrorKind::NotFound)
+    matches!(result, ConfigError::Yaml(YamlError::Io(error)) if error.kind() == ErrorKind::NotFound)
 }
 
 fn find_unused_selectors<'a>(
