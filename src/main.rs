@@ -1,6 +1,5 @@
 use color_print::cformat;
 use image::DynamicImage;
-use itertools::Itertools;
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     env,
@@ -9,13 +8,14 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
 };
+use tag_interop::{FullMetadata, LyricsMetadata, SetValue};
 use walkdir::DirEntry;
 
 use crate::{
     art::{ArtError, GetArtResults},
     file_stuff::{ConfigError, YamlError},
     library_config::{LibraryConfig, LibraryReport, RawLibraryConfig},
-    metadata::{FinalMetadata, Metadata, MetadataField, MetadataValue, SetValue},
+    metadata::{Metadata, MetadataField, MetadataValue},
     modifier::ValueError,
     song_config::{OrderingSetter, RawSongConfig, SongConfig},
     strategy::ItemSelector,
@@ -132,12 +132,9 @@ fn do_scan(library_config: &mut LibraryConfig) {
                 .unwrap_or(&folder_path)
                 .to_owned(),
         );
-        match process_path(&nice_path, &folder_path, library_config, &mut config_cache) {
-            Some(metadata) => {
+        match process_folder(&nice_path, &folder_path, library_config, &mut config_cache) {
+            Some(results) => {
                 library_config.date_cache.mark_updated(folder_path);
-                for (field, value) in metadata.iter().sorted() {
-                    println!("\t{field}: {value}");
-                }
             }
             None => {
                 library_config.date_cache.remove(&folder_path);
@@ -151,10 +148,33 @@ fn do_scan(library_config: &mut LibraryConfig) {
                 .unwrap_or(&song_path)
                 .with_extension(""),
         );
-        let metadata = process_path(&nice_path, &song_path, library_config, &mut config_cache);
-        let success = metadata
-            .map(|x| add_to_song(&song_path, &nice_path, x, None, library_config))
-            .unwrap_or(false);
+        let results = process_song(&nice_path, &song_path, library_config, &mut config_cache);
+        let mut success = false;
+        if let Some(results) = results {
+            let art_set = match results.art {
+                GetArtResults::Keep | GetArtResults::NoTemplateFound { .. } => SetValue::Keep,
+                GetArtResults::Remove => SetValue::Remove,
+                GetArtResults::Processed { result, .. } => match result {
+                    Ok(img) => SetValue::Replace(img),
+                    Err(_) => SetValue::Keep,
+                },
+            };
+            let add_results = add_to_song(
+                &song_path,
+                &nice_path,
+                results.metadata,
+                art_set,
+                library_config,
+            );
+            match add_results {
+                Ok(()) => {
+                    success = true;
+                }
+                Err(err) => {
+                    eprintln!("{}", cformat!("❌ <red>Error adding to file\n{}</>", err));
+                }
+            }
+        }
         if success {
             progress.changed += 1;
             library_config.date_cache.mark_updated(song_path);
@@ -261,9 +281,9 @@ struct GetConfigsResults {
     loaded: Vec<ConfigLoadResults>,
 }
 
-fn get_relevant_setters(
+fn get_relevant_configs(
     library_config: &LibraryConfig,
-    nice_path: &ItemPath,
+    nice_path: &Path,
     config_cache: &mut ConfigCache,
 ) -> GetConfigsResults {
     let mut newly_loaded = vec![];
@@ -346,13 +366,37 @@ pub fn get_metadata(
     }
 }
 
-fn process_path(
+fn handle_apply_reports(reports: &mut Vec<SourcedReport>) {
+    for report in reports {
+        report
+            .errors
+            .retain(|x| !matches!(x, ValueError::ExitRequested));
+        if !report.errors.is_empty() {
+            eprintln!(
+                "{}",
+                cformat!(
+                    "⚠️ <yellow>Errors applying config\n{}</>",
+                    report.full_path.display()
+                )
+            );
+            for error in &report.errors {
+                eprintln!("{}", cformat!("\t<yellow>{}</>", error));
+            }
+        }
+    }
+}
+
+struct ProcessFolderResults {
+    metadata: Metadata,
+    icon: Option<PathBuf>,
+}
+fn process_folder(
     nice_path: &ItemPath,
     full_path: &Path,
     library_config: &mut LibraryConfig,
     config_cache: &mut ConfigCache,
-) -> Option<Metadata> {
-    let configs = get_relevant_setters(library_config, nice_path, config_cache);
+) -> Option<ProcessFolderResults> {
+    let configs = get_relevant_configs(library_config, nice_path, config_cache);
     for load in configs.loaded {
         handle_config_loaded(
             load.result.as_deref().map_err(|x| x.deref()),
@@ -362,121 +406,156 @@ fn process_path(
         );
     }
     if let Ok(configs) = configs.result {
+        let mut art_results = GetArtResults::Keep;
         let mut results = get_metadata(nice_path, &configs, library_config);
         if let Some(repo) = &mut library_config.art_repo {
             if let Some(MetadataValue::List(art)) = results.metadata.get_mut(&MetadataField::Art) {
-                let result = repo.get_image(art);
-                repo.used_templates.add(full_path, &result);
-                handle_art_loaded(&result, library_config);
-                if let GetArtResults::Processed { nice_path, .. } = result {
+                art_results = repo.get_image(art);
+                repo.used_templates.add(full_path, &art_results);
+                if let GetArtResults::Processed { nice_path, .. } = &art_results {
                     art.clear();
                     art.push(nice_path.to_string_lossy().into_owned());
                 }
-            } else {
-                repo.used_templates
-                    .add(full_path, &GetArtResults::NoArtNeeded);
             }
+            repo.used_templates.add(full_path, &art_results);
+            return Some(ProcessFolderResults {
+                metadata: results.metadata,
+                icon: None,
+            });
         }
+        handle_art_loaded(&art_results, library_config);
         println!("{}", nice_path.display());
-        for mut report in results.reports {
-            report
-                .errors
-                .retain(|x| !matches!(x, ValueError::ExitRequested));
-            if !report.errors.is_empty() {
-                eprintln!(
-                    "{}",
-                    cformat!(
-                        "⚠️ <yellow>Errors applying config\n{}</>",
-                        report.full_path.display()
-                    )
-                );
-                for error in report.errors {
-                    eprintln!("{}", cformat!("\t<yellow>{}</>", error));
-                }
-            }
-        }
-        return Some(results.metadata);
+        handle_apply_reports(&mut results.reports);
     }
     None
+}
+
+struct ProcessSongResults {
+    metadata: Metadata,
+    art: GetArtResults,
+}
+fn process_song(
+    nice_path: &ItemPath,
+    full_path: &Path,
+    library_config: &mut LibraryConfig,
+    config_cache: &mut ConfigCache,
+) -> Option<ProcessSongResults> {
+    let configs = get_relevant_configs(library_config, nice_path, config_cache);
+    for load in configs.loaded {
+        handle_config_loaded(
+            load.result.as_deref().map_err(|x| x.deref()),
+            &load.full_path,
+            &load.nice_folder,
+            library_config,
+        );
+    }
+    if let Ok(configs) = configs.result {
+        let mut art_results = GetArtResults::Keep;
+        let mut results = get_metadata(nice_path, &configs, library_config);
+        if let Some(repo) = &mut library_config.art_repo {
+            if let Some(MetadataValue::List(art)) = results.metadata.get_mut(&MetadataField::Art) {
+                art_results = repo.get_image(art);
+                if let GetArtResults::Processed { nice_path, .. } = &art_results {
+                    art.clear();
+                    art.push(nice_path.to_string_lossy().into_owned());
+                }
+            }
+            repo.used_templates.add(full_path, &art_results);
+        }
+        handle_art_loaded(&art_results, library_config);
+        println!("{}", nice_path.display());
+        handle_apply_reports(&mut results.reports);
+        return Some(ProcessSongResults {
+            metadata: results.metadata,
+            art: art_results,
+        });
+    }
+    None
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum AddToSongError {
+    #[error("Unknown file type")]
+    UnknownType,
+    #[error("Unsupported mime type {0}")]
+    UnsupportedMimeType(String),
+    #[error("{0}")]
+    Io(#[from] std::io::Error),
+    #[error("{0}")]
+    Id3(#[from] id3::Error),
+    #[error("{0}")]
+    Flac(#[from] metaflac::Error),
 }
 
 fn add_to_song(
     file_path: &Path,
     nice_path: &Path,
     metadata: Metadata,
-    art: Option<Rc<DynamicImage>>,
+    art: SetValue<Rc<DynamicImage>>,
     config: &mut LibraryConfig,
-) -> bool {
-    let mut any = false;
-    let mut success = true;
-    let mut existing_metadata: Option<Metadata> = None;
-    let mut final_metadata = FinalMetadata::create(&metadata);
-    final_metadata.result.art = SetValue::Set(art);
-    match id3::Tag::read_from_path(file_path) {
-        Ok(mut id3) => {
-            any = true;
-            let existing = tag_interop::get_metadata_id3(&id3, &config.artist_separator);
+) -> Result<(), AddToSongError> {
+    let info = infer::get_from_path(file_path)?.ok_or(AddToSongError::UnknownType)?;
+    match info.mime_type() {
+        "audio/mpeg" => {
+            let mut tag = id3::Tag::read_from_path(file_path)?;
+            let existing = tag_interop::get_metadata_id3(&tag, &config.artist_separator);
+            let mut lyrics = LyricsMetadata::keep();
             if let Some(lyric_config) = &config.lyrics {
-                lyric_config.handle(nice_path, &existing, &mut final_metadata.result);
+                lyrics = lyric_config.handle(nice_path, &existing.lyrics);
             }
-            let existing = existing.into();
+            handle_reports(config, nice_path, &metadata, &existing.normal);
             tag_interop::set_metadata_id3(
-                &mut id3,
-                &final_metadata.result,
+                &mut tag,
+                &FullMetadata {
+                    normal: metadata,
+                    art,
+                    lyrics,
+                },
                 &config.artist_separator,
             );
-            existing_metadata = Some(existing);
+            Ok(())
         }
-        Err(err) if matches!(err.kind, id3::ErrorKind::NoTag) => {}
-        Err(err) => {
-            if !any {
-                any = true;
-                success = false;
-            }
-            eprintln!("{}", cformat!("❌ <red>Error reading ID3 tag\n{}</>", err));
-        }
-    }
-    match metaflac::Tag::read_from_path(file_path) {
-        Ok(mut flac) => {
-            any = true;
-            let existing = tag_interop::get_metadata_flac(&flac);
+        "audio/x-flac" => {
+            let mut tag = metaflac::Tag::read_from_path(file_path)?;
+            let existing = tag_interop::get_metadata_flac(&tag);
+            let mut lyrics = LyricsMetadata::keep();
             if let Some(lyric_config) = &config.lyrics {
-                lyric_config.handle(nice_path, &existing, &mut final_metadata.result);
+                lyrics = lyric_config.handle(nice_path, &existing.lyrics);
             }
-            let existing = existing.into();
-            tag_interop::set_metadata_flac(&mut flac, &final_metadata.result);
-            existing_metadata = Some(existing);
+            handle_reports(config, nice_path, &metadata, &existing.normal);
+            tag_interop::set_metadata_flac(
+                &mut tag,
+                &FullMetadata {
+                    normal: metadata,
+                    art,
+                    lyrics,
+                },
+            );
+            Ok(())
         }
-        Err(err) if matches!(err.kind, metaflac::ErrorKind::InvalidInput) => {}
-        Err(err) => {
-            if !any {
-                any = true;
-                success = false;
-            }
-            eprintln!("{}", cformat!("❌ <red>Error reading flac tag\n{}</>", err));
-        }
+        other => Err(AddToSongError::UnsupportedMimeType(other.to_owned())),
     }
+}
+
+fn handle_reports(
+    config: &mut LibraryConfig,
+    nice_path: &Path,
+    metadata: &Metadata,
+    existing_metadata: &Metadata,
+) {
     for report in &mut config.reports {
         report.record(
             nice_path,
-            &metadata,
-            existing_metadata.as_ref(),
+            metadata,
+            existing_metadata,
             &config.artist_separator,
         );
     }
-    for err in &final_metadata.errors {
-        eprintln!("{}", cformat!("\t⚠️ <yellow>{}</>", err));
-    }
-    if !any {
-        eprintln!("{}", cformat!("❌ <red>No tags found in file</>"));
-        success = false;
-    }
-    success
 }
 
 fn handle_art_loaded(result: &GetArtResults, library_config: &mut LibraryConfig) {
     match result {
-        GetArtResults::NoArtNeeded => {}
+        GetArtResults::Keep | GetArtResults::Remove => {}
         GetArtResults::NoTemplateFound { tried } => {
             eprintln!(
                 "{}",
@@ -690,11 +769,6 @@ fn find_unused_selectors<'a>(
     }
 }
 
-pub struct Results<T, E> {
-    result: T,
-    errors: Vec<E>,
-}
-
 fn load_config(
     full_path: &Path,
     nice_folder: &Path,
@@ -772,10 +846,11 @@ fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
                     .filter_map(|x| x.ok())
                 {
                     let is_dir = entry.file_type().is_dir();
+                    let is_config = entry.file_name() == "config.yaml";
                     let path = entry.into_path();
                     if is_dir {
                         scan_folders.insert(path);
-                    } else if file_stuff::match_extension(&path, &library_config.song_extensions)
+                    } else if !is_config
                         && scan_songs.insert(path)
                         && std::io::stdout().is_terminal()
                     {
@@ -796,31 +871,32 @@ fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
         {
             let is_config = template_file.file_name() == "images.yaml";
             let template_file_path = template_file.into_path();
-            if is_config
-                && library_config
+            if is_config {
+                if library_config
                     .date_cache
                     .changed_recently(&template_file_path)
-            {
-                for image in
-                    walkdir::WalkDir::new(template_file_path.parent().unwrap_or(Path::new("")))
-                        .into_iter()
-                        .filter_entry(|entry| entry.file_type().is_file() || !is_hidden(entry))
-                        .filter_map(|x| x.ok())
-                        .filter(|x| x.file_type().is_file())
                 {
-                    let path = image.into_path();
-                    if file_stuff::match_extension(&path, &art_repo.image_extensions) {
-                        scan_images.insert(path);
+                    for image in
+                        walkdir::WalkDir::new(template_file_path.parent().unwrap_or(Path::new("")))
+                            .into_iter()
+                            .filter_entry(|entry| entry.file_type().is_file() || !is_hidden(entry))
+                            .filter_map(|x| x.ok())
+                            .filter(|x| x.file_type().is_file())
+                    {
+                        let is_config = image.file_name() == "images.yaml";
+                        if !is_config {
+                            let path = image.into_path();
+                            scan_images.insert(path);
+                        }
                     }
                 }
-            } else if file_stuff::match_extension(&template_file_path, &art_repo.image_extensions)
-                && (library_config
-                    .date_cache
-                    .changed_recently(&template_file_path)
-                    || !art_repo
-                        .used_templates
-                        .template_to_users
-                        .contains_key(&template_file_path))
+            } else if library_config
+                .date_cache
+                .changed_recently(&template_file_path)
+                || !art_repo
+                    .used_templates
+                    .template_to_users
+                    .contains_key(&template_file_path)
             {
                 scan_images.insert(template_file_path);
             }
@@ -863,20 +939,15 @@ fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
         .filter_map(|x| x.ok())
     {
         let is_dir = entry.file_type().is_dir();
+        let is_config = entry.file_name() == "config.yaml";
         let path = entry.into_path();
         if library_config.date_cache.changed_recently(&path) {
             if is_dir {
                 scan_folders.insert(path);
-            } else if file_stuff::match_extension(&path, &library_config.song_extensions)
-                && scan_songs.insert(path)
-                && std::io::stdout().is_terminal()
-            {
+            } else if !is_config && scan_songs.insert(path) && std::io::stdout().is_terminal() {
                 _ = write!(lock, "\rFound {}, skipped {}", scan_songs.len(), skipped);
             }
-        } else if !is_dir
-            && file_stuff::match_extension(&path, &library_config.song_extensions)
-            && !scan_songs.contains(&path)
-        {
+        } else if !is_dir && !is_config && !scan_songs.contains(&path) {
             skipped += 1;
             if std::io::stdout().is_terminal() {
                 _ = write!(lock, "\rFound {}, skipped {}", scan_songs.len(), skipped);

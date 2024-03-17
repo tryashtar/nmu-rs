@@ -2,24 +2,24 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    fs::{self, File},
+    fs::File,
     io::{BufRead, BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
     rc::Rc,
     time::SystemTime,
 };
-use thiserror::Error;
 
 use crate::{
     art::{ArtRepo, RawArtRepo},
     file_stuff::{self, YamlError},
     lyrics::{RichLyrics, SyncedLyrics},
-    metadata::{FinalMetadata, Metadata, MetadataField, MetadataValue, SetValue, BLANK_VALUE},
+    metadata::{Metadata, MetadataField, MetadataValue, BLANK_VALUE},
     modifier::ValueModifier,
     song_config::{
         AllSetter, DiscSet, OrderingSetter, RawSongConfig, ReferencableOperation, SongConfig,
     },
     strategy::{FieldSelector, ItemSelector, MetadataOperation, MusicItemType, ValueGetter},
+    tag_interop::{LyricsMetadata, SetValue},
 };
 
 #[derive(Deserialize)]
@@ -29,7 +29,6 @@ pub struct RawLibraryConfig {
     lyrics: Option<LyricsConfig>,
     logs: Option<PathBuf>,
     config_folders: Vec<PathBuf>,
-    extensions: HashSet<String>,
     custom_fields: Vec<String>,
     cache: Option<PathBuf>,
     art: Option<RawArtRepo>,
@@ -190,7 +189,7 @@ impl LibraryReport {
         &mut self,
         item_path: &Path,
         metadata: &Metadata,
-        embedded_metadata: Option<&Metadata>,
+        embedded_metadata: &Metadata,
         sep: &str,
     ) {
         match self {
@@ -234,27 +233,24 @@ impl LibraryReport {
                 ..
             } => {
                 let mut results = BTreeMap::new();
-                if let Some(save) = {
-                    if *embedded {
-                        embedded_metadata
-                    } else {
-                        Some(metadata)
+                let meta = if *embedded {
+                    embedded_metadata
+                } else {
+                    metadata
+                };
+                for (field, value) in meta {
+                    if values.is_match(field) && (*include_blanks || !Self::is_blank(value)) {
+                        results.insert(
+                            field.clone(),
+                            match value {
+                                MetadataValue::List(list) if list.is_empty() => None,
+                                _ => Some(value.clone()),
+                            },
+                        );
                     }
-                } {
-                    for (field, value) in save {
-                        if values.is_match(field) && (*include_blanks || !Self::is_blank(value)) {
-                            results.insert(
-                                field.clone(),
-                                match value {
-                                    MetadataValue::List(list) if list.is_empty() => None,
-                                    _ => Some(value.clone()),
-                                },
-                            );
-                        }
-                    }
-                    if !results.is_empty() {
-                        map.insert(item_path.into(), results);
-                    }
+                }
+                if !results.is_empty() {
+                    map.insert(item_path.into(), results);
                 }
             }
         }
@@ -268,8 +264,9 @@ pub struct LyricsConfig {
     config: HashMap<LyricsType, LyricsReplaceMode>,
 }
 impl LyricsConfig {
-    pub fn handle(&self, nice_path: &Path, source: &FinalMetadata, dest: &mut FinalMetadata) {
-        let top = self
+    pub fn handle(&self, nice_path: &Path, source: &LyricsMetadata) -> LyricsMetadata {
+        let mut result = LyricsMetadata::keep();
+        let best = self
             .priority
             .iter()
             .find_map(|x| x.get(&self.folder, nice_path, source));
@@ -277,13 +274,14 @@ impl LyricsConfig {
             match replace {
                 LyricsReplaceMode::Ignore => {}
                 LyricsReplaceMode::Remove => {
-                    lyric_type.set(&self.folder, nice_path, dest, None);
+                    lyric_type.set(&self.folder, nice_path, &mut result, None);
                 }
                 LyricsReplaceMode::Replace => {
-                    lyric_type.set(&self.folder, nice_path, dest, top.as_ref());
+                    lyric_type.set(&self.folder, nice_path, &mut result, best.as_ref());
                 }
             }
         }
+        result
     }
 }
 
@@ -302,11 +300,16 @@ impl LyricsType {
         &self,
         folder: &Path,
         nice_path: &Path,
-        metadata: &mut FinalMetadata,
+        metadata: &mut LyricsMetadata,
         value: Option<&RichLyrics>,
     ) {
         match self {
-            Self::RichEmbedded => metadata.rich_lyrics = SetValue::Set(value.cloned()),
+            Self::RichEmbedded => {
+                metadata.rich = match value {
+                    None => SetValue::Remove,
+                    Some(val) => SetValue::Replace(val.clone()),
+                }
+            }
             Self::RichFile => {
                 let mut path = folder.join(nice_path).to_string_lossy().into_owned();
                 path.push_str(".lrc.json");
@@ -326,7 +329,10 @@ impl LyricsType {
                 }
             }
             Self::SyncedEmbedded => {
-                metadata.synced_lyrics = SetValue::Set(value.cloned().map(|x| x.into()))
+                metadata.synced = match value {
+                    None => SetValue::Remove,
+                    Some(val) => SetValue::Replace(val.clone().into()),
+                }
             }
             Self::SyncedFile => {
                 let mut path = folder.join(nice_path).to_string_lossy().into_owned();
@@ -348,7 +354,10 @@ impl LyricsType {
                 }
             }
             Self::SimpleEmbedded => {
-                metadata.simple_lyrics = SetValue::Set(value.cloned().map(|x| x.into()))
+                metadata.simple = match value {
+                    None => SetValue::Remove,
+                    Some(val) => SetValue::Replace(val.clone().into()),
+                }
             }
             Self::SimpleFile => {
                 let mut path = folder.join(nice_path).to_string_lossy().into_owned();
@@ -369,11 +378,16 @@ impl LyricsType {
             }
         }
     }
-    fn get(&self, folder: &Path, nice_path: &Path, metadata: &FinalMetadata) -> Option<RichLyrics> {
+    fn get(
+        &self,
+        folder: &Path,
+        nice_path: &Path,
+        metadata: &LyricsMetadata,
+    ) -> Option<RichLyrics> {
         match self {
-            Self::RichEmbedded => match &metadata.rich_lyrics {
-                SetValue::Skip => None,
-                SetValue::Set(val) => val.as_ref().cloned(),
+            Self::RichEmbedded => match &metadata.rich {
+                SetValue::Keep | SetValue::Remove => None,
+                SetValue::Replace(val) => Some(val.clone()),
             },
             Self::RichFile => {
                 let mut path = folder.join(nice_path).to_string_lossy().into_owned();
@@ -384,9 +398,9 @@ impl LyricsType {
                 let lyrics: RichLyrics = serde_json::de::from_reader(reader).ok()?;
                 Some(lyrics)
             }
-            Self::SyncedEmbedded => match &metadata.synced_lyrics {
-                SetValue::Skip => None,
-                SetValue::Set(val) => val.as_ref().cloned().map(|x| x.into()),
+            Self::SyncedEmbedded => match &metadata.synced {
+                SetValue::Keep | SetValue::Remove => None,
+                SetValue::Replace(val) => Some(val.clone().into()),
             },
             Self::SyncedFile => {
                 let mut path = folder.join(nice_path).to_string_lossy().into_owned();
@@ -398,9 +412,9 @@ impl LyricsType {
                     SyncedLyrics::parse(reader.lines().filter_map(|x| x.ok()).collect()).ok()?;
                 Some(lyrics.into())
             }
-            Self::SimpleEmbedded => match &metadata.simple_lyrics {
-                SetValue::Skip => None,
-                SetValue::Set(val) => val.as_ref().cloned().map(|x| x.into()),
+            Self::SimpleEmbedded => match &metadata.simple {
+                SetValue::Keep | SetValue::Remove => None,
+                SetValue::Replace(val) => Some(val.clone().into()),
             },
             Self::SimpleFile => {
                 let mut path = folder.join(nice_path).to_string_lossy().into_owned();
@@ -430,7 +444,6 @@ pub struct LibraryConfig {
     pub lyrics: Option<LyricsConfig>,
     pub log_folder: Option<PathBuf>,
     pub config_folders: Vec<PathBuf>,
-    pub song_extensions: HashSet<String>,
     pub custom_fields: Vec<MetadataField>,
     pub date_cache: DateCache,
     pub art_repo: Option<ArtRepo>,
@@ -457,14 +470,6 @@ impl LibraryConfig {
                 .config_folders
                 .into_iter()
                 .map(|x| folder.join(x))
-                .collect(),
-            song_extensions: raw
-                .extensions
-                .into_iter()
-                .map(|x| match x.strip_prefix('.') {
-                    Some(stripped) => stripped.to_owned(),
-                    None => x,
-                })
                 .collect(),
             custom_fields: raw
                 .custom_fields
@@ -719,7 +724,7 @@ impl LibraryConfig {
     }
 }
 
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum LibraryError {
     MissingNamedStrategy(String),
     UnlistedCustomField(String),
@@ -781,7 +786,7 @@ impl DateCache {
     }
     pub fn changed_recently(&self, path: &Path) -> bool {
         self.cache.get(path).map_or(true, |cache_time| {
-            fs::metadata(path)
+            std::fs::metadata(path)
                 .and_then(|x| x.modified())
                 .map_or(true, |file_time| {
                     *cache_time < std::convert::Into::<DateTime<Utc>>::into(file_time)

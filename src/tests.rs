@@ -421,7 +421,6 @@ fn dummy_config() -> LibraryConfig {
         lyrics: None,
         log_folder: None,
         config_folders: vec![],
-        song_extensions: HashSet::from(["a".to_owned()]),
         custom_fields: vec![],
         date_cache: DateCache::new(None),
         art_repo: None,
@@ -600,7 +599,7 @@ fn selector_matches() {
         let full = tmp_dir
             .path()
             .join(PathBuf::from(str))
-            .with_extension(config.song_extensions.iter().next().unwrap());
+            .with_extension("mp3");
         std::fs::create_dir_all(full.parent().unwrap()).unwrap();
         std::fs::File::create(&full).unwrap();
         std::fs::File::create(full.with_extension("fake")).unwrap();

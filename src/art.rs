@@ -7,7 +7,6 @@ use std::{
 
 use image::{DynamicImage, GenericImageView, ImageError, ImageResult};
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
 use crate::{
     file_stuff::{self, ConfigError, YamlError},
@@ -18,7 +17,7 @@ use crate::{
 pub type ArtConfigCache = HashMap<PathBuf, Result<Rc<ArtConfig>, Rc<ConfigError>>>;
 pub type ProcessedArtCache = HashMap<PathBuf, Result<Rc<DynamicImage>, Rc<ArtError>>>;
 
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum ArtError {
     #[error("Config failed")]
     Config,
@@ -287,7 +286,6 @@ pub struct RawArtRepo {
     icons: Option<PathBuf>,
     file_cache: Option<PathBuf>,
     named_settings: HashMap<String, ArtSettings>,
-    extensions: HashSet<String>,
 }
 
 pub struct GetProcessedResult {
@@ -307,7 +305,8 @@ pub struct ArtConfigLoadResults {
 }
 
 pub enum GetArtResults {
-    NoArtNeeded,
+    Keep,
+    Remove,
     NoTemplateFound {
         tried: Vec<PathBuf>,
     },
@@ -350,7 +349,6 @@ pub struct ArtRepo {
     pub icon_folder: Option<PathBuf>,
     pub used_templates: ArtUsageCache,
     pub named_settings: HashMap<String, Rc<ArtSettings>>,
-    pub image_extensions: HashSet<String>,
     pub processed_cache: ProcessedArtCache,
     config_cache: ArtConfigCache,
 }
@@ -369,19 +367,14 @@ impl ArtRepo {
                 .into_iter()
                 .map(|(k, v)| (k, Rc::new(v)))
                 .collect(),
-            image_extensions: raw
-                .extensions
-                .into_iter()
-                .map(|x| match x.strip_prefix('.') {
-                    Some(stripped) => stripped.to_owned(),
-                    None => x,
-                })
-                .collect(),
             config_cache: HashMap::new(),
             processed_cache: HashMap::new(),
         }
     }
     pub fn get_image(&mut self, art: &[String]) -> GetArtResults {
+        if art.is_empty() {
+            return GetArtResults::Remove;
+        }
         let mut loaded = vec![];
         let template = self.find_first_template(art);
         match template {
@@ -503,7 +496,7 @@ impl ArtRepo {
                 for file in read.filter_map(|x| x.ok()) {
                     let path = file.path();
                     if path.file_stem().is_some_and(|x| x == name)
-                        && file_stuff::match_extension(&path, &self.image_extensions)
+                        && !path.file_name().is_some_and(|x| x == "images.yaml")
                     {
                         return Some(path);
                     }
@@ -616,7 +609,7 @@ impl ArtUsageCache {
     }
     pub fn add(&mut self, song: &Path, art: &GetArtResults) {
         match art {
-            GetArtResults::NoArtNeeded | GetArtResults::NoTemplateFound { .. } => {
+            GetArtResults::Keep | GetArtResults::Remove | GetArtResults::NoTemplateFound { .. } => {
                 if let Some(old) = self.user_to_template.remove(song) {
                     if let Some(set) = self.template_to_users.get_mut(&old) {
                         set.remove(song);

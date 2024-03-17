@@ -1,5 +1,4 @@
 use std::{
-    collections::HashSet,
     fs::{DirEntry, File},
     io::BufReader,
     ops::Deref,
@@ -8,7 +7,6 @@ use std::{
 
 use itertools::Itertools;
 use serde::de::DeserializeOwned;
-use thiserror::Error;
 
 use crate::{
     library_config::{LibraryConfig, LibraryError},
@@ -16,14 +14,14 @@ use crate::{
     util::ItemPath,
 };
 
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Debug)]
 #[error("{0}")]
 pub enum YamlError {
     Io(#[from] std::io::Error),
     Yaml(#[from] serde_yaml::Error),
 }
 
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Debug)]
 #[error("{0}")]
 pub enum ConfigError {
     Yaml(#[from] YamlError),
@@ -38,12 +36,6 @@ where
     let reader = BufReader::new(file);
     let yaml: T = serde_yaml::from_reader(reader)?;
     Ok(yaml)
-}
-
-pub fn match_extension(path: &Path, extensions: &HashSet<String>) -> bool {
-    path.extension()
-        .and_then(|x| x.to_str())
-        .map_or(false, |ext| extensions.contains(ext))
 }
 
 fn is_dir(entry: &DirEntry) -> bool {
@@ -71,8 +63,7 @@ pub fn find_matches(
                 walkdir::WalkDir::new(&full_start)
                     .into_iter()
                     .filter_entry(|entry| {
-                        entry.file_type().is_dir()
-                            || match_extension(entry.path(), &config.song_extensions)
+                        entry.file_type().is_dir() || entry.file_name() != "config.yaml"
                     })
                     .skip(1)
                     .filter_map(|x| x.ok())
@@ -99,7 +90,7 @@ pub fn find_matches(
                             path.and_then(|path| {
                                 if is_dir(&entry) {
                                     return Some(ItemPath::Folder(path.to_owned()));
-                                } else if match_extension(path, &config.song_extensions) {
+                                } else if entry.file_name() != "config.yaml" {
                                     let stripped = path.with_extension("");
                                     return Some(ItemPath::Song(stripped));
                                 }
@@ -132,7 +123,7 @@ pub fn find_matches(
                                     if matches_name(path, name) {
                                         return Some(ItemPath::Folder(path.to_owned()));
                                     }
-                                } else if match_extension(path, &config.song_extensions) {
+                                } else if entry.file_name() != "config.yaml" {
                                     let stripped = path.with_extension("");
                                     if matches_name(&stripped, name) {
                                         return Some(ItemPath::Song(stripped));
@@ -174,7 +165,7 @@ pub fn find_matches(
                                 if matches_segment(path, last) {
                                     return Some(ItemPath::Folder(path.to_owned()));
                                 }
-                            } else if match_extension(path, &config.song_extensions) {
+                            } else if entry.file_name() != "config.yaml" {
                                 let stripped = path.with_extension("");
                                 if matches_segment(&stripped, last) {
                                     return Some(ItemPath::Song(stripped));

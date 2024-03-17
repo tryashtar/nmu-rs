@@ -5,7 +5,6 @@ use std::{
 
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SyncedLine {
@@ -187,7 +186,7 @@ impl SyncedLyrics {
     }
 }
 
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Debug)]
 #[error("parsing")]
 pub enum ParseError {
     MissingColon,
