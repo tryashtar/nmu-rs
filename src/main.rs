@@ -1,5 +1,6 @@
 use color_print::cformat;
 use image::DynamicImage;
+use itertools::Itertools;
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     env,
@@ -148,30 +149,72 @@ fn do_scan(library_config: &mut LibraryConfig) {
                 .unwrap_or(&song_path)
                 .with_extension(""),
         );
-        let results = process_song(&nice_path, &song_path, library_config, &mut config_cache);
         let mut success = false;
-        if let Some(results) = results {
-            let art_set = match results.art {
-                GetArtResults::Keep | GetArtResults::NoTemplateFound { .. } => SetValue::Keep,
-                GetArtResults::Remove => SetValue::Remove,
-                GetArtResults::Processed { result, .. } => match result {
-                    Ok(img) => SetValue::Replace(img),
-                    Err(_) => SetValue::Keep,
-                },
-            };
-            let add_results = add_to_song(
-                &song_path,
-                &nice_path,
-                results.metadata,
-                art_set,
-                library_config,
-            );
-            match add_results {
-                Ok(()) => {
-                    success = true;
-                }
-                Err(err) => {
-                    eprintln!("{}", cformat!("❌ <red>Error adding to file\n{}</>", err));
+        let info = infer::get_from_path(&song_path);
+        match info {
+            Err(err) => {
+                eprintln!(
+                    "{}",
+                    cformat!(
+                        "❌ <red>Error reading file {}\n{}</>",
+                        song_path.display(),
+                        err
+                    )
+                );
+            }
+            Ok(None) => {
+                library_config.date_cache.mark_updated(song_path);
+                continue;
+            }
+            Ok(Some(kind)) => {
+                let tag_type = TagType::try_from(kind.mime_type());
+                match tag_type {
+                    Err(_) => {
+                        library_config.date_cache.mark_updated(song_path);
+                        continue;
+                    }
+                    Ok(tag_type) => {
+                        let results =
+                            process_song(&nice_path, &song_path, library_config, &mut config_cache);
+                        if let Some(results) = results {
+                            for (field, value) in results.metadata.iter().sorted() {
+                                println!("\t{field}: {value}");
+                            }
+                            let art_set = match results.art {
+                                GetArtResults::Keep | GetArtResults::NoTemplateFound { .. } => {
+                                    SetValue::Keep
+                                }
+                                GetArtResults::Remove => SetValue::Remove,
+                                GetArtResults::Processed { result, .. } => match result {
+                                    Ok(img) => SetValue::Replace(img),
+                                    Err(_) => SetValue::Keep,
+                                },
+                            };
+                            let add_results = add_to_song(
+                                tag_type,
+                                &song_path,
+                                &nice_path,
+                                results.metadata,
+                                art_set,
+                                library_config,
+                            );
+                            match add_results {
+                                Ok(()) => {
+                                    success = true;
+                                }
+                                Err(err) => {
+                                    eprintln!(
+                                        "{}",
+                                        cformat!(
+                                            "❌ <red>Error adding to file {}\n{}</>",
+                                            song_path.display(),
+                                            err
+                                        )
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -475,10 +518,6 @@ fn process_song(
 
 #[derive(thiserror::Error, Debug)]
 pub enum AddToSongError {
-    #[error("Unknown file type")]
-    UnknownType,
-    #[error("Unsupported mime type {0}")]
-    UnsupportedMimeType(String),
     #[error("{0}")]
     Io(#[from] std::io::Error),
     #[error("{0}")]
@@ -487,16 +526,32 @@ pub enum AddToSongError {
     Flac(#[from] metaflac::Error),
 }
 
+enum TagType {
+    Id3,
+    Flac,
+}
+impl<'a> TryFrom<&'a str> for TagType {
+    type Error = &'a str;
+
+    fn try_from(value: &'a str) -> Result<Self, Self::Error> {
+        match value {
+            "audio/mpeg" => Ok(TagType::Id3),
+            "audio/x-flac" => Ok(TagType::Flac),
+            _ => Err(value),
+        }
+    }
+}
+
 fn add_to_song(
+    tag_type: TagType,
     file_path: &Path,
     nice_path: &Path,
     metadata: Metadata,
     art: SetValue<Rc<DynamicImage>>,
     config: &mut LibraryConfig,
 ) -> Result<(), AddToSongError> {
-    let info = infer::get_from_path(file_path)?.ok_or(AddToSongError::UnknownType)?;
-    match info.mime_type() {
-        "audio/mpeg" => {
+    match tag_type {
+        TagType::Id3 => {
             let mut tag = id3::Tag::read_from_path(file_path)?;
             let existing = tag_interop::get_metadata_id3(&tag, &config.artist_separator);
             let mut lyrics = LyricsMetadata::keep();
@@ -515,7 +570,7 @@ fn add_to_song(
             );
             Ok(())
         }
-        "audio/x-flac" => {
+        TagType::Flac => {
             let mut tag = metaflac::Tag::read_from_path(file_path)?;
             let existing = tag_interop::get_metadata_flac(&tag);
             let mut lyrics = LyricsMetadata::keep();
@@ -533,7 +588,6 @@ fn add_to_song(
             );
             Ok(())
         }
-        other => Err(AddToSongError::UnsupportedMimeType(other.to_owned())),
     }
 }
 
@@ -559,7 +613,7 @@ fn handle_art_loaded(result: &GetArtResults, library_config: &mut LibraryConfig)
         GetArtResults::NoTemplateFound { tried } => {
             eprintln!(
                 "{}",
-                cformat!("⚠️ <yellow>No matching templates found: [{:?}]</>", tried)
+                cformat!("⚠️ <yellow>No matching templates found: {:?}</>", tried)
             );
         }
         GetArtResults::Processed {

@@ -591,9 +591,19 @@ impl LibraryConfig {
                 None
             }
         };
+        let mut subconfigs = HashMap::new();
+        if let Some(configs) = raw_config.subconfigs {
+            for (path, config) in configs {
+                let mut full_path = nice_folder.to_owned();
+                full_path.push(path);
+                let converted = self.resolve_config(config, &full_path)?;
+                subconfigs.insert(full_path, converted);
+            }
+        }
         Ok(SongConfig {
             set: setters,
             order: ordering,
+            subconfigs,
         })
     }
     fn check_fields(&self, selector: &FieldSelector) -> Result<(), LibraryError> {

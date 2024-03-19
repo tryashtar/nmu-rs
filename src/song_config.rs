@@ -26,6 +26,7 @@ pub struct RawSongConfig {
     #[serde(rename = "set all")]
     pub set_all: Option<Vec<RawAllSetter>>,
     pub set: Option<HashMap<PathBuf, ReferencableOperation>>,
+    pub subconfigs: Option<HashMap<PathBuf, RawSongConfig>>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -51,6 +52,7 @@ pub struct RawFieldSetter {
 pub struct SongConfig {
     pub set: Vec<Rc<AllSetter>>,
     pub order: Option<OrderingSetter>,
+    pub subconfigs: HashMap<PathBuf, SongConfig>,
 }
 pub enum OrderingSetter {
     Order {
@@ -111,6 +113,11 @@ impl SongConfig {
                     .apply(metadata, nice_path.as_ref(), library_config);
                 report.merge(more);
             }
+        }
+        for (path, sub) in &self.subconfigs {
+            let select_path = nice_path.strip_prefix(path).unwrap_or(path);
+            let more = sub.apply(nice_path, select_path, metadata, library_config);
+            report.merge(more);
         }
         report
     }

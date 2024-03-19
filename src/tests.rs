@@ -498,6 +498,7 @@ fn fast_config(selector: ItemSelector, op: MetadataOperation) -> LoadedConfig {
                 set: Rc::new(op),
             })],
             order: None,
+            subconfigs: HashMap::new(),
         }),
         nice_folder: PathBuf::new(),
         full_path: PathBuf::new(),
