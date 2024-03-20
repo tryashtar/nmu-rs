@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
@@ -22,22 +23,59 @@ use crate::{
     tag_interop::{LyricsMetadata, SetValue},
 };
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct RawLibraryConfig {
-    library: PathBuf,
-    reports: Vec<RawLibraryReport>,
-    lyrics: Option<LyricsConfig>,
-    logs: Option<PathBuf>,
-    config_folders: Vec<PathBuf>,
-    custom_fields: Vec<String>,
-    cache: Option<PathBuf>,
-    art: Option<RawArtRepo>,
-    named_strategies: HashMap<String, MetadataOperation>,
-    find_replace: HashMap<String, String>,
-    artist_separator: String,
+    pub library: PathBuf,
+    pub reports: Vec<RawLibraryReport>,
+    pub lyrics: Option<LyricsConfig>,
+    pub config_folders: Vec<PathBuf>,
+    pub custom_fields: Vec<String>,
+    pub cache: Option<PathBuf>,
+    pub art: Option<RawArtRepo>,
+    pub named_strategies: HashMap<String, MetadataOperation>,
+    pub find_replace: HashMap<String, String>,
+    pub artist_separator: String,
+    pub scan: Vec<ScanOptions>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
+pub struct ScanOptions {
+    #[serde(with = "serde_regex")]
+    pub pattern: Regex,
+    pub tags: ScanDecision,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ScanDecision {
+    Ignore,
+    #[serde(untagged)]
+    Set(Rc<TagOptions>),
+}
+const fn default_ignore() -> TagSettings {
+    TagSettings::Ignore
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TagSettings {
+    Ignore,
+    Remove,
+    #[serde(untagged)]
+    Set {},
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct TagOptions {
+    #[serde(default = "default_ignore")]
+    pub flac: TagSettings,
+    #[serde(default = "default_ignore")]
+    pub id3: TagSettings,
+    #[serde(default = "default_ignore")]
+    pub ape: TagSettings,
+}
+
+#[derive(Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum RawLibraryReport {
     Fields {
@@ -442,7 +480,6 @@ pub struct LibraryConfig {
     pub library_folder: PathBuf,
     pub reports: Vec<LibraryReport>,
     pub lyrics: Option<LyricsConfig>,
-    pub log_folder: Option<PathBuf>,
     pub config_folders: Vec<PathBuf>,
     pub custom_fields: Vec<MetadataField>,
     pub date_cache: DateCache,
@@ -450,6 +487,7 @@ pub struct LibraryConfig {
     pub named_strategies: HashMap<String, Rc<MetadataOperation>>,
     pub find_replace: HashMap<String, String>,
     pub artist_separator: String,
+    pub scan: Vec<ScanOptions>,
 }
 impl LibraryConfig {
     pub fn new(folder: &Path, raw: RawLibraryConfig) -> Result<Self, LibraryError> {
@@ -465,7 +503,6 @@ impl LibraryConfig {
                 priority: x.priority,
                 config: x.config,
             }),
-            log_folder: raw.logs.map(|x| folder.join(x)),
             config_folders: raw
                 .config_folders
                 .into_iter()
@@ -485,11 +522,26 @@ impl LibraryConfig {
                 .collect(),
             find_replace: raw.find_replace,
             artist_separator: raw.artist_separator,
+            scan: raw.scan,
         };
         for strat in result.named_strategies.values() {
             result.check_operation(strat)?;
         }
         Ok(result)
+    }
+    pub fn scan_settings(&self, full_path: &Path) -> Option<Rc<TagOptions>> {
+        let relative = full_path
+            .strip_prefix(&self.library_folder)
+            .unwrap_or(full_path);
+        for entry in &self.scan {
+            if entry.pattern.is_match(&relative.to_string_lossy()) {
+                return match &entry.tags {
+                    ScanDecision::Ignore => None,
+                    ScanDecision::Set(result) => Some(result.clone()),
+                };
+            }
+        }
+        None
     }
     pub fn resolve_config(
         &self,

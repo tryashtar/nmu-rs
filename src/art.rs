@@ -83,38 +83,11 @@ pub enum ArtScale {
     Stretch,
 }
 #[derive(Deserialize, Serialize, Clone)]
-#[serde(untagged)]
+#[serde(rename_all = "snake_case")]
 pub enum ArtLength {
-    #[serde(deserialize_with = "art_length_original")]
     Original,
+    #[serde(untagged)]
     Number(u32),
-}
-fn art_length_original<'de, D>(deserializer: D) -> Result<(), D::Error>
-where
-    D: serde::de::Deserializer<'de>,
-{
-    struct Visitor;
-
-    impl<'de> serde::de::Visitor<'de> for Visitor {
-        type Value = ();
-
-        fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
-            formatter.write_str("string")
-        }
-
-        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            if value == "original" {
-                Ok(())
-            } else {
-                Err(serde::de::Error::custom("invalid"))
-            }
-        }
-    }
-
-    deserializer.deserialize_str(Visitor)
 }
 impl ArtSettings {
     fn merge_in(&mut self, other: &Self) {
@@ -279,7 +252,7 @@ pub struct RawArtSettingsSetter {
     pub set: ReferencableArtSettings,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct RawArtRepo {
     templates: PathBuf,
     cache: Option<PathBuf>,

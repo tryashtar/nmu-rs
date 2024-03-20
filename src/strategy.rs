@@ -261,59 +261,23 @@ impl PathSegment {
 
 #[derive(Deserialize, Serialize, Clone)]
 #[serde(rename_all = "lowercase")]
-#[serde(untagged)]
 pub enum LocalItemSelector {
-    #[serde(
-        deserialize_with = "item_selector_this_de",
-        serialize_with = "item_selector_this_ser"
-    )]
+    #[serde(alias = "self")]
     This,
-    DrillUp {
-        up: Range,
-    },
+    #[serde(untagged)]
+    DrillUp { up: Range },
+    #[serde(untagged)]
     DrillDown {
         from_root: Range,
         #[serde(skip_serializing_if = "Option::is_none")]
         must_be: Option<MusicItemType>,
     },
+    #[serde(untagged)]
     Selector {
         selector: ItemSelector,
         #[serde(skip_serializing_if = "Option::is_none")]
         must_be: Option<MusicItemType>,
     },
-}
-fn item_selector_this_de<'de, D>(deserializer: D) -> Result<(), D::Error>
-where
-    D: serde::de::Deserializer<'de>,
-{
-    struct Visitor;
-
-    impl<'de> serde::de::Visitor<'de> for Visitor {
-        type Value = ();
-
-        fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
-            formatter.write_str("string")
-        }
-
-        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            if value == "this" || value == "self" {
-                Ok(())
-            } else {
-                Err(serde::de::Error::custom("invalid"))
-            }
-        }
-    }
-
-    deserializer.deserialize_str(Visitor)
-}
-fn item_selector_this_ser<S>(s: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    s.serialize_str("this")
 }
 impl LocalItemSelector {
     fn get(&self, start: &Path, config: &LibraryConfig) -> Vec<PathBuf> {
@@ -380,39 +344,13 @@ impl MusicItemType {
 }
 
 #[derive(Deserialize, Serialize)]
-#[serde(untagged)]
 pub enum FieldSelector {
-    #[serde(deserialize_with = "field_selector_all")]
+    #[serde(rename = "*")]
     All,
+    #[serde(untagged)]
     Single(MetadataField),
+    #[serde(untagged)]
     Multiple(HashSet<MetadataField>),
-}
-fn field_selector_all<'de, D>(deserializer: D) -> Result<(), D::Error>
-where
-    D: serde::de::Deserializer<'de>,
-{
-    struct Visitor;
-
-    impl<'de> serde::de::Visitor<'de> for Visitor {
-        type Value = ();
-
-        fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
-            formatter.write_str("string")
-        }
-
-        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            if value == "*" {
-                Ok(())
-            } else {
-                Err(serde::de::Error::custom("invalid"))
-            }
-        }
-    }
-
-    deserializer.deserialize_str(Visitor)
 }
 impl FieldSelector {
     pub fn is_match(&self, field: &MetadataField) -> bool {

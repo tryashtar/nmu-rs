@@ -1,12 +1,12 @@
 use std::{
     fs::{DirEntry, File},
-    io::BufReader,
+    io::{BufReader, BufWriter, Write},
     ops::Deref,
     path::{Path, PathBuf},
 };
 
 use itertools::Itertools;
-use serde::de::DeserializeOwned;
+use serde::{de::DeserializeOwned, Serialize};
 
 use crate::{
     library_config::{LibraryConfig, LibraryError},
@@ -38,6 +38,17 @@ where
     Ok(yaml)
 }
 
+pub fn save_yaml<T>(path: &Path, value: &T) -> Result<(), YamlError>
+where
+    T: Serialize,
+{
+    let file = File::create(path)?;
+    let mut writer = BufWriter::new(file);
+    serde_yaml::to_writer(&mut writer, value)?;
+    writer.flush()?;
+    Ok(())
+}
+
 fn is_dir(entry: &DirEntry) -> bool {
     entry.file_type().map(|x| x.is_dir()).unwrap_or(false)
 }
@@ -62,18 +73,18 @@ pub fn find_matches(
             if *recursive {
                 walkdir::WalkDir::new(&full_start)
                     .into_iter()
-                    .filter_entry(|entry| {
-                        entry.file_type().is_dir() || entry.file_name() != "config.yaml"
-                    })
                     .skip(1)
                     .filter_map(|x| x.ok())
                     .filter_map(|entry| {
                         let is_dir = entry.file_type().is_dir();
-                        let path = entry.into_path();
-                        let path = path.strip_prefix(&full_start).ok();
+                        let full_path = entry.into_path();
+                        let path = full_path.strip_prefix(&full_start).ok();
                         if is_dir {
                             path.map(|x| ItemPath::Folder(x.to_owned()))
                         } else {
+                            if config.scan_settings(&full_path).is_none() {
+                                return None;
+                            }
                             path.map(|x| ItemPath::Song(x.with_extension("")))
                         }
                     })
@@ -85,17 +96,16 @@ pub fn find_matches(
                         .into_iter()
                         .filter_map(|x| x.ok())
                         .filter_map(|entry| {
-                            let path = entry.path();
-                            let path = path.strip_prefix(&full_start).ok();
-                            path.and_then(|path| {
-                                if is_dir(&entry) {
-                                    return Some(ItemPath::Folder(path.to_owned()));
-                                } else if entry.file_name() != "config.yaml" {
-                                    let stripped = path.with_extension("");
-                                    return Some(ItemPath::Song(stripped));
+                            let full_path = entry.path();
+                            let path = full_path.strip_prefix(&full_start).unwrap_or(&full_path);
+                            if is_dir(&entry) {
+                                Some(ItemPath::Folder(path.to_owned()))
+                            } else {
+                                if config.scan_settings(&full_path).is_none() {
+                                    return None;
                                 }
-                                None
-                            })
+                                Some(ItemPath::Song(path.with_extension("")))
+                            }
                         })
                         .sorted_by(|a, b| Ord::cmp(a.deref(), b.deref()))
                         .collect();
@@ -123,7 +133,7 @@ pub fn find_matches(
                                     if matches_name(path, name) {
                                         return Some(ItemPath::Folder(path.to_owned()));
                                     }
-                                } else if entry.file_name() != "config.yaml" {
+                                } else {
                                     let stripped = path.with_extension("");
                                     if matches_name(&stripped, name) {
                                         return Some(ItemPath::Song(stripped));
@@ -165,7 +175,7 @@ pub fn find_matches(
                                 if matches_segment(path, last) {
                                     return Some(ItemPath::Folder(path.to_owned()));
                                 }
-                            } else if entry.file_name() != "config.yaml" {
+                            } else {
                                 let stripped = path.with_extension("");
                                 if matches_segment(&stripped, last) {
                                     return Some(ItemPath::Song(stripped));

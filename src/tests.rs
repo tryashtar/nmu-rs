@@ -419,7 +419,6 @@ fn dummy_config() -> LibraryConfig {
         library_folder: PathBuf::from("a/b/c"),
         reports: vec![],
         lyrics: None,
-        log_folder: None,
         config_folders: vec![],
         custom_fields: vec![],
         date_cache: DateCache::new(None),
@@ -427,6 +426,7 @@ fn dummy_config() -> LibraryConfig {
         named_strategies: HashMap::new(),
         find_replace: HashMap::new(),
         artist_separator: ";".to_owned(),
+        scan: vec![],
     }
 }
 

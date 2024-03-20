@@ -10,7 +10,6 @@ chrono = { version = "0.4", features = ["serde"] }
 color-print = "0.3"
 id3 = "1.13"
 image = "0.25"
-infer = "0.15"
 itertools = "0.12"
 metaflac = "0.2"
 regex = "1.10"

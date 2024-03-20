@@ -1,8 +1,9 @@
 use color_print::cformat;
 use image::DynamicImage;
 use itertools::Itertools;
+use library_config::{ScanOptions, TagSettings};
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     env,
     io::{ErrorKind, IsTerminal, Write},
     ops::Deref,
@@ -15,7 +16,7 @@ use walkdir::DirEntry;
 use crate::{
     art::{ArtError, GetArtResults},
     file_stuff::{ConfigError, YamlError},
-    library_config::{LibraryConfig, LibraryReport, RawLibraryConfig},
+    library_config::{LibraryConfig, LibraryReport, RawLibraryConfig, TagOptions},
     metadata::{Metadata, MetadataField, MetadataValue},
     modifier::ValueError,
     song_config::{OrderingSetter, RawSongConfig, SongConfig},
@@ -39,17 +40,31 @@ mod tests;
 
 fn main() {
     println!("NAIVE MUSIC UPDATER");
-    let library_argument = env::args().nth(1);
-    let library_config_path = Path::new(library_argument.as_deref().unwrap_or("library.yaml"));
+    let args = env::args().collect::<Vec<_>>();
+    let library_argument = args.get(1);
+    let library_config_path = Path::new(
+        library_argument
+            .map(|x| x.as_str())
+            .unwrap_or("library.yaml"),
+    );
+    let next_argument = args.get(2);
+    if let Some(word) = next_argument {
+        match word.as_str() {
+            "generate" => {}
+            _ => {
+                eprintln!("Unknown mode '{word}', try 'generate'");
+            }
+        }
+        return;
+    }
     let raw_config = file_stuff::load_yaml::<RawLibraryConfig>(library_config_path);
     match raw_config {
         Err(YamlError::Io(error))
             if error.kind() == ErrorKind::NotFound && library_argument.is_none() =>
         {
-            eprintln!("{}", cformat!("❌ <red>{}</>", error));
             if let Ok(dir) = std::env::current_dir() {
                 eprintln!(
-                    "Provide the path to a library.yaml or add one to '{}'",
+                    "Provide the path to a library.yaml or add one to '{}'\nOr use '<path> generate' to create a template",
                     dir.display()
                 );
             }
@@ -142,7 +157,7 @@ fn do_scan(library_config: &mut LibraryConfig) {
             }
         }
     }
-    for song_path in scan_songs {
+    for (song_path, options) in scan_songs {
         let nice_path = ItemPath::Song(
             song_path
                 .strip_prefix(&library_config.library_folder)
@@ -150,71 +165,40 @@ fn do_scan(library_config: &mut LibraryConfig) {
                 .with_extension(""),
         );
         let mut success = false;
-        let info = infer::get_from_path(&song_path);
-        match info {
-            Err(err) => {
-                eprintln!(
-                    "{}",
-                    cformat!(
-                        "❌ <red>Error reading file {}\n{}</>",
-                        song_path.display(),
-                        err
-                    )
-                );
+        let results = process_song(&nice_path, &song_path, library_config, &mut config_cache);
+        if let Some(results) = results {
+            for (field, value) in results.metadata.iter().sorted() {
+                println!("\t{field}: {value}");
             }
-            Ok(None) => {
-                library_config.date_cache.mark_updated(song_path);
-                continue;
-            }
-            Ok(Some(kind)) => {
-                let tag_type = TagType::try_from(kind.mime_type());
-                match tag_type {
-                    Err(_) => {
-                        library_config.date_cache.mark_updated(song_path);
-                        continue;
-                    }
-                    Ok(tag_type) => {
-                        let results =
-                            process_song(&nice_path, &song_path, library_config, &mut config_cache);
-                        if let Some(results) = results {
-                            for (field, value) in results.metadata.iter().sorted() {
-                                println!("\t{field}: {value}");
-                            }
-                            let art_set = match results.art {
-                                GetArtResults::Keep | GetArtResults::NoTemplateFound { .. } => {
-                                    SetValue::Keep
-                                }
-                                GetArtResults::Remove => SetValue::Remove,
-                                GetArtResults::Processed { result, .. } => match result {
-                                    Ok(img) => SetValue::Replace(img),
-                                    Err(_) => SetValue::Keep,
-                                },
-                            };
-                            let add_results = add_to_song(
-                                tag_type,
-                                &song_path,
-                                &nice_path,
-                                results.metadata,
-                                art_set,
-                                library_config,
-                            );
-                            match add_results {
-                                Ok(()) => {
-                                    success = true;
-                                }
-                                Err(err) => {
-                                    eprintln!(
-                                        "{}",
-                                        cformat!(
-                                            "❌ <red>Error adding to file {}\n{}</>",
-                                            song_path.display(),
-                                            err
-                                        )
-                                    );
-                                }
-                            }
-                        }
-                    }
+            let art_set = match results.art {
+                GetArtResults::Keep | GetArtResults::NoTemplateFound { .. } => SetValue::Keep,
+                GetArtResults::Remove => SetValue::Remove,
+                GetArtResults::Processed { result, .. } => match result {
+                    Ok(img) => SetValue::Replace(img),
+                    Err(_) => SetValue::Keep,
+                },
+            };
+            let add_results = add_to_song(
+                &options,
+                &song_path,
+                &nice_path,
+                results.metadata,
+                art_set,
+                library_config,
+            );
+            match add_results {
+                Ok(()) => {
+                    success = true;
+                }
+                Err(err) => {
+                    eprintln!(
+                        "{}",
+                        cformat!(
+                            "❌ <red>Error adding to file {}\n{}</>",
+                            song_path.display(),
+                            err
+                        )
+                    );
                 }
             }
         }
@@ -461,14 +445,14 @@ fn process_folder(
                 }
             }
             repo.used_templates.add(full_path, &art_results);
-            return Some(ProcessFolderResults {
-                metadata: results.metadata,
-                icon: None,
-            });
         }
         handle_art_loaded(&art_results, library_config);
         println!("{}", nice_path.display());
         handle_apply_reports(&mut results.reports);
+        return Some(ProcessFolderResults {
+            metadata: results.metadata,
+            icon: None,
+        });
     }
     None
 }
@@ -543,52 +527,39 @@ impl<'a> TryFrom<&'a str> for TagType {
 }
 
 fn add_to_song(
-    tag_type: TagType,
+    options: &TagOptions,
     file_path: &Path,
     nice_path: &Path,
     metadata: Metadata,
     art: SetValue<Rc<DynamicImage>>,
     config: &mut LibraryConfig,
 ) -> Result<(), AddToSongError> {
-    match tag_type {
-        TagType::Id3 => {
+    match options.id3 {
+        TagSettings::Ignore => {}
+        TagSettings::Remove => {
+            if id3::Tag::remove_from_path(file_path)? {
+                println!("\tRemoved entire ID3 tag");
+            }
+        }
+        TagSettings::Set {} => {
             let mut tag = id3::Tag::read_from_path(file_path)?;
             let existing = tag_interop::get_metadata_id3(&tag, &config.artist_separator);
-            let mut lyrics = LyricsMetadata::keep();
-            if let Some(lyric_config) = &config.lyrics {
-                lyrics = lyric_config.handle(nice_path, &existing.lyrics);
-            }
-            handle_reports(config, nice_path, &metadata, &existing.normal);
-            tag_interop::set_metadata_id3(
-                &mut tag,
-                &FullMetadata {
-                    normal: metadata,
-                    art,
-                    lyrics,
-                },
-                &config.artist_separator,
-            );
-            Ok(())
-        }
-        TagType::Flac => {
-            let mut tag = metaflac::Tag::read_from_path(file_path)?;
-            let existing = tag_interop::get_metadata_flac(&tag);
-            let mut lyrics = LyricsMetadata::keep();
-            if let Some(lyric_config) = &config.lyrics {
-                lyrics = lyric_config.handle(nice_path, &existing.lyrics);
-            }
-            handle_reports(config, nice_path, &metadata, &existing.normal);
-            tag_interop::set_metadata_flac(
-                &mut tag,
-                &FullMetadata {
-                    normal: metadata,
-                    art,
-                    lyrics,
-                },
-            );
-            Ok(())
         }
     }
+    match options.ape {
+        TagSettings::Ignore => {}
+        TagSettings::Remove => {}
+        TagSettings::Set {} => {}
+    }
+    match options.flac {
+        TagSettings::Ignore => {}
+        TagSettings::Remove => {}
+        TagSettings::Set {} => {
+            let mut tag = metaflac::Tag::read_from_path(file_path)?;
+            let existing = tag_interop::get_metadata_flac(&tag);
+        }
+    }
+    Ok(())
 }
 
 fn handle_reports(
@@ -858,7 +829,7 @@ fn relevant_config_paths<'a>(
 }
 
 struct ScanResults {
-    songs: BTreeSet<PathBuf>,
+    songs: BTreeMap<PathBuf, Rc<TagOptions>>,
     folders: BTreeSet<PathBuf>,
     images: BTreeSet<PathBuf>,
 }
@@ -872,9 +843,10 @@ fn is_hidden(entry: &DirEntry) -> bool {
 
 fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
     let mut lock = std::io::stdout().lock();
-    let mut scan_songs = BTreeSet::<PathBuf>::new();
-    let mut scan_folders = BTreeSet::<PathBuf>::new();
-    let mut scan_images = BTreeSet::<PathBuf>::new();
+    let is_terminal = std::io::stdout().is_terminal();
+    let mut scan_songs = BTreeMap::new();
+    let mut scan_folders = BTreeSet::new();
+    let mut scan_images = BTreeSet::new();
     // for every config that's changed, scan all songs it applies to
     for config_root in &library_config.config_folders {
         for config_folder in walkdir::WalkDir::new(config_root)
@@ -900,15 +872,13 @@ fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
                     .filter_map(|x| x.ok())
                 {
                     let is_dir = entry.file_type().is_dir();
-                    let is_config = entry.file_name() == "config.yaml";
                     let path = entry.into_path();
                     if is_dir {
                         scan_folders.insert(path);
-                    } else if !is_config
-                        && scan_songs.insert(path)
-                        && std::io::stdout().is_terminal()
-                    {
-                        _ = write!(lock, "\rFound {}", scan_songs.len());
+                    } else if let Some(settings) = library_config.scan_settings(&path) {
+                        if scan_songs.insert(path, settings).is_none() && is_terminal {
+                            _ = write!(lock, "\rFound {}", scan_songs.len());
+                        }
                     }
                 }
             }
@@ -961,11 +931,12 @@ fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
                 for path in songs {
                     if path.is_dir() {
                         scan_folders.insert(path.clone());
-                    } else if path.is_file()
-                        && scan_songs.insert(path.clone())
-                        && std::io::stdout().is_terminal()
-                    {
-                        _ = write!(lock, "\rFound {}", scan_songs.len());
+                    } else if path.is_file() {
+                        if let Some(settings) = library_config.scan_settings(&path) {
+                            if scan_songs.insert(path.clone(), settings).is_none() && is_terminal {
+                                _ = write!(lock, "\rFound {}", scan_songs.len());
+                            }
+                        }
                     }
                 }
             }
@@ -975,11 +946,12 @@ fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
                 for path in songs {
                     if path.is_dir() {
                         scan_folders.insert(path.clone());
-                    } else if path.is_file()
-                        && scan_songs.insert(path.clone())
-                        && std::io::stdout().is_terminal()
-                    {
-                        _ = write!(lock, "\rFound {}", scan_songs.len());
+                    } else if path.is_file() {
+                        if let Some(settings) = library_config.scan_settings(&path) {
+                            if scan_songs.insert(path.clone(), settings).is_none() && is_terminal {
+                                _ = write!(lock, "\rFound {}", scan_songs.len());
+                            }
+                        }
                     }
                 }
             }
@@ -993,22 +965,23 @@ fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
         .filter_map(|x| x.ok())
     {
         let is_dir = entry.file_type().is_dir();
-        let is_config = entry.file_name() == "config.yaml";
         let path = entry.into_path();
         if library_config.date_cache.changed_recently(&path) {
             if is_dir {
                 scan_folders.insert(path);
-            } else if !is_config && scan_songs.insert(path) && std::io::stdout().is_terminal() {
-                _ = write!(lock, "\rFound {}, skipped {}", scan_songs.len(), skipped);
+            } else if let Some(settings) = library_config.scan_settings(&path) {
+                if scan_songs.insert(path, settings).is_none() && is_terminal {
+                    _ = write!(lock, "\rFound {}, skipped {}", scan_songs.len(), skipped);
+                }
             }
-        } else if !is_dir && !is_config && !scan_songs.contains(&path) {
+        } else if !is_dir && !scan_songs.contains_key(&path) {
             skipped += 1;
-            if std::io::stdout().is_terminal() {
+            if is_terminal {
                 _ = write!(lock, "\rFound {}, skipped {}", scan_songs.len(), skipped);
             }
         }
     }
-    if std::io::stdout().is_terminal() {
+    if is_terminal {
         _ = write!(lock, "\r");
     }
     println!("Found {}, skipped {}", scan_songs.len(), skipped);
