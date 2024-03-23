@@ -486,11 +486,12 @@ fn add_to_song(
         TagSettings::Ignore => {}
         TagSettings::Remove => {
             let existing = metaflac::Tag::read_from_path(file_path);
-            match existing {
-                Err(err) if matches!(err.kind, metaflac::ErrorKind::InvalidInput) => {
-                    return Ok(());
-                }
-                _ => {}
+            if let Err(metaflac::Error {
+                kind: metaflac::ErrorKind::InvalidInput,
+                ..
+            }) = existing
+            {
+                return Ok(());
             }
             if existing?.blocks().next().is_some() {
                 let mut tag = metaflac::Tag::new();
