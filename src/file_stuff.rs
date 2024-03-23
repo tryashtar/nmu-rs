@@ -49,7 +49,7 @@ where
     Ok(())
 }
 
-fn is_dir(entry: &DirEntry) -> bool {
+pub fn is_dir(entry: &DirEntry) -> bool {
     entry.file_type().map(|x| x.is_dir()).unwrap_or(false)
 }
 

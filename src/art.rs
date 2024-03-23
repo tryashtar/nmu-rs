@@ -466,9 +466,10 @@ impl ArtRepo {
                     .parent()
                     .unwrap_or(Path::new("")),
             ) {
-                for file in read.filter_map(|x| x.ok()) {
-                    let path = file.path();
-                    if path.file_stem().is_some_and(|x| x == name)
+                for entry in read.filter_map(|x| x.ok()) {
+                    let path = entry.path();
+                    if !file_stuff::is_dir(&entry)
+                        && path.file_stem().is_some_and(|x| x == name)
                         && !path.file_name().is_some_and(|x| x == "images.yaml")
                     {
                         return Some(path);

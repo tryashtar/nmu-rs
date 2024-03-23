@@ -433,7 +433,15 @@ fn add_to_song(
             }
         }
         TagSettings::Set {} => {
-            let mut tag = id3::Tag::read_from_path(file_path)?;
+            let mut tag = id3::Tag::read_from_path(file_path);
+            if let Err(id3::Error {
+                kind: id3::ErrorKind::NoTag,
+                ..
+            }) = tag
+            {
+                tag = Ok(id3::Tag::new());
+            }
+            let tag = tag?;
             if let Some(lyrics_config) = &config.lyrics {
                 let best = lyrics_config.get_best(|lyrics| {
                     lyrics_config.get(
@@ -465,7 +473,10 @@ fn add_to_song(
     match options.ape {
         TagSettings::Ignore => {}
         TagSettings::Remove => {
-            _ = ape::read_from_path(file_path)?;
+            let existing = ape::read_from_path(file_path);
+            if let Err(ape::Error::TagNotFound) = existing {
+                return Ok(());
+            }
             ape::remove_from_path(file_path)?;
             println!("\tRemoved entire APE tag");
         }
@@ -474,8 +485,14 @@ fn add_to_song(
     match options.flac {
         TagSettings::Ignore => {}
         TagSettings::Remove => {
-            let existing = metaflac::Tag::read_from_path(file_path)?;
-            if existing.blocks().next().is_some() {
+            let existing = metaflac::Tag::read_from_path(file_path);
+            match existing {
+                Err(err) if matches!(err.kind, metaflac::ErrorKind::InvalidInput) => {
+                    return Ok(());
+                }
+                _ => {}
+            }
+            if existing?.blocks().next().is_some() {
                 let mut tag = metaflac::Tag::new();
                 tag.write_to_path(file_path)?;
                 println!("\tRemoved entire FLAC tag");
