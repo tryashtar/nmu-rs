@@ -14,14 +14,14 @@ use strum::IntoEnumIterator;
 use crate::{
     art::{ArtRepo, RawArtRepo},
     file_stuff::{self, YamlError},
-    lyrics::{RichLyrics, SyncedLyrics},
+    lyrics::{ParseError, RichLyrics, SyncedLyrics},
     metadata::{Metadata, MetadataField, MetadataValue, BLANK_VALUE},
     modifier::ValueModifier,
     song_config::{
         AllSetter, DiscSet, OrderingSetter, RawSongConfig, ReferencableOperation, SongConfig,
     },
     strategy::{FieldSelector, ItemSelector, MetadataOperation, MusicItemType, ValueGetter},
-    tag_interop::{LyricsMetadata, SetValue},
+    tag_interop::{GetLyricsError, SetValue},
 };
 
 #[derive(Deserialize, Serialize)]
@@ -116,7 +116,6 @@ pub enum LibraryReport {
     ItemData {
         path: PathBuf,
         values: FieldSelector,
-        embedded: bool,
         include_blanks: bool,
         map: BTreeMap<PathBuf, BTreeMap<MetadataField, Option<MetadataValue>>>,
     },
@@ -196,7 +195,6 @@ impl LibraryReport {
                 Self::ItemData {
                     path: file_path,
                     values,
-                    embedded,
                     include_blanks: blanks,
                     map,
                 }
@@ -224,13 +222,7 @@ impl LibraryReport {
             _ => false,
         }
     }
-    pub fn record(
-        &mut self,
-        item_path: &Path,
-        metadata: &Metadata,
-        embedded_metadata: &Metadata,
-        sep: &str,
-    ) {
+    pub fn record(&mut self, item_path: &Path, metadata: &Metadata, sep: &str) {
         match self {
             Self::MergedFields {
                 key,
@@ -266,18 +258,12 @@ impl LibraryReport {
             }
             Self::ItemData {
                 values,
-                embedded,
                 include_blanks,
                 map,
                 ..
             } => {
                 let mut results = BTreeMap::new();
-                let meta = if *embedded {
-                    embedded_metadata
-                } else {
-                    metadata
-                };
-                for (field, value) in meta {
+                for (field, value) in metadata {
                     if values.is_match(field) && (*include_blanks || !Self::is_blank(value)) {
                         results.insert(
                             field.clone(),
@@ -303,28 +289,68 @@ pub struct LyricsConfig {
     config: HashMap<LyricsType, LyricsReplaceMode>,
 }
 impl LyricsConfig {
-    pub fn handle(&self, nice_path: &Path, source: &LyricsMetadata) -> LyricsMetadata {
-        let mut result = LyricsMetadata::keep();
-        let best = self
-            .priority
-            .iter()
-            .find_map(|x| x.get(&self.folder, nice_path, source));
-        for (lyric_type, replace) in &self.config {
-            match replace {
-                LyricsReplaceMode::Ignore => {}
-                LyricsReplaceMode::Remove => {
-                    lyric_type.set(&self.folder, nice_path, &mut result, None);
-                }
-                LyricsReplaceMode::Replace => {
-                    lyric_type.set(&self.folder, nice_path, &mut result, best.as_ref());
-                }
+    pub fn get_best(
+        &self,
+        getter: impl Fn(LyricsType) -> Result<RichLyrics, GetLyricsError>,
+    ) -> Result<RichLyrics, GetLyricsError> {
+        for lyrics in &self.priority {
+            let result = getter(*lyrics);
+            match result {
+                Ok(lyrics) => return Ok(lyrics),
+                Err(GetLyricsError::NotEmbedded) => {}
+                Err(GetLyricsError::Io(io))
+                    if matches!(io.kind(), std::io::ErrorKind::NotFound) => {}
+                Err(err) => return Err(err),
+            };
+        }
+        Err(GetLyricsError::NotEmbedded)
+    }
+    pub fn get(
+        &self,
+        lyrics: LyricsType,
+        nice_path: &Path,
+        rich: impl Fn() -> Result<RichLyrics, GetLyricsError>,
+        synced: impl Fn() -> Result<SyncedLyrics, GetLyricsError>,
+        simple: impl Fn() -> Result<String, GetLyricsError>,
+    ) -> Result<RichLyrics, GetLyricsError> {
+        match lyrics {
+            LyricsType::RichEmbedded => rich(),
+            LyricsType::SyncedEmbedded => synced().map(RichLyrics::from),
+            LyricsType::SimpleEmbedded => simple().map(RichLyrics::from),
+            LyricsType::RichFile => {
+                let mut path = self.folder.join(nice_path).to_string_lossy().into_owned();
+                path.push_str(".lrc.json");
+                let path = PathBuf::from(path);
+                let file = File::open(path)?;
+                let reader = BufReader::new(file);
+                let lyrics: RichLyrics = serde_json::de::from_reader(reader)?;
+                Ok(lyrics)
+            }
+            LyricsType::SyncedFile => {
+                let mut path = self.folder.join(nice_path).to_string_lossy().into_owned();
+                path.push_str(".lrc");
+                let path = PathBuf::from(path);
+                let file = File::open(path)?;
+                let reader: BufReader<File> = BufReader::new(file);
+                let lines = reader.lines().collect::<Result<Vec<_>, _>>()?;
+                let lyrics = SyncedLyrics::parse(lines)?;
+                Ok(lyrics.into())
+            }
+            LyricsType::SimpleFile => {
+                let mut path = self.folder.join(nice_path).to_string_lossy().into_owned();
+                path.push_str(".lrc.txt");
+                let path = PathBuf::from(path);
+                let file = File::open(path)?;
+                let mut reader: BufReader<File> = BufReader::new(file);
+                let mut buf = String::new();
+                reader.read_to_string(&mut buf)?;
+                Ok(buf.into())
             }
         }
-        result
     }
 }
 
-#[derive(Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[derive(Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum LyricsType {
     RichEmbedded,
@@ -333,140 +359,6 @@ pub enum LyricsType {
     SyncedFile,
     SimpleEmbedded,
     SimpleFile,
-}
-impl LyricsType {
-    fn set(
-        &self,
-        folder: &Path,
-        nice_path: &Path,
-        metadata: &mut LyricsMetadata,
-        value: Option<&RichLyrics>,
-    ) {
-        match self {
-            Self::RichEmbedded => {
-                metadata.rich = match value {
-                    None => SetValue::Remove,
-                    Some(val) => SetValue::Replace(val.clone()),
-                }
-            }
-            Self::RichFile => {
-                let mut path = folder.join(nice_path).to_string_lossy().into_owned();
-                path.push_str(".lrc.json");
-                let path = PathBuf::from(path);
-                match value {
-                    None => {
-                        std::fs::remove_file(path);
-                    }
-                    Some(val) => {
-                        if let Ok(file) = std::fs::File::create(path) {
-                            let mut writer = std::io::BufWriter::new(file);
-                            if let Ok(str) = serde_json::ser::to_string_pretty(val) {
-                                write!(writer, "{}", str);
-                            }
-                        }
-                    }
-                }
-            }
-            Self::SyncedEmbedded => {
-                metadata.synced = match value {
-                    None => SetValue::Remove,
-                    Some(val) => SetValue::Replace(val.clone().into()),
-                }
-            }
-            Self::SyncedFile => {
-                let mut path = folder.join(nice_path).to_string_lossy().into_owned();
-                path.push_str(".lrc");
-                let path = PathBuf::from(path);
-                match value {
-                    None => {
-                        std::fs::remove_file(path);
-                    }
-                    Some(val) => {
-                        if let Ok(file) = std::fs::File::create(path) {
-                            let mut writer = std::io::BufWriter::new(file);
-                            for line in std::convert::Into::<SyncedLyrics>::into(val.clone()).save()
-                            {
-                                writeln!(writer, "{}", line);
-                            }
-                        }
-                    }
-                }
-            }
-            Self::SimpleEmbedded => {
-                metadata.simple = match value {
-                    None => SetValue::Remove,
-                    Some(val) => SetValue::Replace(val.clone().into()),
-                }
-            }
-            Self::SimpleFile => {
-                let mut path = folder.join(nice_path).to_string_lossy().into_owned();
-                path.push_str(".lrc.txt");
-                let path = PathBuf::from(path);
-                match value {
-                    None => {
-                        std::fs::remove_file(path);
-                    }
-                    Some(val) => {
-                        if let Ok(file) = std::fs::File::create(path) {
-                            let mut writer = std::io::BufWriter::new(file);
-                            let str = std::convert::Into::<String>::into(val.clone());
-                            write!(writer, "{}", str);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    fn get(
-        &self,
-        folder: &Path,
-        nice_path: &Path,
-        metadata: &LyricsMetadata,
-    ) -> Option<RichLyrics> {
-        match self {
-            Self::RichEmbedded => match &metadata.rich {
-                SetValue::Keep | SetValue::Remove => None,
-                SetValue::Replace(val) => Some(val.clone()),
-            },
-            Self::RichFile => {
-                let mut path = folder.join(nice_path).to_string_lossy().into_owned();
-                path.push_str(".lrc.json");
-                let path = PathBuf::from(path);
-                let file = File::open(path).ok()?;
-                let reader = BufReader::new(file);
-                let lyrics: RichLyrics = serde_json::de::from_reader(reader).ok()?;
-                Some(lyrics)
-            }
-            Self::SyncedEmbedded => match &metadata.synced {
-                SetValue::Keep | SetValue::Remove => None,
-                SetValue::Replace(val) => Some(val.clone().into()),
-            },
-            Self::SyncedFile => {
-                let mut path = folder.join(nice_path).to_string_lossy().into_owned();
-                path.push_str(".lrc");
-                let path = PathBuf::from(path);
-                let file = File::open(path).ok()?;
-                let reader: BufReader<File> = BufReader::new(file);
-                let lyrics =
-                    SyncedLyrics::parse(reader.lines().filter_map(|x| x.ok()).collect()).ok()?;
-                Some(lyrics.into())
-            }
-            Self::SimpleEmbedded => match &metadata.simple {
-                SetValue::Keep | SetValue::Remove => None,
-                SetValue::Replace(val) => Some(val.clone().into()),
-            },
-            Self::SimpleFile => {
-                let mut path = folder.join(nice_path).to_string_lossy().into_owned();
-                path.push_str(".lrc.txt");
-                let path = PathBuf::from(path);
-                let file = File::open(path).ok()?;
-                let mut reader: BufReader<File> = BufReader::new(file);
-                let mut buf = String::new();
-                reader.read_to_string(&mut buf).ok()?;
-                Some(buf.into())
-            }
-        }
-    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -535,19 +427,9 @@ impl LibraryConfig {
         let custom = self.custom_fields.clone().into_iter();
         builtin.chain(custom)
     }
-    pub fn update_reports(
-        &mut self,
-        nice_path: &Path,
-        metadata: &Metadata,
-        existing_metadata: &Metadata,
-    ) {
+    pub fn update_reports(&mut self, nice_path: &Path, metadata: &Metadata) {
         for report in &mut self.reports {
-            report.record(
-                nice_path,
-                metadata,
-                existing_metadata,
-                &self.artist_separator,
-            );
+            report.record(nice_path, metadata, &self.artist_separator);
         }
     }
     pub fn scan_settings(&self, full_path: &Path) -> Option<Rc<TagOptions>> {

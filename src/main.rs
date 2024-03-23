@@ -15,11 +15,14 @@ use walkdir::DirEntry;
 use crate::{
     art::{ArtError, GetArtResults},
     file_stuff::{ConfigError, YamlError},
-    library_config::{LibraryConfig, LibraryReport, RawLibraryConfig, TagOptions, TagSettings},
+    library_config::{
+        LibraryConfig, LibraryReport, LyricsType, RawLibraryConfig, TagOptions, TagSettings,
+    },
+    lyrics::RichLyrics,
     metadata::{Metadata, MetadataField, MetadataValue, SourcedReport},
     modifier::ValueError,
     song_config::{ConfigCache, SongConfig},
-    tag_interop::SetValue,
+    tag_interop::{GetLyricsError, SetValue},
     util::ItemPath,
 };
 
@@ -137,10 +140,7 @@ fn do_scan(library_config: &mut LibraryConfig) {
         );
         let mut success = false;
         let results = process_song(&nice_path, &song_path, library_config, &mut config_cache);
-        if let Some(results) = results {
-            for (field, value) in results.metadata.iter().sorted() {
-                println!("\t{field}: {value}");
-            }
+        if let Some(mut results) = results {
             let art_set = match results.art {
                 GetArtResults::Keep | GetArtResults::NoTemplateFound { .. } => SetValue::Keep,
                 GetArtResults::Remove => SetValue::Remove,
@@ -153,10 +153,13 @@ fn do_scan(library_config: &mut LibraryConfig) {
                 &options,
                 &song_path,
                 &nice_path,
-                results.metadata,
+                &mut results.metadata,
                 art_set,
                 library_config,
             );
+            for (field, value) in results.metadata.iter().sorted() {
+                println!("\t{field}: {value}");
+            }
             match add_results {
                 Ok(()) => {
                     success = true;
@@ -410,13 +413,15 @@ pub enum AddToSongError {
     Id3(#[from] id3::Error),
     #[error("{0}")]
     Flac(#[from] metaflac::Error),
+    #[error("{0}")]
+    Ape(#[from] ape::Error),
 }
 
 fn add_to_song(
     options: &TagOptions,
     file_path: &Path,
     nice_path: &Path,
-    metadata: Metadata,
+    metadata: &mut Metadata,
     art: SetValue<Rc<DynamicImage>>,
     config: &mut LibraryConfig,
 ) -> Result<(), AddToSongError> {
@@ -429,20 +434,55 @@ fn add_to_song(
         }
         TagSettings::Set {} => {
             let mut tag = id3::Tag::read_from_path(file_path)?;
-            let existing = tag_interop::get_metadata_id3(&tag, &config.artist_separator);
+            if let Some(lyrics_config) = &config.lyrics {
+                let best = lyrics_config.get_best(|lyrics| {
+                    lyrics_config.get(
+                        lyrics,
+                        nice_path,
+                        || tag_interop::get_id3_rich_lyrics(&tag),
+                        || tag_interop::get_id3_synced_lyrics(&tag),
+                        || tag_interop::get_id3_simple_lyrics(&tag),
+                    )
+                });
+                match best {
+                    Ok(lyrics) => {
+                        metadata.insert(
+                            MetadataField::SimpleLyrics,
+                            MetadataValue::string(lyrics.into()),
+                        );
+                    }
+                    Err(GetLyricsError::NotEmbedded) => {}
+                    Err(err) => {
+                        eprintln!(
+                            "{}",
+                            cformat!("⚠️ <yellow>Failed loading lyrics\n{}</>", err)
+                        );
+                    }
+                }
+            }
         }
     }
     match options.ape {
         TagSettings::Ignore => {}
-        TagSettings::Remove => {}
+        TagSettings::Remove => {
+            _ = ape::read_from_path(file_path)?;
+            ape::remove_from_path(file_path)?;
+            println!("\tRemoved entire APE tag");
+        }
         TagSettings::Set {} => {}
     }
     match options.flac {
         TagSettings::Ignore => {}
-        TagSettings::Remove => {}
+        TagSettings::Remove => {
+            let existing = metaflac::Tag::read_from_path(file_path)?;
+            if existing.blocks().next().is_some() {
+                let mut tag = metaflac::Tag::new();
+                tag.write_to_path(file_path)?;
+                println!("\tRemoved entire FLAC tag");
+            }
+        }
         TagSettings::Set {} => {
             let mut tag = metaflac::Tag::read_from_path(file_path)?;
-            let existing = tag_interop::get_metadata_flac(&tag);
         }
     }
     Ok(())
