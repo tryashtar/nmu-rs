@@ -40,6 +40,7 @@ mod tests;
 
 fn main() {
     println!("NAIVE MUSIC UPDATER");
+    tracing_subscriber::fmt().init();
     let args = env::args().collect::<Vec<_>>();
     let library_argument = args.get(1);
     let library_config_path = Path::new(
@@ -118,6 +119,11 @@ fn do_scan(library_config: &mut LibraryConfig) {
                     .unwrap_or(image)
                     .with_extension("");
                 let full = disk.get_path(&nice);
+                tracing::event!(
+                    tracing::Level::INFO,
+                    path = full.to_string_lossy().into_owned(),
+                    "Deleting cached image"
+                );
                 match std::fs::remove_file(&full) {
                     Err(err) if err.kind() != ErrorKind::NotFound => {
                         eprintln!(
