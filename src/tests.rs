@@ -1,14 +1,13 @@
 use crate::{
     library_config::{DateCache, LibraryConfig},
-    metadata::{MetadataField, MetadataValue},
+    metadata::{self, MetadataField, MetadataValue},
     modifier::{ValueError, ValueModifier},
-    song_config::{AllSetter, SongConfig},
+    song_config::{AllSetter, LoadedConfig, SongConfig},
     strategy::{
         FieldSelector, FieldValueGetter, ItemSelector, LocalItemSelector, MetadataOperation,
         PathSegment, ValueGetter, WarnBehavior,
     },
     util::{ItemPath, OutOfBoundsDecision, Range},
-    LoadedConfig,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -532,7 +531,7 @@ fn copy_full_simple() {
             )])),
         ),
     ];
-    let results = crate::get_metadata(&path, &configs, &config);
+    let results = metadata::get_metadata(&path, &configs, &config);
     let field = results.metadata.get(&MetadataField::Performers).unwrap();
     assert!(matches!(field, MetadataValue::List(x) if x.as_slice() == ["test"]));
     assert!(results.reports.into_iter().all(|x| x.errors.is_empty()));
@@ -549,7 +548,7 @@ fn copy_full_self() {
             fast_copy(MetadataField::Title),
         )])),
     )];
-    let results = crate::get_metadata(&path, &configs, &config);
+    let results = metadata::get_metadata(&path, &configs, &config);
     let field = results.metadata.get(&MetadataField::Title);
     assert!(field.is_none());
     assert!(matches!(
@@ -572,7 +571,7 @@ fn copy_full_missing() {
             fast_copy(MetadataField::Performers),
         )])),
     )];
-    let results = crate::get_metadata(&path, &configs, &config);
+    let results = metadata::get_metadata(&path, &configs, &config);
     let field = results.metadata.get(&MetadataField::Title);
     assert!(field.is_none());
     assert!(matches!(

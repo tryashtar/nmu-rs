@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     file_stuff::{self, ConfigError, YamlError},
-    is_not_found,
     library_config::LibraryError,
+    song_config,
 };
 
 pub type ArtConfigCache = HashMap<PathBuf, Result<Rc<ArtConfig>, Rc<ConfigError>>>;
@@ -523,7 +523,7 @@ impl ArtRepo {
                     }
                 }
                 Err(error) => {
-                    if !is_not_found(&error) {
+                    if !song_config::is_not_found(&error) {
                         settings = None;
                     }
                 }

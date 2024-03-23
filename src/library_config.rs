@@ -9,6 +9,7 @@ use std::{
     rc::Rc,
     time::SystemTime,
 };
+use strum::IntoEnumIterator;
 
 use crate::{
     art::{ArtRepo, RawArtRepo},
@@ -528,6 +529,26 @@ impl LibraryConfig {
             result.check_operation(strat)?;
         }
         Ok(result)
+    }
+    pub fn get_all_fields(&self) -> impl Iterator<Item = MetadataField> {
+        let builtin = MetadataField::iter().filter(|x| !matches!(x, MetadataField::Custom(_)));
+        let custom = self.custom_fields.clone().into_iter();
+        builtin.chain(custom)
+    }
+    pub fn update_reports(
+        &mut self,
+        nice_path: &Path,
+        metadata: &Metadata,
+        existing_metadata: &Metadata,
+    ) {
+        for report in &mut self.reports {
+            report.record(
+                nice_path,
+                metadata,
+                existing_metadata,
+                &self.artist_separator,
+            );
+        }
     }
     pub fn scan_settings(&self, full_path: &Path) -> Option<Rc<TagOptions>> {
         let relative = full_path

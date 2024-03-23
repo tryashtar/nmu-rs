@@ -7,8 +7,7 @@ use std::{
 };
 
 use regex::Regex;
-use serde::{Deserialize, Serialize, Serializer};
-use strum::IntoEnumIterator;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     file_stuff,
@@ -69,10 +68,9 @@ impl MetadataOperation {
                 }
             }
             Self::Blank { remove } => {
-                let builtin = MetadataField::iter().collect::<Vec<_>>();
-                for field in config.custom_fields.iter().chain(builtin.iter()) {
-                    if remove.is_match(field) {
-                        metadata.insert(field.clone(), MetadataValue::blank());
+                for field in config.get_all_fields() {
+                    if remove.is_match(&field) {
+                        metadata.insert(field, MetadataValue::blank());
                     }
                 }
             }
@@ -81,10 +79,9 @@ impl MetadataOperation {
             }
             Self::Shared { fields, set } => match set.get(metadata, nice_path, config) {
                 Ok(value) => {
-                    let builtin = MetadataField::iter().collect::<Vec<_>>();
-                    for field in config.custom_fields.iter().chain(builtin.iter()) {
-                        if fields.is_match(field) {
-                            metadata.insert(field.clone(), value.clone());
+                    for field in config.get_all_fields() {
+                        if fields.is_match(&field) {
+                            metadata.insert(field, value.clone());
                         }
                     }
                 }
@@ -93,13 +90,12 @@ impl MetadataOperation {
                 }
             },
             Self::SharedModify { fields, modify } => {
-                let builtin = MetadataField::iter().collect::<Vec<_>>();
-                for field in config.custom_fields.iter().chain(builtin.iter()) {
-                    if fields.is_match(field) {
-                        if let Some(existing) = metadata.get(field) {
+                for field in config.get_all_fields() {
+                    if fields.is_match(&field) {
+                        if let Some(existing) = metadata.get(&field) {
                             match modify.modify(metadata, existing.clone(), nice_path, config) {
                                 Ok(modified) => {
-                                    metadata.insert(field.clone(), modified);
+                                    metadata.insert(field, modified);
                                 }
                                 Err(err) => {
                                     report.errors.push(err);
@@ -108,7 +104,7 @@ impl MetadataOperation {
                         } else {
                             report.errors.push(ValueError::MissingField {
                                 modifier: modify.clone(),
-                                field: field.clone(),
+                                field,
                             });
                         }
                     }

@@ -1,11 +1,64 @@
 use core::fmt;
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use strum::EnumIter;
 
+use crate::{
+    library_config::LibraryConfig, modifier::ValueError, song_config::LoadedConfig, util::ItemPath,
+};
+
 pub type Metadata = HashMap<MetadataField, MetadataValue>;
+
+pub struct GetMetadataResults {
+    pub metadata: Metadata,
+    pub reports: Vec<SourcedReport>,
+}
+pub struct SourcedReport {
+    pub full_path: PathBuf,
+    pub errors: Vec<ValueError>,
+}
+
+pub fn get_metadata(
+    nice_path: &ItemPath,
+    configs: &[LoadedConfig],
+    library_config: &LibraryConfig,
+) -> GetMetadataResults {
+    let mut metadata;
+    let mut config_reports;
+    loop {
+        metadata = Metadata::new();
+        config_reports = vec![];
+        for config in configs {
+            let select_path = nice_path
+                .strip_prefix(&config.nice_folder)
+                .unwrap_or(&config.nice_folder);
+            let report = config
+                .config
+                .apply(nice_path, select_path, &mut metadata, library_config);
+            config_reports.push(SourcedReport {
+                full_path: config.full_path.clone(),
+                errors: report.errors,
+            });
+        }
+        let mut redo = false;
+        for error in config_reports.iter().flat_map(|x| &x.errors) {
+            if let ValueError::CopyNotFound { field } = error {
+                if metadata.contains_key(field) {
+                    redo = true;
+                }
+            }
+        }
+        if !redo {
+            break;
+        }
+    }
+    GetMetadataResults {
+        metadata,
+        reports: config_reports,
+    }
+}
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(untagged)]

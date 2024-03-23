@@ -76,9 +76,6 @@ pub enum ValueError {
         got: MetadataValue,
         expected: &'static str,
     },
-    Uncombinable {
-        values: Vec<MetadataValue>,
-    },
 }
 pub fn inline_data<T>(item: &T) -> String
 where
@@ -120,13 +117,6 @@ impl std::fmt::Display for ValueError {
             }
             Self::CopyNotFound { field } => {
                 write!(f, "Tried to copy {field}, but no value was found",)
-            }
-            Self::Uncombinable { values } => {
-                if values.is_empty() {
-                    write!(f, "Got no values to combine")
-                } else {
-                    write!(f, "Can't combine mismatching values: {values:?}")
-                }
             }
         }
     }
