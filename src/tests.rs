@@ -1,5 +1,9 @@
+use regex::Regex;
+
 use crate::{
-    library_config::{DateCache, LibraryConfig},
+    library_config::{
+        DateCache, LibraryConfig, ScanDecision, ScanOptions, TagOptions, TagSettings,
+    },
     metadata::{self, MetadataField, MetadataValue},
     modifier::{ValueError, ValueModifier},
     song_config::{AllSetter, LoadedConfig, SongConfig},
@@ -425,7 +429,14 @@ fn dummy_config() -> LibraryConfig {
         named_strategies: HashMap::new(),
         find_replace: HashMap::new(),
         artist_separator: ";".to_owned(),
-        scan: vec![],
+        scan: vec![ScanOptions {
+            pattern: Regex::new("\\.mp3$").unwrap(),
+            tags: ScanDecision::Set(Rc::new(TagOptions {
+                flac: TagSettings::Ignore,
+                id3: TagSettings::Ignore,
+                ape: TagSettings::Ignore,
+            })),
+        }],
     }
 }
 

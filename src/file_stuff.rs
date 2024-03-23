@@ -134,6 +134,9 @@ pub fn find_matches(
                                         return Some(ItemPath::Folder(path.to_owned()));
                                     }
                                 } else {
+                                    if config.scan_settings(&path).is_none() {
+                                        return None;
+                                    }
                                     let stripped = path.with_extension("");
                                     if matches_name(&stripped, name) {
                                         return Some(ItemPath::Song(stripped));
@@ -176,6 +179,9 @@ pub fn find_matches(
                                     return Some(ItemPath::Folder(path.to_owned()));
                                 }
                             } else {
+                                if config.scan_settings(&path).is_none() {
+                                    return None;
+                                }
                                 let stripped = path.with_extension("");
                                 if matches_segment(&stripped, last) {
                                     return Some(ItemPath::Song(stripped));
