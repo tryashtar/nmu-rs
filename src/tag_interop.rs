@@ -1,16 +1,6 @@
-use std::{collections::HashMap, rc::Rc};
+use id3::frame::SynchronisedLyrics;
 
-use id3::{
-    frame::{Lyrics, SynchronisedLyrics},
-    TagLike,
-};
-use image::DynamicImage;
-use itertools::Itertools;
-
-use crate::{
-    lyrics::{ParseError, RichLyrics, SyncedLine, SyncedLyrics},
-    metadata::{Metadata, MetadataField, MetadataValue},
-};
+use crate::lyrics::{ParseError, RichLyrics, SyncedLine, SyncedLyrics};
 
 pub enum SetValue<T> {
     Keep,

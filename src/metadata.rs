@@ -114,12 +114,6 @@ impl MetadataValue {
     pub fn string(single: String) -> Self {
         Self::List(vec![single])
     }
-    pub fn option(value: Option<String>) -> Self {
-        value.map_or_else(Self::blank, Self::string)
-    }
-    pub fn option_num(value: Option<u32>) -> Self {
-        value.map_or_else(Self::blank, Self::Number)
-    }
     pub fn as_string(&self) -> Option<&str> {
         match self {
             Self::List(list) => {

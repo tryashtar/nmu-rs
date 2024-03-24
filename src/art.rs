@@ -254,11 +254,11 @@ pub struct RawArtSettingsSetter {
 
 #[derive(Deserialize, Serialize)]
 pub struct RawArtRepo {
-    templates: PathBuf,
-    cache: Option<PathBuf>,
-    icons: Option<PathBuf>,
-    file_cache: Option<PathBuf>,
-    named_settings: HashMap<String, ArtSettings>,
+    pub templates: PathBuf,
+    pub cache: Option<PathBuf>,
+    pub icons: Option<PathBuf>,
+    pub file_cache: Option<PathBuf>,
+    pub named_settings: HashMap<String, ArtSettings>,
 }
 
 pub struct GetProcessedResult {

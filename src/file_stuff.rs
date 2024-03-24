@@ -42,7 +42,7 @@ pub fn save_yaml<T>(path: &Path, value: &T) -> Result<(), YamlError>
 where
     T: Serialize,
 {
-    let file = File::create(path)?;
+    let file = File::create_new(path)?;
     let mut writer = BufWriter::new(file);
     serde_yaml::to_writer(&mut writer, value)?;
     writer.flush()?;
@@ -82,9 +82,7 @@ pub fn find_matches(
                         if is_dir {
                             path.map(|x| ItemPath::Folder(x.to_owned()))
                         } else {
-                            if config.scan_settings(&full_path).is_none() {
-                                return None;
-                            }
+                            config.scan_settings(&full_path)?;
                             path.map(|x| ItemPath::Song(x.with_extension("")))
                         }
                     })
@@ -101,9 +99,7 @@ pub fn find_matches(
                             if is_dir(&entry) {
                                 Some(ItemPath::Folder(path.to_owned()))
                             } else {
-                                if config.scan_settings(&full_path).is_none() {
-                                    return None;
-                                }
+                                config.scan_settings(&full_path)?;
                                 Some(ItemPath::Song(path.with_extension("")))
                             }
                         })
@@ -126,17 +122,15 @@ pub fn find_matches(
                         .into_iter()
                         .filter_map(|x| x.ok())
                         .filter_map(|entry| {
-                            let path = entry.path();
-                            let path = path.strip_prefix(&full_start).ok();
+                            let full_path = entry.path();
+                            let path = full_path.strip_prefix(&full_start).ok();
                             path.and_then(|path| {
                                 if is_dir(&entry) {
                                     if matches_name(path, name) {
                                         return Some(ItemPath::Folder(path.to_owned()));
                                     }
                                 } else {
-                                    if config.scan_settings(&path).is_none() {
-                                        return None;
-                                    }
+                                    config.scan_settings(&full_path)?;
                                     let stripped = path.with_extension("");
                                     if matches_name(&stripped, name) {
                                         return Some(ItemPath::Song(stripped));
@@ -172,16 +166,14 @@ pub fn find_matches(
                     .filter_map(|x| x.ok());
                 return files
                     .filter_map(|entry| {
-                        let path = entry.path();
-                        path.strip_prefix(&full_start).ok().and_then(|path| {
+                        let full_path = entry.path();
+                        full_path.strip_prefix(&full_start).ok().and_then(|path| {
                             if is_dir(&entry) {
                                 if matches_segment(path, last) {
                                     return Some(ItemPath::Folder(path.to_owned()));
                                 }
                             } else {
-                                if config.scan_settings(&path).is_none() {
-                                    return None;
-                                }
+                                config.scan_settings(&full_path)?;
                                 let stripped = path.with_extension("");
                                 if matches_segment(&stripped, last) {
                                     return Some(ItemPath::Song(stripped));

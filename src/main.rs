@@ -1,7 +1,8 @@
-use art::{ArtDiskCache, ProcessedArtCache};
+use art::{ArtDiskCache, ProcessedArtCache, RawArtRepo};
 use color_print::cformat;
 use image::DynamicImage;
 use itertools::Itertools;
+use regex::Regex;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     env,
@@ -16,12 +17,13 @@ use crate::{
     art::{ArtError, GetArtResults},
     file_stuff::{ConfigError, YamlError},
     library_config::{
-        LibraryConfig, LibraryReport, LyricsType, RawLibraryConfig, TagOptions, TagSettings,
+        LibraryConfig, LibraryReport, LyricsConfig, LyricsReplaceMode, LyricsType,
+        RawLibraryConfig, RawLibraryReport, ScanDecision, ScanOptions, TagOptions, TagSettings,
     },
-    lyrics::RichLyrics,
     metadata::{Metadata, MetadataField, MetadataValue, SourcedReport},
     modifier::ValueError,
     song_config::{ConfigCache, SongConfig},
+    strategy::FieldSelector,
     tag_interop::{GetLyricsError, SetValue},
     util::ItemPath,
 };
@@ -49,49 +51,112 @@ fn main() {
             .map(|x| x.as_str())
             .unwrap_or("library.yaml"),
     );
-    let next_argument = args.get(2);
-    if let Some(word) = next_argument {
-        match word.as_str() {
-            "generate" => {}
-            _ => {
-                eprintln!("Unknown mode '{word}', try 'generate'");
+    let mode = args.get(2).map(|x| x.as_str()).unwrap_or("scan");
+    match mode {
+        "generate" => match main_generate(library_config_path) {
+            Ok(()) => {
+                println!("Created template library configuration file");
             }
-        }
-        return;
-    }
-    let raw_config = file_stuff::load_yaml::<RawLibraryConfig>(library_config_path);
-    match raw_config {
-        Err(YamlError::Io(error))
-            if error.kind() == ErrorKind::NotFound && library_argument.is_none() =>
-        {
-            if let Ok(dir) = std::env::current_dir() {
+            Err(err) => {
                 eprintln!(
+                    "{}",
+                    cformat!("❌ <red>Error saving library config\n{}</>", err)
+                );
+            }
+        },
+        "scan" => {
+            let raw_config = file_stuff::load_yaml::<RawLibraryConfig>(library_config_path);
+            match raw_config {
+                Err(YamlError::Io(error))
+                    if error.kind() == ErrorKind::NotFound && library_argument.is_none() =>
+                {
+                    if let Ok(dir) = std::env::current_dir() {
+                        eprintln!(
                     "Provide the path to a library.yaml or add one to '{}'\nOr use '<path> generate' to create a template",
                     dir.display()
                 );
-            }
-        }
-        Err(error) => {
-            eprintln!(
-                "{}",
-                cformat!("❌ <red>Error loading library config\n{}</>", error)
-            );
-        }
-        Ok(raw_config) => {
-            let library_config_folder = library_config_path.parent().unwrap_or(Path::new(""));
-            match LibraryConfig::new(library_config_folder, raw_config) {
+                    }
+                }
                 Err(error) => {
                     eprintln!(
                         "{}",
                         cformat!("❌ <red>Error loading library config\n{}</>", error)
                     );
                 }
-                Ok(mut library_config) => {
-                    do_scan(&mut library_config);
+                Ok(raw_config) => {
+                    let library_config_folder =
+                        library_config_path.parent().unwrap_or(Path::new(""));
+                    match LibraryConfig::new(library_config_folder, raw_config) {
+                        Err(error) => {
+                            eprintln!(
+                                "{}",
+                                cformat!("❌ <red>Error loading library config\n{}</>", error)
+                            );
+                        }
+                        Ok(mut library_config) => {
+                            do_scan(&mut library_config);
+                        }
+                    }
                 }
             }
         }
+        word => {
+            eprintln!("Unknown mode '{word}', try 'generate' or 'scan'");
+        }
     }
+}
+
+fn main_generate(path: &Path) -> Result<(), YamlError> {
+    let library = RawLibraryConfig {
+        library: env::current_dir()?,
+        reports: vec![RawLibraryReport::Items {
+            path: PathBuf::from("report.yaml"),
+            values: FieldSelector::All,
+            blanks: false,
+        }],
+        lyrics: Some(LyricsConfig {
+            folder: PathBuf::from("lyrics"),
+            priority: vec![
+                LyricsType::RichEmbedded,
+                LyricsType::SyncedEmbedded,
+                LyricsType::SimpleEmbedded,
+            ],
+            config: HashMap::from([(LyricsType::RichFile, LyricsReplaceMode::Replace)]),
+        }),
+        config_folders: vec![env::current_dir()?, PathBuf::from("configs")],
+        custom_fields: vec![],
+        cache: Some(PathBuf::from("datecache.yaml")),
+        art: Some(RawArtRepo {
+            templates: PathBuf::from("art"),
+            cache: Some(PathBuf::from("cache")),
+            icons: Some(PathBuf::from("cache")),
+            file_cache: Some(PathBuf::from("imagecache.yaml")),
+            named_settings: HashMap::default(),
+        }),
+        named_strategies: HashMap::default(),
+        find_replace: HashMap::default(),
+        artist_separator: String::from("/"),
+        scan: vec![
+            ScanOptions {
+                pattern: Regex::new("\\.mp3$").expect("valid hardcoded regex"),
+                tags: ScanDecision::Set(Rc::new(TagOptions {
+                    flac: TagSettings::Remove,
+                    ape: TagSettings::Remove,
+                    id3: TagSettings::Set {},
+                })),
+            },
+            ScanOptions {
+                pattern: Regex::new("\\.flac$").expect("valid hardcoded regex"),
+                tags: ScanDecision::Set(Rc::new(TagOptions {
+                    flac: TagSettings::Set {},
+                    ape: TagSettings::Remove,
+                    id3: TagSettings::Remove {},
+                })),
+            },
+        ],
+    };
+    file_stuff::save_yaml(path, &library)?;
+    Ok(())
 }
 
 struct WorkProgress {
@@ -162,6 +227,7 @@ fn do_scan(library_config: &mut LibraryConfig) {
             }
             match add_results {
                 Ok(()) => {
+                    library_config.update_reports(&nice_path, &results.metadata);
                     success = true;
                 }
                 Err(err) => {

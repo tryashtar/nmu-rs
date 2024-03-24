@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fs::File,
-    io::{BufRead, BufReader, BufWriter, Read, Write},
+    io::{BufRead, BufReader, BufWriter, Read},
     path::{Path, PathBuf},
     rc::Rc,
     time::SystemTime,
@@ -14,14 +14,14 @@ use strum::IntoEnumIterator;
 use crate::{
     art::{ArtRepo, RawArtRepo},
     file_stuff::{self, YamlError},
-    lyrics::{ParseError, RichLyrics, SyncedLyrics},
+    lyrics::{RichLyrics, SyncedLyrics},
     metadata::{Metadata, MetadataField, MetadataValue, BLANK_VALUE},
     modifier::ValueModifier,
     song_config::{
         AllSetter, DiscSet, OrderingSetter, RawSongConfig, ReferencableOperation, SongConfig,
     },
     strategy::{FieldSelector, ItemSelector, MetadataOperation, MusicItemType, ValueGetter},
-    tag_interop::{GetLyricsError, SetValue},
+    tag_interop::GetLyricsError,
 };
 
 #[derive(Deserialize, Serialize)]
@@ -90,8 +90,6 @@ pub enum RawLibraryReport {
     Items {
         path: PathBuf,
         values: FieldSelector,
-        #[serde(default = "default_false")]
-        embedded: bool,
         #[serde(default = "default_false")]
         blanks: bool,
     },
@@ -187,7 +185,6 @@ impl LibraryReport {
             RawLibraryReport::Items {
                 path,
                 values,
-                embedded,
                 blanks,
             } => {
                 let file_path = folder.join(path);
@@ -284,9 +281,9 @@ impl LibraryReport {
 
 #[derive(Deserialize, Serialize)]
 pub struct LyricsConfig {
-    folder: PathBuf,
-    priority: Vec<LyricsType>,
-    config: HashMap<LyricsType, LyricsReplaceMode>,
+    pub folder: PathBuf,
+    pub priority: Vec<LyricsType>,
+    pub config: HashMap<LyricsType, LyricsReplaceMode>,
 }
 impl LyricsConfig {
     pub fn get_best(
