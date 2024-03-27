@@ -20,6 +20,136 @@ use std::{
     str::FromStr,
 };
 
+mod interop {
+    use id3::TagLike;
+
+    use crate::{
+        lyrics::{SyncedLine, SyncedLyrics},
+        tag_interop::{GetLyrics, GetLyricsError},
+    };
+
+    use super::*;
+
+    #[test]
+    fn id3_simple_lyrics() {
+        let mut tag = id3::Tag::new();
+        tag.add_frame(id3::frame::Lyrics {
+            lang: String::from(""),
+            description: String::from("first"),
+            text: String::from("one\ntwo"),
+        });
+        tag.add_frame(id3::frame::Lyrics {
+            lang: String::from(""),
+            description: String::from("second"),
+            text: String::from("three\nfour"),
+        });
+        let lyrics = tag.get_simple_lyrics().unwrap();
+        assert_eq!(lyrics, "one\ntwo\nthree\nfour");
+        let removed = tag.remove_simple_lyrics().unwrap();
+        assert_eq!(removed, "one\ntwo\nthree\nfour");
+        let lyrics = tag.get_simple_lyrics();
+        assert!(matches!(lyrics, Err(GetLyricsError::NotEmbedded)));
+        let removed = tag.set_simple_lyrics(String::from("line1\nline2"));
+        assert!(matches!(removed, Err(GetLyricsError::NotEmbedded)));
+        let lyrics = tag.get_simple_lyrics().unwrap();
+        assert_eq!(lyrics, "line1\nline2");
+    }
+
+    #[test]
+    fn id3_synced_lyrics() {
+        let mut tag = id3::Tag::new();
+        tag.add_frame(id3::frame::SynchronisedLyrics {
+            lang: String::from("lang1"),
+            timestamp_format: id3::frame::TimestampFormat::Ms,
+            content_type: id3::frame::SynchronisedLyricsType::Lyrics,
+            description: String::from("first"),
+            content: vec![(0, String::from("line 1")), (10, String::from("line 2"))],
+        });
+        tag.add_frame(id3::frame::SynchronisedLyrics {
+            lang: String::from("lang2"),
+            timestamp_format: id3::frame::TimestampFormat::Ms,
+            content_type: id3::frame::SynchronisedLyricsType::Lyrics,
+            description: String::from("second"),
+            content: vec![(5, String::from("line 3")), (15, String::from("line 4"))],
+        });
+        let lyrics = tag.get_synced_lyrics().unwrap();
+        assert_eq!(lyrics.lines.len(), 4);
+        assert_eq!(lyrics.lines[0].text, "line 1");
+        assert_eq!(lyrics.lines[1].text, "line 2");
+        assert_eq!(lyrics.lines[2].text, "line 3");
+        assert_eq!(lyrics.lines[3].text, "line 4");
+        let removed = tag.remove_synced_lyrics().unwrap();
+        assert_eq!(removed.lines.len(), 4);
+        assert_eq!(removed.lines[0].text, "line 1");
+        assert_eq!(removed.lines[1].text, "line 2");
+        assert_eq!(removed.lines[2].text, "line 3");
+        assert_eq!(removed.lines[3].text, "line 4");
+        let lyrics = tag.get_synced_lyrics();
+        assert!(matches!(lyrics, Err(GetLyricsError::NotEmbedded)));
+        let removed = tag.set_synced_lyrics(&SyncedLyrics {
+            lines: vec![
+                SyncedLine {
+                    timestamp: std::time::Duration::ZERO,
+                    text: String::from("aaa"),
+                },
+                SyncedLine {
+                    timestamp: std::time::Duration::from_secs(1),
+                    text: String::from("bbb"),
+                },
+            ],
+        });
+        assert!(matches!(removed, Err(GetLyricsError::NotEmbedded)));
+        let lyrics = tag.get_synced_lyrics().unwrap();
+        assert_eq!(lyrics.lines.len(), 2);
+        assert_eq!(lyrics.lines[0].text, "aaa");
+        assert_eq!(lyrics.lines[1].text, "bbb");
+    }
+
+    #[test]
+    fn flac_simple_lyrics() {
+        let mut tag = metaflac::Tag::new();
+        let mut com1 = metaflac::block::VorbisComment::new();
+        com1.set("UNSYNCED LYRICS", vec!["one\ntwo", "three\nfour"]);
+        let mut com2 = metaflac::block::VorbisComment::new();
+        com2.set("UNSYNCED LYRICS", vec!["five\nsix", "seven\neight"]);
+        tag.push_block(metaflac::Block::VorbisComment(com1));
+        tag.push_block(metaflac::Block::VorbisComment(com2));
+        let lyrics = tag.get_simple_lyrics().unwrap();
+        assert_eq!(lyrics, "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight");
+        let removed = tag.remove_simple_lyrics().unwrap();
+        assert_eq!(removed, "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight");
+        let lyrics = tag.get_simple_lyrics();
+        assert!(matches!(lyrics, Err(GetLyricsError::NotEmbedded)));
+        let removed = tag.set_simple_lyrics(String::from("line1\nline2"));
+        assert!(matches!(removed, Err(GetLyricsError::NotEmbedded)));
+        let lyrics = tag.get_simple_lyrics().unwrap();
+        assert_eq!(lyrics, "line1\nline2");
+    }
+
+    #[test]
+    fn ape_simple_lyrics() {
+        let mut tag = ape::Tag::new();
+        tag.add_item(ape::Item {
+            key: String::from("Lyrics"),
+            value: ape::ItemValue::Text(String::from("one\ntwo")),
+        });
+        tag.add_item(ape::Item {
+            key: String::from("Lyrics"),
+            value: ape::ItemValue::Text(String::from("three\nfour")),
+        });
+        let lyrics = tag.get_simple_lyrics().unwrap();
+        assert_eq!(lyrics, "one\ntwo\nthree\nfour");
+        let removed = tag.remove_simple_lyrics().unwrap();
+        assert_eq!(removed, "one\ntwo\nthree\nfour");
+        let lyrics = tag.get_simple_lyrics();
+        assert!(matches!(lyrics, Err(GetLyricsError::NotEmbedded)));
+        let removed = tag.set_simple_lyrics(String::from("line1\nline2"));
+        assert!(matches!(removed, Err(GetLyricsError::NotEmbedded)));
+        let lyrics = tag.get_simple_lyrics().unwrap();
+        assert_eq!(lyrics, "line1\nline2");
+    }
+}
+
 mod deserialize {
     use super::*;
 

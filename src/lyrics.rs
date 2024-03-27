@@ -187,26 +187,64 @@ impl SyncedLyrics {
 }
 
 #[derive(thiserror::Error, Debug)]
-#[error("parsing")]
 pub enum ParseError {
+    #[error("Missing colon")]
     MissingColon,
+    #[error("Wrong length")]
     WrongLength,
+    #[error("{0}")]
     Int(#[from] ParseIntError),
+    #[error("{0}")]
     Float(#[from] ParseFloatError),
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct RichLyrics {
     channels: Vec<Channel>,
 }
+impl std::fmt::Debug for RichLyrics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.channels.len() {
+            0 => write!(f, "(empty)"),
+            1 => write!(f, "{:?}", self.channels[0]),
+            2.. => {
+                for channel in &self.channels {
+                    write!(f, "{:?}", channel)?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct Channel {
     name: Option<String>,
     lyrics: Vec<RichLine>,
 }
+impl std::fmt::Debug for Channel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(name) = &self.name {
+            writeln!(f, "{name}:")?;
+        }
+        if self
+            .lyrics
+            .iter()
+            .all(|x| x.start == std::time::Duration::ZERO)
+        {
+            for line in &self.lyrics {
+                writeln!(f, "{}", line.text)?;
+            }
+        } else {
+            for line in &self.lyrics {
+                writeln!(f, "{:?}", line)?;
+            }
+        }
+        Ok(())
+    }
+}
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct RichLine {
     #[serde(deserialize_with = "deserialize_duration")]
     #[serde(serialize_with = "serialize_duration")]
@@ -215,6 +253,22 @@ pub struct RichLine {
     #[serde(serialize_with = "serialize_duration")]
     end: std::time::Duration,
     text: String,
+}
+impl std::fmt::Debug for RichLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.start == self.end {
+            write!(f, "[{}] {}", duration_to_str(&self.start), self.text)?;
+        } else {
+            write!(
+                f,
+                "[{} -> {}] {}",
+                duration_to_str(&self.start),
+                duration_to_str(&self.end),
+                self.text
+            )?;
+        }
+        Ok(())
+    }
 }
 fn serialize_duration<S>(duration: &std::time::Duration, serializer: S) -> Result<S::Ok, S::Error>
 where

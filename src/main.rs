@@ -2,6 +2,8 @@ use art::{ArtDiskCache, ProcessedArtCache, RawArtRepo};
 use color_print::cformat;
 use image::DynamicImage;
 use itertools::Itertools;
+use library_config::{SetLyricsReport, SetLyricsResult};
+use lyrics::{RichLyrics, SyncedLyrics};
 use regex::Regex;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -11,6 +13,7 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
 };
+use tag_interop::GetLyrics;
 use walkdir::DirEntry;
 
 use crate::{
@@ -222,9 +225,6 @@ fn do_scan(library_config: &mut LibraryConfig) {
                 art_set,
                 library_config,
             );
-            for (field, value) in results.metadata.iter().sorted() {
-                println!("\t{field}: {value}");
-            }
             match add_results {
                 Ok(()) => {
                     library_config.update_reports(&nice_path, &results.metadata);
@@ -481,6 +481,8 @@ pub enum AddToSongError {
     Flac(#[from] metaflac::Error),
     #[error("{0}")]
     Ape(#[from] ape::Error),
+    #[error("{0}")]
+    Lyrics(#[from] GetLyricsError),
 }
 
 fn add_to_song(
@@ -491,6 +493,7 @@ fn add_to_song(
     art: SetValue<Rc<DynamicImage>>,
     config: &mut LibraryConfig,
 ) -> Result<(), AddToSongError> {
+    let mut best_lyrics = None;
     match options.id3 {
         TagSettings::Ignore => {}
         TagSettings::Remove => {
@@ -499,6 +502,8 @@ fn add_to_song(
             }
         }
         TagSettings::Set {} => {
+            let mut changed = false;
+            let mut lyrics_changes = None;
             let mut tag = id3::Tag::read_from_path(file_path);
             if let Err(id3::Error {
                 kind: id3::ErrorKind::NoTag,
@@ -506,32 +511,26 @@ fn add_to_song(
             }) = tag
             {
                 tag = Ok(id3::Tag::new());
+                changed = true;
             }
-            let tag = tag?;
+            let mut tag = tag?;
             if let Some(lyrics_config) = &config.lyrics {
-                let best = lyrics_config.get_best(|lyrics| {
-                    lyrics_config.get(
-                        lyrics,
-                        nice_path,
-                        || tag_interop::get_id3_rich_lyrics(&tag),
-                        || tag_interop::get_id3_synced_lyrics(&tag),
-                        || tag_interop::get_id3_simple_lyrics(&tag),
-                    )
-                });
+                let best = lyrics_config.get_best(nice_path, &tag);
                 match best {
                     Ok(lyrics) => {
-                        metadata.insert(
-                            MetadataField::SimpleLyrics,
-                            MetadataValue::string(lyrics.into()),
-                        );
+                        let report = lyrics_config.set(&lyrics, &mut tag);
+                        changed |= lyrics_changed_tag(&lyrics, &report);
+                        lyrics_changes = Some(report);
+                        best_lyrics = Some(lyrics);
                     }
                     Err(GetLyricsError::NotEmbedded) => {}
-                    Err(err) => {
-                        eprintln!(
-                            "{}",
-                            cformat!("⚠️ <yellow>Failed loading lyrics\n{}</>", err)
-                        );
-                    }
+                    Err(err) => return Err(AddToSongError::Lyrics(err)),
+                }
+            }
+            if changed {
+                println!("\tUpdated ID3 tag:");
+                if let Some(changes) = lyrics_changes {
+                    handle_lyrics_changes(&changes);
                 }
             }
         }
@@ -546,7 +545,35 @@ fn add_to_song(
             ape::remove_from_path(file_path)?;
             println!("\tRemoved entire APE tag");
         }
-        TagSettings::Set {} => {}
+        TagSettings::Set {} => {
+            let mut changed = false;
+            let mut lyrics_changes = None;
+            let mut tag = ape::read_from_path(file_path);
+            if let Err(ape::Error::TagNotFound) = tag {
+                tag = Ok(ape::Tag::new());
+                changed = true;
+            }
+            let mut tag = tag?;
+            if let Some(lyrics_config) = &config.lyrics {
+                let best = lyrics_config.get_best(nice_path, &tag);
+                match best {
+                    Ok(lyrics) => {
+                        let report = lyrics_config.set(&lyrics, &mut tag);
+                        changed |= lyrics_changed_tag(&lyrics, &report);
+                        lyrics_changes = Some(report);
+                        best_lyrics = Some(lyrics);
+                    }
+                    Err(GetLyricsError::NotEmbedded) => {}
+                    Err(err) => return Err(AddToSongError::Lyrics(err)),
+                }
+            }
+            if changed {
+                println!("\tUpdated APE tag:");
+                if let Some(changes) = lyrics_changes {
+                    handle_lyrics_changes(&changes);
+                }
+            }
+        }
     }
     match options.flac {
         TagSettings::Ignore => {}
@@ -566,10 +593,92 @@ fn add_to_song(
             }
         }
         TagSettings::Set {} => {
-            let mut tag = metaflac::Tag::read_from_path(file_path)?;
+            let mut changed = false;
+            let mut lyrics_changes = None;
+            let mut tag = metaflac::Tag::read_from_path(file_path);
+            if let Err(metaflac::Error {
+                kind: metaflac::ErrorKind::InvalidInput,
+                ..
+            }) = tag
+            {
+                tag = Ok(metaflac::Tag::new());
+                changed = true;
+            }
+            let mut tag = tag?;
+            if let Some(lyrics_config) = &config.lyrics {
+                let best = lyrics_config.get_best(nice_path, &tag);
+                match best {
+                    Ok(lyrics) => {
+                        let report = lyrics_config.set(&lyrics, &mut tag);
+                        changed |= lyrics_changed_tag(&lyrics, &report);
+                        lyrics_changes = Some(report);
+                        best_lyrics = Some(lyrics);
+                    }
+                    Err(GetLyricsError::NotEmbedded) => {}
+                    Err(err) => return Err(AddToSongError::Lyrics(err)),
+                }
+            }
+            if changed {
+                println!("\tUpdated FLAC tag:");
+                if let Some(changes) = lyrics_changes {
+                    handle_lyrics_changes(&changes);
+                }
+            }
         }
     }
+    if let Some(lyrics) = best_lyrics {
+        if let Some(lyrics_config) = &config.lyrics {
+            let report = lyrics_config.write(nice_path, &lyrics);
+            handle_lyrics_changes(&report);
+        }
+        metadata.insert(
+            MetadataField::SimpleLyrics,
+            MetadataValue::string(lyrics.into()),
+        );
+    }
     Ok(())
+}
+
+struct TagChanges {
+    lyrics: Option<SetLyricsReport>,
+}
+impl TagChanges {
+    fn new() -> Self {
+        Self { lyrics: None }
+    }
+}
+
+fn lyrics_changed_tag(best: &RichLyrics, changes: &SetLyricsReport) -> bool {
+    for lyrics_type in [
+        LyricsType::RichEmbedded,
+        LyricsType::SyncedEmbedded,
+        LyricsType::SimpleEmbedded,
+    ] {
+        let changed = match changes.results.get(&lyrics_type) {
+            None => false,
+            Some(SetLyricsResult::Removed(Err(GetLyricsError::NotEmbedded))) => false,
+            Some(SetLyricsResult::Replaced(Ok(existing))) => best != existing,
+            Some(_) => true,
+        };
+        if changed {
+            return true;
+        }
+    }
+    false
+}
+
+fn handle_lyrics_changes(changes: &SetLyricsReport) {
+    for (lyrics_type, result) in &changes.results {
+        match result {
+            SetLyricsResult::Replaced(existing) => {
+                println!("{:?}", existing)
+            }
+            SetLyricsResult::Removed(existing) => {
+                println!("{:?}", existing)
+            }
+            SetLyricsResult::Failed(_) => {}
+        }
+    }
 }
 
 fn handle_art_loaded(result: &GetArtResults, library_config: &mut LibraryConfig) {

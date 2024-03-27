@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fs::File,
-    io::{BufRead, BufReader, BufWriter, Read},
+    io::{BufRead, BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
     rc::Rc,
     time::SystemTime,
@@ -21,7 +21,7 @@ use crate::{
         AllSetter, DiscSet, OrderingSetter, RawSongConfig, ReferencableOperation, SongConfig,
     },
     strategy::{FieldSelector, ItemSelector, MetadataOperation, MusicItemType, ValueGetter},
-    tag_interop::GetLyricsError,
+    tag_interop::{GetLyrics, GetLyricsError},
 };
 
 #[derive(Deserialize, Serialize)]
@@ -288,10 +288,11 @@ pub struct LyricsConfig {
 impl LyricsConfig {
     pub fn get_best(
         &self,
-        getter: impl Fn(LyricsType) -> Result<RichLyrics, GetLyricsError>,
+        nice_path: &Path,
+        source: &impl GetLyrics,
     ) -> Result<RichLyrics, GetLyricsError> {
         for lyrics in &self.priority {
-            let result = getter(*lyrics);
+            let result = self.get(*lyrics, nice_path, source);
             match result {
                 Ok(lyrics) => return Ok(lyrics),
                 Err(GetLyricsError::NotEmbedded) => {}
@@ -306,45 +307,277 @@ impl LyricsConfig {
         &self,
         lyrics: LyricsType,
         nice_path: &Path,
-        rich: impl Fn() -> Result<RichLyrics, GetLyricsError>,
-        synced: impl Fn() -> Result<SyncedLyrics, GetLyricsError>,
-        simple: impl Fn() -> Result<String, GetLyricsError>,
+        source: &impl GetLyrics,
     ) -> Result<RichLyrics, GetLyricsError> {
         match lyrics {
-            LyricsType::RichEmbedded => rich(),
-            LyricsType::SyncedEmbedded => synced().map(RichLyrics::from),
-            LyricsType::SimpleEmbedded => simple().map(RichLyrics::from),
+            LyricsType::RichEmbedded => source.get_rich_lyrics(),
+            LyricsType::SyncedEmbedded => source.get_synced_lyrics().map(RichLyrics::from),
+            LyricsType::SimpleEmbedded => source.get_simple_lyrics().map(RichLyrics::from),
             LyricsType::RichFile => {
                 let mut path = self.folder.join(nice_path).to_string_lossy().into_owned();
                 path.push_str(".lrc.json");
                 let path = PathBuf::from(path);
-                let file = File::open(path)?;
-                let reader = BufReader::new(file);
-                let lyrics: RichLyrics = serde_json::de::from_reader(reader)?;
-                Ok(lyrics)
+                Self::read_rich(&path)
             }
             LyricsType::SyncedFile => {
                 let mut path = self.folder.join(nice_path).to_string_lossy().into_owned();
                 path.push_str(".lrc");
                 let path = PathBuf::from(path);
-                let file = File::open(path)?;
-                let reader: BufReader<File> = BufReader::new(file);
-                let lines = reader.lines().collect::<Result<Vec<_>, _>>()?;
-                let lyrics = SyncedLyrics::parse(lines)?;
-                Ok(lyrics.into())
+                Self::read_synced(&path).map(RichLyrics::from)
             }
             LyricsType::SimpleFile => {
                 let mut path = self.folder.join(nice_path).to_string_lossy().into_owned();
                 path.push_str(".lrc.txt");
                 let path = PathBuf::from(path);
-                let file = File::open(path)?;
-                let mut reader: BufReader<File> = BufReader::new(file);
-                let mut buf = String::new();
-                reader.read_to_string(&mut buf)?;
-                Ok(buf.into())
+                Self::read_simple(&path).map(RichLyrics::from)
             }
         }
     }
+
+    fn read_rich(path: &Path) -> Result<RichLyrics, GetLyricsError> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let lyrics: RichLyrics = serde_json::de::from_reader(reader)?;
+        Ok(lyrics)
+    }
+
+    fn read_synced(path: &Path) -> Result<SyncedLyrics, GetLyricsError> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let lines = reader.lines().collect::<Result<Vec<_>, _>>()?;
+        let lyrics = SyncedLyrics::parse(lines)?;
+        Ok(lyrics)
+    }
+
+    fn read_simple(path: &Path) -> Result<String, GetLyricsError> {
+        let file = File::open(path)?;
+        let mut reader = BufReader::new(file);
+        let mut buf = String::new();
+        reader.read_to_string(&mut buf)?;
+        Ok(buf)
+    }
+
+    fn write_rich(path: &Path, lyrics: &RichLyrics) -> Result<(), std::io::Error> {
+        let file = std::fs::File::create(path)?;
+        let writer = std::io::BufWriter::new(file);
+        serde_json::to_writer_pretty(writer, lyrics)?;
+        Ok(())
+    }
+
+    fn write_synced(path: &Path, lyrics: &SyncedLyrics) -> Result<(), std::io::Error> {
+        let file = std::fs::File::create(path)?;
+        let mut writer = std::io::LineWriter::new(file);
+        writer.write_all(lyrics.save().join("\n").as_bytes())?;
+        Ok(())
+    }
+
+    fn write_simple(path: &Path, lyrics: &str) -> Result<(), std::io::Error> {
+        let file = std::fs::File::create(path)?;
+        let mut writer = std::io::LineWriter::new(file);
+        writer.write_all(lyrics.as_bytes())?;
+        Ok(())
+    }
+
+    pub fn write(&self, nice_path: &Path, lyrics: &RichLyrics) -> SetLyricsReport {
+        let mut report = SetLyricsReport {
+            results: HashMap::new(),
+        };
+        for (lyrics_type, mode) in &self.config {
+            match lyrics_type {
+                LyricsType::RichFile => {
+                    let mut path = self.folder.join(nice_path).to_string_lossy().into_owned();
+                    path.push_str(".lrc.json");
+                    let path = PathBuf::from(path);
+                    match mode {
+                        LyricsReplaceMode::Ignore => {}
+                        LyricsReplaceMode::Remove => {
+                            let existing = Self::read_rich(&path);
+                            match std::fs::remove_file(&path) {
+                                Ok(()) => {
+                                    report
+                                        .results
+                                        .insert(*lyrics_type, SetLyricsResult::Removed(existing));
+                                }
+                                Err(err) => {
+                                    report
+                                        .results
+                                        .insert(*lyrics_type, SetLyricsResult::Failed(err));
+                                }
+                            }
+                        }
+                        LyricsReplaceMode::Replace => {
+                            let existing = Self::read_rich(&path);
+                            match Self::write_rich(&path, lyrics) {
+                                Ok(()) => {
+                                    report
+                                        .results
+                                        .insert(*lyrics_type, SetLyricsResult::Replaced(existing));
+                                }
+                                Err(err) => {
+                                    report
+                                        .results
+                                        .insert(*lyrics_type, SetLyricsResult::Failed(err));
+                                }
+                            }
+                        }
+                    }
+                }
+                LyricsType::SyncedFile => {
+                    let mut path = self.folder.join(nice_path).to_string_lossy().into_owned();
+                    path.push_str(".lrc");
+                    let path = PathBuf::from(path);
+                    match mode {
+                        LyricsReplaceMode::Ignore => {}
+                        LyricsReplaceMode::Remove => {
+                            let existing = Self::read_synced(&path);
+                            match std::fs::remove_file(&path) {
+                                Ok(()) => {
+                                    report.results.insert(
+                                        *lyrics_type,
+                                        SetLyricsResult::Removed(existing.map(RichLyrics::from)),
+                                    );
+                                }
+                                Err(err) => {
+                                    report
+                                        .results
+                                        .insert(*lyrics_type, SetLyricsResult::Failed(err));
+                                }
+                            }
+                        }
+                        LyricsReplaceMode::Replace => {
+                            let existing = Self::read_synced(&path);
+                            match Self::write_synced(&path, &lyrics.clone().into()) {
+                                Ok(()) => {
+                                    report.results.insert(
+                                        *lyrics_type,
+                                        SetLyricsResult::Replaced(existing.map(RichLyrics::from)),
+                                    );
+                                }
+                                Err(err) => {
+                                    report
+                                        .results
+                                        .insert(*lyrics_type, SetLyricsResult::Failed(err));
+                                }
+                            }
+                        }
+                    }
+                }
+                LyricsType::SimpleFile => {
+                    let mut path = self.folder.join(nice_path).to_string_lossy().into_owned();
+                    path.push_str(".lrc.txt");
+                    let path = PathBuf::from(path);
+                    match mode {
+                        LyricsReplaceMode::Ignore => {}
+                        LyricsReplaceMode::Remove => {
+                            let existing = Self::read_simple(&path);
+                            match std::fs::remove_file(&path) {
+                                Ok(()) => {
+                                    report.results.insert(
+                                        *lyrics_type,
+                                        SetLyricsResult::Removed(existing.map(RichLyrics::from)),
+                                    );
+                                }
+                                Err(err) => {
+                                    report
+                                        .results
+                                        .insert(*lyrics_type, SetLyricsResult::Failed(err));
+                                }
+                            }
+                        }
+                        LyricsReplaceMode::Replace => {
+                            let existing = Self::read_simple(&path);
+                            match Self::write_simple(&path, &String::from(lyrics.clone())) {
+                                Ok(()) => {
+                                    report.results.insert(
+                                        *lyrics_type,
+                                        SetLyricsResult::Replaced(existing.map(RichLyrics::from)),
+                                    );
+                                }
+                                Err(err) => {
+                                    report
+                                        .results
+                                        .insert(*lyrics_type, SetLyricsResult::Failed(err));
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        report
+    }
+
+    pub fn set(&self, lyrics: &RichLyrics, tag: &mut impl GetLyrics) -> SetLyricsReport {
+        let mut report = SetLyricsReport {
+            results: HashMap::new(),
+        };
+        for (lyrics_type, mode) in &self.config {
+            match lyrics_type {
+                LyricsType::RichEmbedded => match mode {
+                    LyricsReplaceMode::Ignore => {}
+                    LyricsReplaceMode::Remove => {
+                        let existing = tag.remove_rich_lyrics();
+                        report
+                            .results
+                            .insert(*lyrics_type, SetLyricsResult::Removed(existing));
+                    }
+                    LyricsReplaceMode::Replace => {
+                        let existing = tag.set_rich_lyrics(lyrics);
+                        report
+                            .results
+                            .insert(*lyrics_type, SetLyricsResult::Replaced(existing));
+                    }
+                },
+                LyricsType::SyncedEmbedded => match mode {
+                    LyricsReplaceMode::Ignore => {}
+                    LyricsReplaceMode::Remove => {
+                        let existing = tag.remove_synced_lyrics();
+                        report.results.insert(
+                            *lyrics_type,
+                            SetLyricsResult::Removed(existing.map(RichLyrics::from)),
+                        );
+                    }
+                    LyricsReplaceMode::Replace => {
+                        let existing = tag.set_synced_lyrics(&lyrics.clone().into());
+                        report.results.insert(
+                            *lyrics_type,
+                            SetLyricsResult::Replaced(existing.map(RichLyrics::from)),
+                        );
+                    }
+                },
+                LyricsType::SimpleEmbedded => match mode {
+                    LyricsReplaceMode::Ignore => {}
+                    LyricsReplaceMode::Remove => {
+                        let existing = tag.remove_simple_lyrics();
+                        report.results.insert(
+                            *lyrics_type,
+                            SetLyricsResult::Removed(existing.map(RichLyrics::from)),
+                        );
+                    }
+                    LyricsReplaceMode::Replace => {
+                        let existing = tag.set_simple_lyrics(lyrics.clone().into());
+                        report.results.insert(
+                            *lyrics_type,
+                            SetLyricsResult::Replaced(existing.map(RichLyrics::from)),
+                        );
+                    }
+                },
+                _ => {}
+            }
+        }
+        report
+    }
+}
+
+pub struct SetLyricsReport {
+    pub results: HashMap<LyricsType, SetLyricsResult>,
+}
+
+pub enum SetLyricsResult {
+    Replaced(Result<RichLyrics, GetLyricsError>),
+    Removed(Result<RichLyrics, GetLyricsError>),
+    Failed(std::io::Error),
 }
 
 #[derive(Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Hash)]
