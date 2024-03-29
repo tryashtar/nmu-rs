@@ -1,30 +1,29 @@
-use art::{ArtDiskCache, GetProcessedResult, ProcessedArtCache, RawArtRepo};
 use color_print::cformat;
+use lyrics::SomeLyrics;
 use regex::Regex;
-use setting::AddToSongError;
-use song_config::ConfigLoadResults;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     env,
     io::{ErrorKind, IsTerminal, Write},
-    ops::Deref,
     path::{Path, PathBuf},
     rc::Rc,
 };
 use walkdir::DirEntry;
 
 use crate::{
-    art::{ArtError, GetArtResults},
-    file_stuff::{ConfigError, YamlError},
+    art::GetArtResults,
+    art::{ArtDiskCache, GetProcessedResult, ProcessedArtCache, RawArtRepo},
+    file_stuff::YamlError,
     library_config::{
         LibraryConfig, LibraryReport, LyricsConfig, LyricsReplaceMode, LyricsType,
-        RawLibraryConfig, RawLibraryReport, ScanDecision, ScanOptions, SetLyricsReport,
-        SetLyricsResult, TagOptions, TagSettings,
+        RawLibraryConfig, RawLibraryReport, ScanDecision, ScanOptions, SetLyricsResult, TagOptions,
+        TagSettings,
     },
     metadata::SourcedReport,
     modifier::ValueError,
+    setting::{AddToSongError, AddToSongReport, TagSpecificChanges},
     setting::{ProcessFolderResults, ProcessSongResults, TagChanges},
-    song_config::{ConfigCache, SongConfig},
+    song_config::{ConfigCache, ConfigLoadResults},
     strategy::FieldSelector,
     util::ItemPath,
 };
@@ -197,14 +196,31 @@ fn do_scan(library_config: &mut LibraryConfig) {
                 .unwrap_or(&song_path)
                 .with_extension(""),
         );
-        let results = setting::process_song(
+        let mut results = setting::process_song(
             &nice_path,
             &song_path,
             library_config,
             &mut config_cache,
             &options,
         );
-        handle_song_results(results, &nice_path, library_config);
+        let fatal_error = handle_song_results(&mut results, &nice_path, library_config);
+        if fatal_error {
+            progress.failed += 1;
+            library_config.date_cache.remove(&song_path);
+        } else {
+            progress.changed += 1;
+            library_config.date_cache.mark_updated(song_path);
+            if let Some(metadata) = results.metadata {
+                library_config.update_reports(&nice_path, &metadata.metadata);
+            }
+            if let Some(added) = &results.added {
+                if let Some(lyrics_config) = &library_config.lyrics {
+                    if let Some(lyrics) = get_tag_lyrics(added) {
+                        lyrics_config.write(&nice_path, lyrics);
+                    }
+                }
+            }
+        }
     }
     if progress.failed == 0 {
         println!("Updated {}", progress.changed);
@@ -220,13 +236,27 @@ fn do_scan(library_config: &mut LibraryConfig) {
     }
 }
 
+fn get_tag_lyrics(changes: &AddToSongReport) -> Option<&SomeLyrics> {
+    for change in [&changes.id3, &changes.flac, &changes.ape] {
+        if let Ok(TagChanges::Set(TagSpecificChanges {
+            lyrics: Some((lyrics, _)),
+            ..
+        })) = change
+        {
+            return Some(lyrics);
+        }
+    }
+    None
+}
+
 fn handle_song_results(
-    results: ProcessSongResults,
+    results: &mut ProcessSongResults,
     nice_path: &Path,
     library_config: &mut LibraryConfig,
-) {
-    for load in results.configs.loaded {
-        handle_config_loaded(&load, library_config);
+) -> bool {
+    let mut fatal_error = false;
+    for load in &results.configs.loaded {
+        fatal_error |= handle_config_loaded(load, library_config);
     }
     if let Some(GetArtResults::Processed {
         processed: Some(result),
@@ -234,7 +264,10 @@ fn handle_song_results(
         ..
     }) = &results.art
     {
-        handle_art_loaded(result, full_path, library_config);
+        fatal_error |= handle_art_loaded(result, full_path, library_config);
+    }
+    if fatal_error {
+        return true;
     }
     println!("{}", nice_path.display());
     if let Some(GetArtResults::NoTemplateFound { tried }) = &results.art {
@@ -243,17 +276,21 @@ fn handle_song_results(
             cformat!("⚠️ <yellow>No matching templates found: {:?}</>", tried)
         );
     }
-    if let Some(mut results) = results.metadata {
+    if let Some(results) = &mut results.metadata {
         handle_apply_reports(&mut results.reports);
     }
-    if let Some(added) = results.added {
-        handle_tag_changes(added.id3.as_ref(), "ID3");
-        handle_tag_changes(added.flac.as_ref(), "FLAC");
-        handle_tag_changes(added.ape.as_ref(), "APE");
+    if let Some(added) = &results.added {
+        fatal_error |= handle_tag_changes(added.id3.as_ref(), "ID3");
+        fatal_error |= handle_tag_changes(added.flac.as_ref(), "FLAC");
+        fatal_error |= handle_tag_changes(added.ape.as_ref(), "APE");
     }
+    fatal_error
 }
 
-fn handle_tag_changes(changes: Result<&TagChanges, &AddToSongError>, tag_type: &'static str) {
+fn handle_tag_changes(
+    changes: Result<&TagChanges, &AddToSongError>,
+    tag_type: &'static str,
+) -> bool {
     match changes {
         Ok(TagChanges::None) => {}
         Ok(TagChanges::Removed) => {
@@ -305,11 +342,13 @@ fn handle_tag_changes(changes: Result<&TagChanges, &AddToSongError>, tag_type: &
                 "{}",
                 cformat!("\t❌ <red>Error updating {} tag\n\t{}</>", tag_type, err)
             );
+            return true;
         }
     }
+    false
 }
 
-fn handle_folder_results(results: ProcessFolderResults) {}
+fn handle_folder_results(results: &ProcessFolderResults) {}
 
 fn save_caches(library_config: &mut LibraryConfig) {
     if let Err(err) = library_config.date_cache.save() {
@@ -435,7 +474,8 @@ fn handle_art_loaded(
     processed: &GetProcessedResult,
     full_path: &Path,
     library_config: &mut LibraryConfig,
-) {
+) -> bool {
+    let mut fatal_error = false;
     for load in &processed.newly_loaded {
         match &load.result {
             Err(error) => {
@@ -449,6 +489,7 @@ fn handle_art_loaded(
                             error
                         )
                     );
+                    fatal_error = true;
                 }
             }
             Ok(_) => {
@@ -469,14 +510,16 @@ fn handle_art_loaded(
                     error
                 )
             );
+            fatal_error = true;
         }
         Ok(_) => {
             library_config.date_cache.mark_updated(full_path.to_owned());
         }
     }
+    fatal_error
 }
 
-fn handle_config_loaded(load: &ConfigLoadResults, library_config: &mut LibraryConfig) {
+fn handle_config_loaded(load: &ConfigLoadResults, library_config: &mut LibraryConfig) -> bool {
     match &load.result {
         Err(error) => {
             library_config.date_cache.remove(&load.full_path);
@@ -489,6 +532,7 @@ fn handle_config_loaded(load: &ConfigLoadResults, library_config: &mut LibraryCo
                         error
                     )
                 );
+                return true;
             }
         }
         Ok(config) => {
@@ -528,6 +572,7 @@ fn handle_config_loaded(load: &ConfigLoadResults, library_config: &mut LibraryCo
             }
         }
     }
+    false
 }
 
 struct ScanResults {

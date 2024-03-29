@@ -4,11 +4,8 @@ use image::DynamicImage;
 
 use crate::{
     art::GetArtResults,
-    library_config::{
-        LibraryConfig, LyricsConfig, LyricsType, SetLyricsReport, SetLyricsResult, TagOptions,
-        TagSettings,
-    },
-    lyrics::{RichLyrics, SomeLyrics},
+    library_config::{LibraryConfig, LyricsConfig, SetLyricsReport, TagOptions, TagSettings},
+    lyrics::SomeLyrics,
     metadata::{self, GetMetadataResults, Metadata, MetadataField, MetadataValue},
     song_config::{self, ConfigCache, GetConfigsResults},
     tag_interop::{GetLyricsError, SetValue},
