@@ -27,10 +27,10 @@ pub trait GetLyrics {
     fn set_simple_lyrics(&mut self, lyrics: String) -> Result<String, GetLyricsError>;
     fn get_synced_lyrics(&self) -> Result<SyncedLyrics, GetLyricsError>;
     fn remove_synced_lyrics(&mut self) -> Result<SyncedLyrics, GetLyricsError>;
-    fn set_synced_lyrics(&mut self, lyrics: &SyncedLyrics) -> Result<SyncedLyrics, GetLyricsError>;
+    fn set_synced_lyrics(&mut self, lyrics: SyncedLyrics) -> Result<SyncedLyrics, GetLyricsError>;
     fn get_rich_lyrics(&self) -> Result<RichLyrics, GetLyricsError>;
     fn remove_rich_lyrics(&mut self) -> Result<RichLyrics, GetLyricsError>;
-    fn set_rich_lyrics(&mut self, lyrics: &RichLyrics) -> Result<RichLyrics, GetLyricsError>;
+    fn set_rich_lyrics(&mut self, lyrics: RichLyrics) -> Result<RichLyrics, GetLyricsError>;
 }
 
 impl GetLyrics for id3::Tag {
@@ -103,7 +103,7 @@ impl GetLyrics for id3::Tag {
         }
     }
 
-    fn set_synced_lyrics(&mut self, lyrics: &SyncedLyrics) -> Result<SyncedLyrics, GetLyricsError> {
+    fn set_synced_lyrics(&mut self, lyrics: SyncedLyrics) -> Result<SyncedLyrics, GetLyricsError> {
         let result = self.remove_synced_lyrics();
         self.add_frame(id3::frame::SynchronisedLyrics {
             lang: String::from(""),
@@ -112,8 +112,8 @@ impl GetLyrics for id3::Tag {
             description: String::from(""),
             content: lyrics
                 .lines
-                .iter()
-                .map(|x| (x.timestamp.as_millis() as u32, x.text.clone()))
+                .into_iter()
+                .map(|x| (x.timestamp.as_millis() as u32, x.text))
                 .collect(),
         });
         result
@@ -154,11 +154,11 @@ impl GetLyrics for id3::Tag {
         lyrics
     }
 
-    fn set_rich_lyrics(&mut self, lyrics: &RichLyrics) -> Result<RichLyrics, GetLyricsError> {
+    fn set_rich_lyrics(&mut self, lyrics: RichLyrics) -> Result<RichLyrics, GetLyricsError> {
         let result = self.remove_rich_lyrics();
         self.add_frame(id3::frame::ExtendedText {
             description: String::from("RICH LYRICS"),
-            value: serde_json::to_string(lyrics)?,
+            value: serde_json::to_string(&lyrics)?,
         });
         result
     }
@@ -278,7 +278,7 @@ impl GetLyrics for metaflac::Tag {
         }
     }
 
-    fn set_synced_lyrics(&mut self, lyrics: &SyncedLyrics) -> Result<SyncedLyrics, GetLyricsError> {
+    fn set_synced_lyrics(&mut self, lyrics: SyncedLyrics) -> Result<SyncedLyrics, GetLyricsError> {
         let result = self.remove_synced_lyrics();
         self.set_vorbis("LYRICS", lyrics.save());
         result
@@ -348,11 +348,11 @@ impl GetLyrics for metaflac::Tag {
         }
     }
 
-    fn set_rich_lyrics(&mut self, lyrics: &RichLyrics) -> Result<RichLyrics, GetLyricsError> {
+    fn set_rich_lyrics(&mut self, lyrics: RichLyrics) -> Result<RichLyrics, GetLyricsError> {
         let result = self.remove_rich_lyrics();
         self.set_vorbis(
             "RICH LYRICS",
-            vec![serde_yaml::to_string(lyrics).unwrap_or_default()],
+            vec![serde_yaml::to_string(&lyrics).unwrap_or_default()],
         );
         result
     }
@@ -409,7 +409,7 @@ impl GetLyrics for ape::Tag {
         result
     }
 
-    fn set_synced_lyrics(&mut self, lyrics: &SyncedLyrics) -> Result<SyncedLyrics, GetLyricsError> {
+    fn set_synced_lyrics(&mut self, lyrics: SyncedLyrics) -> Result<SyncedLyrics, GetLyricsError> {
         let result = self.remove_synced_lyrics();
         self.add_item(
             ape::Item::from_text("SYNCED LYRICS", lyrics.save().join("\n"))
@@ -439,12 +439,12 @@ impl GetLyrics for ape::Tag {
         result
     }
 
-    fn set_rich_lyrics(&mut self, lyrics: &RichLyrics) -> Result<RichLyrics, GetLyricsError> {
+    fn set_rich_lyrics(&mut self, lyrics: RichLyrics) -> Result<RichLyrics, GetLyricsError> {
         let result = self.remove_rich_lyrics();
         self.add_item(
             ape::Item::from_text(
                 "RICH LYRICS",
-                serde_json::to_string(lyrics).unwrap_or_default(),
+                serde_json::to_string(&lyrics).unwrap_or_default(),
             )
             .expect("lyrics is a valid key"),
         );

@@ -262,8 +262,8 @@ pub struct RawArtRepo {
 }
 
 pub struct GetProcessedResult {
-    newly_loaded: Vec<ArtConfigLoadResults>,
-    result: Result<Rc<DynamicImage>, ArtError>,
+    pub newly_loaded: Vec<ArtConfigLoadResults>,
+    pub result: Result<Rc<DynamicImage>, Rc<ArtError>>,
 }
 
 pub struct GetSettingsResults {
@@ -287,7 +287,7 @@ pub enum GetArtResults {
         result: Result<Rc<DynamicImage>, Rc<ArtError>>,
         nice_path: PathBuf,
         full_path: PathBuf,
-        loaded: Vec<ArtConfigLoadResults>,
+        processed: Option<GetProcessedResult>,
     },
 }
 
@@ -348,18 +348,19 @@ impl ArtRepo {
         if art.is_empty() {
             return GetArtResults::Remove;
         }
-        let mut loaded = vec![];
         let template = self.find_first_template(art);
         match template {
             Some((nice, template)) => {
+                let mut processed = None;
                 // partial borrow hack
                 let mut cache = std::mem::take(&mut self.processed_cache);
                 let result = cache
                     .entry(nice.clone())
                     .or_insert_with_key(|nice| {
-                        let mut processed = self.get_processed(&template, nice);
-                        loaded.append(&mut processed.newly_loaded);
-                        processed.result.map_err(Rc::new)
+                        let load = self.get_processed(&template, nice);
+                        let result = load.result.clone();
+                        processed = Some(load);
+                        result
                     })
                     .clone();
                 self.processed_cache = cache;
@@ -367,7 +368,7 @@ impl ArtRepo {
                     result,
                     nice_path: nice,
                     full_path: template,
-                    loaded,
+                    processed,
                 }
             }
             None => GetArtResults::NoTemplateFound {
@@ -387,14 +388,14 @@ impl ArtRepo {
         match image::open(template) {
             Err(err) => GetProcessedResult {
                 newly_loaded: vec![],
-                result: Err(ArtError::Image(err)),
+                result: Err(Rc::new(ArtError::Image(err))),
             },
             Ok(img) => {
                 let settings = self.get_settings(nice);
                 match &settings.result {
                     None => GetProcessedResult {
                         newly_loaded: settings.newly_loaded,
-                        result: Err(ArtError::Config),
+                        result: Err(Rc::new(ArtError::Config)),
                     },
                     Some(config) => {
                         let modified = config.apply(img);

@@ -6,10 +6,62 @@ use std::{
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Clone)]
+use crate::tag_interop::GetLyricsError;
+
+#[derive(Clone, Debug)]
+pub enum SomeLyrics {
+    Rich(RichLyrics),
+    Synced(SyncedLyrics),
+    Simple(String),
+}
+impl SomeLyrics {
+    pub fn into_rich(self) -> RichLyrics {
+        match self {
+            Self::Rich(rich) => rich,
+            Self::Synced(synced) => RichLyrics::from(synced),
+            Self::Simple(simple) => RichLyrics::from(simple),
+        }
+    }
+    pub fn into_synced(self) -> SyncedLyrics {
+        match self {
+            Self::Rich(rich) => SyncedLyrics::from(rich),
+            Self::Synced(synced) => synced,
+            Self::Simple(simple) => SyncedLyrics::from(simple),
+        }
+    }
+    pub fn into_simple(self) -> String {
+        match self {
+            Self::Rich(rich) => String::from(rich),
+            Self::Synced(synced) => String::from(synced),
+            Self::Simple(simple) => simple,
+        }
+    }
+}
+pub fn matches(lyrics: &SomeLyrics, other: Result<&SomeLyrics, &GetLyricsError>) -> bool {
+    match other {
+        Err(_) => false,
+        Ok(other) => match (lyrics, other) {
+            (SomeLyrics::Rich(lyrics), SomeLyrics::Rich(other)) => lyrics == other,
+            (SomeLyrics::Synced(lyrics), SomeLyrics::Synced(other)) => lyrics == other,
+            (SomeLyrics::Simple(lyrics), SomeLyrics::Simple(other)) => lyrics == other,
+            (SomeLyrics::Simple(lyrics), other) => lyrics == &other.clone().into_simple(),
+            (lyrics, SomeLyrics::Simple(other)) => &lyrics.clone().into_simple() == other,
+            (SomeLyrics::Synced(lyrics), other) => lyrics == &other.clone().into_synced(),
+            (lyrics, SomeLyrics::Synced(other)) => &lyrics.clone().into_synced() == other,
+        },
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct SyncedLine {
     pub timestamp: std::time::Duration,
     pub text: String,
+}
+impl std::fmt::Debug for SyncedLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{}] {}", duration_to_str(&self.timestamp), self.text)?;
+        Ok(())
+    }
 }
 impl SyncedLine {
     pub fn to_str(&self) -> String {
@@ -52,6 +104,24 @@ impl From<String> for RichLyrics {
                     .collect(),
             }],
         }
+    }
+}
+impl From<String> for SyncedLyrics {
+    fn from(value: String) -> Self {
+        Self {
+            lines: value
+                .split('\n')
+                .map(|x| SyncedLine {
+                    timestamp: Duration::ZERO,
+                    text: x.to_owned(),
+                })
+                .collect(),
+        }
+    }
+}
+impl From<SyncedLyrics> for String {
+    fn from(value: SyncedLyrics) -> Self {
+        value.lines.into_iter().map(|x| x.text).join("\n")
     }
 }
 impl From<RichLyrics> for SyncedLyrics {
@@ -166,7 +236,7 @@ fn parse_duration(string: &str) -> Result<std::time::Duration, ParseError> {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct SyncedLyrics {
     pub lines: Vec<SyncedLine>,
 }
@@ -198,61 +268,27 @@ pub enum ParseError {
     Float(#[from] ParseFloatError),
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct RichLyrics {
-    channels: Vec<Channel>,
-}
-impl std::fmt::Debug for RichLyrics {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.channels.len() {
-            0 => write!(f, "(empty)"),
-            1 => write!(f, "{:?}", self.channels[0]),
-            2.. => {
-                for channel in &self.channels {
-                    write!(f, "{:?}", channel)?;
-                }
-                Ok(())
-            }
-        }
-    }
+    pub channels: Vec<Channel>,
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Channel {
-    name: Option<String>,
-    lyrics: Vec<RichLine>,
-}
-impl std::fmt::Debug for Channel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(name) = &self.name {
-            writeln!(f, "{name}:")?;
-        }
-        if self
-            .lyrics
-            .iter()
-            .all(|x| x.start == std::time::Duration::ZERO)
-        {
-            for line in &self.lyrics {
-                writeln!(f, "{}", line.text)?;
-            }
-        } else {
-            for line in &self.lyrics {
-                writeln!(f, "{:?}", line)?;
-            }
-        }
-        Ok(())
-    }
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub lyrics: Vec<RichLine>,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct RichLine {
     #[serde(deserialize_with = "deserialize_duration")]
     #[serde(serialize_with = "serialize_duration")]
-    start: std::time::Duration,
+    pub start: std::time::Duration,
     #[serde(deserialize_with = "deserialize_duration")]
     #[serde(serialize_with = "serialize_duration")]
-    end: std::time::Duration,
-    text: String,
+    pub end: std::time::Duration,
+    pub text: String,
 }
 impl std::fmt::Debug for RichLine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -298,4 +334,34 @@ where
     }
 
     deserializer.deserialize_str(Visitor)
+}
+
+pub fn display(lyrics: &SomeLyrics) -> Vec<String> {
+    match lyrics {
+        SomeLyrics::Rich(rich) => {
+            let mut result = vec![];
+            for channel in &rich.channels {
+                for line in &channel.lyrics {
+                    let mut str = String::new();
+                    if let Some(name) = &channel.name {
+                        str.push_str(&format!("({name}) "));
+                    }
+                    str.push_str(&format!(
+                        "[{} -> {}] ",
+                        duration_to_str(&line.start),
+                        duration_to_str(&line.end)
+                    ));
+                    str.push_str(&line.text);
+                    result.push(str);
+                }
+            }
+            result
+        }
+        SomeLyrics::Synced(synced) => synced
+            .lines
+            .iter()
+            .map(|x| format!("[{}] {}", duration_to_str(&x.timestamp), &x.text))
+            .collect(),
+        SomeLyrics::Simple(simple) => simple.split('\n').map(|x| x.to_owned()).collect(),
+    }
 }

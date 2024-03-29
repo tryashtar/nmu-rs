@@ -14,7 +14,7 @@ use strum::IntoEnumIterator;
 use crate::{
     art::{ArtRepo, RawArtRepo},
     file_stuff::{self, YamlError},
-    lyrics::{RichLyrics, SyncedLyrics},
+    lyrics::{self, RichLyrics, SomeLyrics, SyncedLyrics},
     metadata::{Metadata, MetadataField, MetadataValue, BLANK_VALUE},
     modifier::ValueModifier,
     song_config::{
@@ -290,14 +290,13 @@ impl LyricsConfig {
         &self,
         nice_path: &Path,
         source: &impl GetLyrics,
-    ) -> Result<RichLyrics, GetLyricsError> {
+    ) -> Result<SomeLyrics, GetLyricsError> {
         for lyrics in &self.priority {
             let result = self.get(*lyrics, nice_path, source);
             match result {
                 Ok(lyrics) => return Ok(lyrics),
                 Err(GetLyricsError::NotEmbedded) => {}
-                Err(GetLyricsError::Io(io))
-                    if matches!(io.kind(), std::io::ErrorKind::NotFound) => {}
+                Err(GetLyricsError::Io(io)) if io.kind() == std::io::ErrorKind::NotFound => {}
                 Err(err) => return Err(err),
             };
         }
@@ -308,28 +307,28 @@ impl LyricsConfig {
         lyrics: LyricsType,
         nice_path: &Path,
         source: &impl GetLyrics,
-    ) -> Result<RichLyrics, GetLyricsError> {
+    ) -> Result<SomeLyrics, GetLyricsError> {
         match lyrics {
-            LyricsType::RichEmbedded => source.get_rich_lyrics(),
-            LyricsType::SyncedEmbedded => source.get_synced_lyrics().map(RichLyrics::from),
-            LyricsType::SimpleEmbedded => source.get_simple_lyrics().map(RichLyrics::from),
+            LyricsType::RichEmbedded => source.get_rich_lyrics().map(SomeLyrics::Rich),
+            LyricsType::SyncedEmbedded => source.get_synced_lyrics().map(SomeLyrics::Synced),
+            LyricsType::SimpleEmbedded => source.get_simple_lyrics().map(SomeLyrics::Simple),
             LyricsType::RichFile => {
                 let mut path = self.folder.join(nice_path).to_string_lossy().into_owned();
                 path.push_str(".lrc.json");
                 let path = PathBuf::from(path);
-                Self::read_rich(&path)
+                Self::read_rich(&path).map(SomeLyrics::Rich)
             }
             LyricsType::SyncedFile => {
                 let mut path = self.folder.join(nice_path).to_string_lossy().into_owned();
                 path.push_str(".lrc");
                 let path = PathBuf::from(path);
-                Self::read_synced(&path).map(RichLyrics::from)
+                Self::read_synced(&path).map(SomeLyrics::Synced)
             }
             LyricsType::SimpleFile => {
                 let mut path = self.folder.join(nice_path).to_string_lossy().into_owned();
                 path.push_str(".lrc.txt");
                 let path = PathBuf::from(path);
-                Self::read_simple(&path).map(RichLyrics::from)
+                Self::read_simple(&path).map(SomeLyrics::Simple)
             }
         }
     }
@@ -378,7 +377,7 @@ impl LyricsConfig {
         Ok(())
     }
 
-    pub fn write(&self, nice_path: &Path, lyrics: &RichLyrics) -> SetLyricsReport {
+    pub fn write(&self, nice_path: &Path, lyrics: &SomeLyrics) -> SetLyricsReport {
         let mut report = SetLyricsReport {
             results: HashMap::new(),
         };
@@ -394,24 +393,30 @@ impl LyricsConfig {
                             let existing = Self::read_rich(&path);
                             match std::fs::remove_file(&path) {
                                 Ok(()) => {
-                                    report
-                                        .results
-                                        .insert(*lyrics_type, SetLyricsResult::Removed(existing));
+                                    report.results.insert(
+                                        *lyrics_type,
+                                        SetLyricsResult::Removed(existing.map(SomeLyrics::Rich)),
+                                    );
                                 }
                                 Err(err) => {
-                                    report
-                                        .results
-                                        .insert(*lyrics_type, SetLyricsResult::Failed(err));
+                                    if err.kind() != std::io::ErrorKind::NotFound {
+                                        report
+                                            .results
+                                            .insert(*lyrics_type, SetLyricsResult::Failed(err));
+                                    }
                                 }
                             }
                         }
                         LyricsReplaceMode::Replace => {
-                            let existing = Self::read_rich(&path);
-                            match Self::write_rich(&path, lyrics) {
+                            let existing = Self::read_rich(&path).map(SomeLyrics::Rich);
+                            match Self::write_rich(&path, &lyrics.clone().into_rich()) {
                                 Ok(()) => {
-                                    report
-                                        .results
-                                        .insert(*lyrics_type, SetLyricsResult::Replaced(existing));
+                                    if !lyrics::matches(lyrics, existing.as_ref()) {
+                                        report.results.insert(
+                                            *lyrics_type,
+                                            SetLyricsResult::Replaced(existing),
+                                        );
+                                    }
                                 }
                                 Err(err) => {
                                     report
@@ -434,24 +439,28 @@ impl LyricsConfig {
                                 Ok(()) => {
                                     report.results.insert(
                                         *lyrics_type,
-                                        SetLyricsResult::Removed(existing.map(RichLyrics::from)),
+                                        SetLyricsResult::Removed(existing.map(SomeLyrics::Synced)),
                                     );
                                 }
                                 Err(err) => {
-                                    report
-                                        .results
-                                        .insert(*lyrics_type, SetLyricsResult::Failed(err));
+                                    if err.kind() != std::io::ErrorKind::NotFound {
+                                        report
+                                            .results
+                                            .insert(*lyrics_type, SetLyricsResult::Failed(err));
+                                    }
                                 }
                             }
                         }
                         LyricsReplaceMode::Replace => {
-                            let existing = Self::read_synced(&path);
-                            match Self::write_synced(&path, &lyrics.clone().into()) {
+                            let existing = Self::read_synced(&path).map(SomeLyrics::Synced);
+                            match Self::write_synced(&path, &lyrics.clone().into_synced()) {
                                 Ok(()) => {
-                                    report.results.insert(
-                                        *lyrics_type,
-                                        SetLyricsResult::Replaced(existing.map(RichLyrics::from)),
-                                    );
+                                    if !lyrics::matches(lyrics, existing.as_ref()) {
+                                        report.results.insert(
+                                            *lyrics_type,
+                                            SetLyricsResult::Replaced(existing),
+                                        );
+                                    }
                                 }
                                 Err(err) => {
                                     report
@@ -474,24 +483,28 @@ impl LyricsConfig {
                                 Ok(()) => {
                                     report.results.insert(
                                         *lyrics_type,
-                                        SetLyricsResult::Removed(existing.map(RichLyrics::from)),
+                                        SetLyricsResult::Removed(existing.map(SomeLyrics::Simple)),
                                     );
                                 }
                                 Err(err) => {
-                                    report
-                                        .results
-                                        .insert(*lyrics_type, SetLyricsResult::Failed(err));
+                                    if err.kind() != std::io::ErrorKind::NotFound {
+                                        report
+                                            .results
+                                            .insert(*lyrics_type, SetLyricsResult::Failed(err));
+                                    }
                                 }
                             }
                         }
                         LyricsReplaceMode::Replace => {
-                            let existing = Self::read_simple(&path);
-                            match Self::write_simple(&path, &String::from(lyrics.clone())) {
+                            let existing = Self::read_simple(&path).map(SomeLyrics::Simple);
+                            match Self::write_simple(&path, &lyrics.clone().into_simple()) {
                                 Ok(()) => {
-                                    report.results.insert(
-                                        *lyrics_type,
-                                        SetLyricsResult::Replaced(existing.map(RichLyrics::from)),
-                                    );
+                                    if !lyrics::matches(lyrics, existing.as_ref()) {
+                                        report.results.insert(
+                                            *lyrics_type,
+                                            SetLyricsResult::Replaced(existing),
+                                        );
+                                    }
                                 }
                                 Err(err) => {
                                     report
@@ -508,7 +521,7 @@ impl LyricsConfig {
         report
     }
 
-    pub fn set(&self, lyrics: &RichLyrics, tag: &mut impl GetLyrics) -> SetLyricsReport {
+    pub fn set(&self, lyrics: &SomeLyrics, tag: &mut impl GetLyrics) -> SetLyricsReport {
         let mut report = SetLyricsReport {
             results: HashMap::new(),
         };
@@ -518,49 +531,75 @@ impl LyricsConfig {
                     LyricsReplaceMode::Ignore => {}
                     LyricsReplaceMode::Remove => {
                         let existing = tag.remove_rich_lyrics();
-                        report
-                            .results
-                            .insert(*lyrics_type, SetLyricsResult::Removed(existing));
+                        match existing {
+                            Err(GetLyricsError::NotEmbedded) => {}
+                            _ => {
+                                report.results.insert(
+                                    *lyrics_type,
+                                    SetLyricsResult::Removed(existing.map(SomeLyrics::Rich)),
+                                );
+                            }
+                        }
                     }
                     LyricsReplaceMode::Replace => {
-                        let existing = tag.set_rich_lyrics(lyrics);
-                        report
-                            .results
-                            .insert(*lyrics_type, SetLyricsResult::Replaced(existing));
+                        let existing = tag
+                            .set_rich_lyrics(lyrics.clone().into_rich())
+                            .map(SomeLyrics::Rich);
+                        if !lyrics::matches(lyrics, existing.as_ref()) {
+                            report
+                                .results
+                                .insert(*lyrics_type, SetLyricsResult::Replaced(existing));
+                        }
                     }
                 },
                 LyricsType::SyncedEmbedded => match mode {
                     LyricsReplaceMode::Ignore => {}
                     LyricsReplaceMode::Remove => {
                         let existing = tag.remove_synced_lyrics();
-                        report.results.insert(
-                            *lyrics_type,
-                            SetLyricsResult::Removed(existing.map(RichLyrics::from)),
-                        );
+                        match existing {
+                            Err(GetLyricsError::NotEmbedded) => {}
+                            _ => {
+                                report.results.insert(
+                                    *lyrics_type,
+                                    SetLyricsResult::Removed(existing.map(SomeLyrics::Synced)),
+                                );
+                            }
+                        }
                     }
                     LyricsReplaceMode::Replace => {
-                        let existing = tag.set_synced_lyrics(&lyrics.clone().into());
-                        report.results.insert(
-                            *lyrics_type,
-                            SetLyricsResult::Replaced(existing.map(RichLyrics::from)),
-                        );
+                        let existing = tag
+                            .set_synced_lyrics(lyrics.clone().into_synced())
+                            .map(SomeLyrics::Synced);
+                        if !lyrics::matches(lyrics, existing.as_ref()) {
+                            report
+                                .results
+                                .insert(*lyrics_type, SetLyricsResult::Replaced(existing));
+                        }
                     }
                 },
                 LyricsType::SimpleEmbedded => match mode {
                     LyricsReplaceMode::Ignore => {}
                     LyricsReplaceMode::Remove => {
                         let existing = tag.remove_simple_lyrics();
-                        report.results.insert(
-                            *lyrics_type,
-                            SetLyricsResult::Removed(existing.map(RichLyrics::from)),
-                        );
+                        match existing {
+                            Err(GetLyricsError::NotEmbedded) => {}
+                            _ => {
+                                report.results.insert(
+                                    *lyrics_type,
+                                    SetLyricsResult::Removed(existing.map(SomeLyrics::Simple)),
+                                );
+                            }
+                        }
                     }
                     LyricsReplaceMode::Replace => {
-                        let existing = tag.set_simple_lyrics(lyrics.clone().into());
-                        report.results.insert(
-                            *lyrics_type,
-                            SetLyricsResult::Replaced(existing.map(RichLyrics::from)),
-                        );
+                        let existing = tag
+                            .set_simple_lyrics(lyrics.clone().into_simple())
+                            .map(SomeLyrics::Simple);
+                        if !lyrics::matches(lyrics, existing.as_ref()) {
+                            report
+                                .results
+                                .insert(*lyrics_type, SetLyricsResult::Replaced(existing));
+                        }
                     }
                 },
                 _ => {}
@@ -575,12 +614,12 @@ pub struct SetLyricsReport {
 }
 
 pub enum SetLyricsResult {
-    Replaced(Result<RichLyrics, GetLyricsError>),
-    Removed(Result<RichLyrics, GetLyricsError>),
+    Replaced(Result<SomeLyrics, GetLyricsError>),
+    Removed(Result<SomeLyrics, GetLyricsError>),
     Failed(std::io::Error),
 }
 
-#[derive(Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum LyricsType {
     RichEmbedded,

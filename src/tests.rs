@@ -24,11 +24,94 @@ mod interop {
     use id3::TagLike;
 
     use crate::{
-        lyrics::{SyncedLine, SyncedLyrics},
+        lyrics::{self, Channel, RichLine, RichLyrics, SomeLyrics, SyncedLine, SyncedLyrics},
         tag_interop::{GetLyrics, GetLyricsError},
     };
 
-    use super::*;
+    #[test]
+    fn lyric_equality() {
+        let rich1 = RichLyrics {
+            channels: vec![
+                Channel {
+                    name: Some(String::from("channel1")),
+                    lyrics: vec![
+                        RichLine {
+                            start: std::time::Duration::from_secs(5),
+                            end: std::time::Duration::from_secs(10),
+                            text: String::from("line1"),
+                        },
+                        RichLine {
+                            start: std::time::Duration::from_secs(10),
+                            end: std::time::Duration::from_secs(15),
+                            text: String::from("line2"),
+                        },
+                    ],
+                },
+                Channel {
+                    name: Some(String::from("channel2")),
+                    lyrics: vec![
+                        RichLine {
+                            start: std::time::Duration::from_secs(3),
+                            end: std::time::Duration::from_secs(6),
+                            text: String::from("line3"),
+                        },
+                        RichLine {
+                            start: std::time::Duration::from_secs(6),
+                            end: std::time::Duration::from_secs(10),
+                            text: String::from("line4"),
+                        },
+                    ],
+                },
+            ],
+        };
+        let rich2 = rich1.clone();
+        let synced1 = SyncedLyrics::from(rich1.clone());
+        let synced2 = synced1.clone();
+        let simple1 = String::from(rich1.clone());
+        let simple2 = simple1.clone();
+        let rich1 = SomeLyrics::Rich(rich1);
+        let rich2 = SomeLyrics::Rich(rich2);
+        let synced1 = SomeLyrics::Synced(synced1);
+        let synced2 = SomeLyrics::Synced(synced2);
+        let simple1 = SomeLyrics::Simple(simple1);
+        let simple2 = SomeLyrics::Simple(simple2);
+        assert!(lyrics::matches(&rich1, Ok(&rich1)));
+        assert!(lyrics::matches(&rich1, Ok(&rich2)));
+        assert!(lyrics::matches(&rich1, Ok(&synced1)));
+        assert!(lyrics::matches(&rich1, Ok(&synced2)));
+        assert!(lyrics::matches(&rich1, Ok(&simple1)));
+        assert!(lyrics::matches(&rich1, Ok(&simple2)));
+        assert!(lyrics::matches(&rich2, Ok(&rich1)));
+        assert!(lyrics::matches(&rich2, Ok(&rich2)));
+        assert!(lyrics::matches(&rich2, Ok(&synced1)));
+        assert!(lyrics::matches(&rich2, Ok(&synced2)));
+        assert!(lyrics::matches(&rich2, Ok(&simple1)));
+        assert!(lyrics::matches(&rich2, Ok(&simple2)));
+        assert!(lyrics::matches(&synced1, Ok(&rich1)));
+        assert!(lyrics::matches(&synced1, Ok(&rich2)));
+        assert!(lyrics::matches(&synced1, Ok(&synced1)));
+        assert!(lyrics::matches(&synced1, Ok(&synced2)));
+        assert!(lyrics::matches(&synced1, Ok(&simple1)));
+        assert!(lyrics::matches(&synced1, Ok(&simple2)));
+        assert!(lyrics::matches(&synced2, Ok(&rich1)));
+        assert!(lyrics::matches(&synced2, Ok(&rich2)));
+        assert!(lyrics::matches(&synced2, Ok(&synced1)));
+        assert!(lyrics::matches(&synced2, Ok(&synced2)));
+        assert!(lyrics::matches(&synced2, Ok(&simple1)));
+        assert!(lyrics::matches(&synced2, Ok(&simple2)));
+        assert!(lyrics::matches(&simple1, Ok(&rich1)));
+        assert!(lyrics::matches(&simple1, Ok(&rich2)));
+        assert!(lyrics::matches(&simple1, Ok(&synced1)));
+        assert!(lyrics::matches(&simple1, Ok(&synced2)));
+        assert!(lyrics::matches(&simple1, Ok(&simple1)));
+        assert!(lyrics::matches(&simple1, Ok(&simple2)));
+        assert!(lyrics::matches(&simple2, Ok(&rich1)));
+        assert!(lyrics::matches(&simple2, Ok(&rich2)));
+        assert!(lyrics::matches(&simple2, Ok(&synced1)));
+        assert!(lyrics::matches(&simple2, Ok(&synced2)));
+        assert!(lyrics::matches(&simple2, Ok(&simple1)));
+        assert!(lyrics::matches(&simple2, Ok(&simple2)));
+    }
 
     #[test]
     fn id3_simple_lyrics() {
@@ -86,7 +169,7 @@ mod interop {
         assert_eq!(removed.lines[3].text, "line 4");
         let lyrics = tag.get_synced_lyrics();
         assert!(matches!(lyrics, Err(GetLyricsError::NotEmbedded)));
-        let removed = tag.set_synced_lyrics(&SyncedLyrics {
+        let removed = tag.set_synced_lyrics(SyncedLyrics {
             lines: vec![
                 SyncedLine {
                     timestamp: std::time::Duration::ZERO,
