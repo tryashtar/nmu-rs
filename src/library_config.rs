@@ -840,6 +840,12 @@ impl LibraryConfig {
                 }
                 Ok(())
             }
+            FieldSelector::AllExcept { exclude } => {
+                for field in exclude {
+                    self.check_field(field)?;
+                }
+                Ok(())
+            }
         }
     }
     fn check_field(&self, field: &MetadataField) -> Result<(), LibraryError> {

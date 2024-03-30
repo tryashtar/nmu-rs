@@ -352,6 +352,8 @@ pub enum FieldSelector {
     Single(MetadataField),
     #[serde(untagged)]
     Multiple(HashSet<MetadataField>),
+    #[serde(untagged)]
+    AllExcept { exclude: HashSet<MetadataField> },
 }
 impl FieldSelector {
     pub fn is_match(&self, field: &MetadataField) -> bool {
@@ -359,6 +361,7 @@ impl FieldSelector {
             Self::All => true,
             Self::Single(single) => field == single,
             Self::Multiple(set) => set.contains(field),
+            Self::AllExcept { exclude } => !exclude.contains(field),
         }
     }
 }

@@ -4,7 +4,9 @@ use image::DynamicImage;
 
 use crate::{
     art::{GetArtResults, GetProcessedResult},
-    library_config::{LibraryConfig, LyricsConfig, SetLyricsReport, TagOptions, TagSettings},
+    library_config::{
+        LibraryConfig, LyricsConfig, SetLyricsReport, SetLyricsResult, TagOptions, TagSettings,
+    },
     lyrics::SomeLyrics,
     metadata::{self, GetMetadataResults, Metadata, MetadataField, MetadataValue},
     song_config::{self, ConfigCache, GetConfigsResults},
@@ -56,6 +58,7 @@ pub struct ProcessSongResults {
     pub metadata: Option<GetMetadataResults>,
     pub art: Option<GetArtResults>,
     pub added: Option<AddToSongReport>,
+    pub file_lyrics: Option<SetLyricsReport>,
 }
 impl ProcessSongResults {
     pub fn has_fatal_shared_error(&self) -> bool {
@@ -74,6 +77,15 @@ impl ProcessSongResults {
     pub fn has_fatal_local_error(&self) -> bool {
         if let Some(added) = &self.added {
             if added.id3.is_err() || added.ape.is_err() || added.flac.is_err() {
+                return true;
+            }
+        }
+        if let Some(lyrics) = &self.file_lyrics {
+            if lyrics
+                .results
+                .values()
+                .any(|x| matches!(x, SetLyricsResult::Failed(_)))
+            {
                 return true;
             }
         }
@@ -117,11 +129,23 @@ pub fn process_song(
             art_set,
             library_config,
         );
+        let mut file_lyrics = None;
+        if let Some(lyrics) = get_tag_lyrics(&added) {
+            results.metadata.insert(
+                MetadataField::SimpleLyrics,
+                MetadataValue::string(lyrics.clone().into_simple()),
+            );
+            if let Some(lyrics_config) = &library_config.lyrics {
+                let report = lyrics_config.write(nice_path, lyrics);
+                file_lyrics = Some(report);
+            }
+        }
         return ProcessSongResults {
             configs,
             metadata: Some(results),
             art: Some(art_results),
             added: Some(added),
+            file_lyrics,
         };
     }
     ProcessSongResults {
@@ -129,7 +153,24 @@ pub fn process_song(
         metadata: None,
         art: None,
         added: None,
+        file_lyrics: None,
     }
+}
+
+pub fn get_tag_lyrics(changes: &AddToSongReport) -> Option<&SomeLyrics> {
+    for change in [&changes.id3, &changes.flac, &changes.ape]
+        .into_iter()
+        .flatten()
+    {
+        if let TagChanges::Set(TagSpecificChanges {
+            lyrics: Some((lyrics, _)),
+            ..
+        }) = change
+        {
+            return Some(lyrics);
+        }
+    }
+    None
 }
 
 #[derive(thiserror::Error, Debug)]

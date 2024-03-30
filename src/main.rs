@@ -1,18 +1,20 @@
 use color_print::cformat;
-use lyrics::SomeLyrics;
+use library_config::SetLyricsReport;
 use regex::Regex;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     env,
     io::{ErrorKind, IsTerminal, Write},
+    ops::Deref,
     path::{Path, PathBuf},
     rc::Rc,
 };
 use walkdir::DirEntry;
 
 use crate::{
-    art::GetArtResults,
-    art::{ArtDiskCache, GetProcessedResult, ProcessedArtCache, RawArtRepo},
+    art::{
+        ArtDiskCache, ArtError, GetArtResults, GetProcessedResult, ProcessedArtCache, RawArtRepo,
+    },
     file_stuff::YamlError,
     library_config::{
         LibraryConfig, LibraryReport, LyricsConfig, LyricsReplaceMode, LyricsType,
@@ -20,9 +22,7 @@ use crate::{
         TagSettings,
     },
     metadata::SourcedReport,
-    modifier::ValueError,
-    setting::{AddToSongError, AddToSongReport, TagSpecificChanges},
-    setting::{ProcessFolderResults, ProcessSongResults, TagChanges},
+    setting::{AddToSongError, ProcessFolderResults, ProcessSongResults, TagChanges},
     song_config::{ConfigCache, ConfigLoadResults},
     strategy::FieldSelector,
     util::ItemPath,
@@ -209,15 +209,13 @@ fn do_scan(library_config: &mut LibraryConfig) {
             library_config.date_cache.remove(&song_path);
         } else {
             progress.changed += 1;
-            library_config.date_cache.mark_updated(song_path);
+            library_config.date_cache.mark_updated(song_path.clone());
             if let Some(metadata) = results.metadata {
                 library_config.update_reports(&nice_path, &metadata.metadata);
             }
-            if let Some(added) = &results.added {
-                if let Some(lyrics_config) = &library_config.lyrics {
-                    if let Some(lyrics) = get_tag_lyrics(added) {
-                        lyrics_config.write(&nice_path, lyrics);
-                    }
+            if let Some(art) = &results.art {
+                if let Some(art_repo) = &mut library_config.art_repo {
+                    art_repo.used_templates.add(&song_path, art);
                 }
             }
         }
@@ -234,22 +232,6 @@ fn do_scan(library_config: &mut LibraryConfig) {
             save_processed_art(disk, &art_repo.processed_cache);
         }
     }
-}
-
-fn get_tag_lyrics(changes: &AddToSongReport) -> Option<&SomeLyrics> {
-    for change in [&changes.id3, &changes.flac, &changes.ape]
-        .into_iter()
-        .flatten()
-    {
-        if let TagChanges::Set(TagSpecificChanges {
-            lyrics: Some((lyrics, _)),
-            ..
-        }) = change
-        {
-            return Some(lyrics);
-        }
-    }
-    None
 }
 
 fn handle_song_results(
@@ -286,6 +268,53 @@ fn handle_song_results(
         handle_tag_changes(added.flac.as_ref(), "FLAC");
         handle_tag_changes(added.ape.as_ref(), "APE");
     }
+    if let Some(report) = &results.file_lyrics {
+        if !report.results.is_empty() {
+            println!("\tUpdated file cached lyrics");
+        }
+        handle_lyrics_report(report);
+    }
+}
+
+fn handle_lyrics_report(report: &SetLyricsReport) {
+    for (lyrics_type, result) in &report.results {
+        match result {
+            SetLyricsResult::Replaced(existing) => match existing {
+                Ok(existing) => {
+                    println!(
+                        "\t\tReplaced {:?} lyrics: {:?}",
+                        lyrics_type,
+                        lyrics::display(existing)
+                    );
+                }
+                Err(err) => {
+                    println!("\t\tReplaced {:?} lyrics ({})", lyrics_type, err);
+                }
+            },
+            SetLyricsResult::Removed(existing) => match existing {
+                Ok(existing) => {
+                    println!(
+                        "\t\tRemoved {:?} lyrics: {:?}",
+                        lyrics_type,
+                        lyrics::display(existing)
+                    );
+                }
+                Err(err) => {
+                    println!("\t\tRemoved {:?} lyrics ({})", lyrics_type, err);
+                }
+            },
+            SetLyricsResult::Failed(err) => {
+                eprintln!(
+                    "{}",
+                    cformat!(
+                        "\t\t❌ <red>Error writing {:?} lyrics: {}</>",
+                        lyrics_type,
+                        err
+                    )
+                );
+            }
+        }
+    }
 }
 
 fn handle_tag_changes(changes: Result<&TagChanges, &AddToSongError>, tag_type: &'static str) {
@@ -300,35 +329,7 @@ fn handle_tag_changes(changes: Result<&TagChanges, &AddToSongError>, tag_type: &
             } else if changes.any() {
                 println!("\tUpdated {} tag", tag_type);
                 if let Some((lyrics, report)) = &changes.lyrics {
-                    for (lyrics_type, result) in &report.results {
-                        match result {
-                            SetLyricsResult::Replaced(existing) => match existing {
-                                Ok(existing) => {
-                                    println!(
-                                        "\t\tReplaced {:?} lyrics: {:?}",
-                                        lyrics_type,
-                                        lyrics::display(existing)
-                                    );
-                                }
-                                Err(err) => {
-                                    println!("\t\tReplaced {:?} lyrics ({})", lyrics_type, err);
-                                }
-                            },
-                            SetLyricsResult::Removed(existing) => match existing {
-                                Ok(existing) => {
-                                    println!(
-                                        "\t\tRemoved {:?} lyrics: {:?}",
-                                        lyrics_type,
-                                        lyrics::display(existing)
-                                    );
-                                }
-                                Err(err) => {
-                                    println!("\t\tRemoved {:?} lyrics ({})", lyrics_type, err);
-                                }
-                            },
-                            _ => {}
-                        }
-                    }
+                    handle_lyrics_report(report);
                     if !report.results.is_empty() {
                         println!("\t\tNew lyrics: {:?}", lyrics::display(lyrics));
                     }
@@ -490,15 +491,17 @@ fn handle_art_loaded(
     }
     match &processed.result {
         Err(error) => {
-            library_config.date_cache.remove(full_path);
-            eprintln!(
-                "{}",
-                cformat!(
-                    "❌ <red>Error loading image {}:\n{}</>",
-                    full_path.display(),
-                    error
-                )
-            );
+            if !matches!(error.deref(), ArtError::Config) {
+                library_config.date_cache.remove(full_path);
+                eprintln!(
+                    "{}",
+                    cformat!(
+                        "❌ <red>Error loading image {}:\n{}</>",
+                        full_path.display(),
+                        error
+                    )
+                );
+            }
         }
         Ok(_) => {
             library_config.date_cache.mark_updated(full_path.to_owned());
