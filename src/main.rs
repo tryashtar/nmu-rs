@@ -196,15 +196,15 @@ fn do_scan(library_config: &mut LibraryConfig) {
                 .unwrap_or(&song_path)
                 .with_extension(""),
         );
-        let mut results = setting::process_song(
+        let results = setting::process_song(
             &nice_path,
             &song_path,
             library_config,
             &mut config_cache,
             &options,
         );
-        let fatal_error = handle_song_results(&mut results, &nice_path, library_config);
-        if fatal_error {
+        handle_song_results(&results, &nice_path, library_config);
+        if results.has_fatal_shared_error() || results.has_fatal_local_error() {
             progress.failed += 1;
             library_config.date_cache.remove(&song_path);
         } else {
@@ -237,11 +237,14 @@ fn do_scan(library_config: &mut LibraryConfig) {
 }
 
 fn get_tag_lyrics(changes: &AddToSongReport) -> Option<&SomeLyrics> {
-    for change in [&changes.id3, &changes.flac, &changes.ape] {
-        if let Ok(TagChanges::Set(TagSpecificChanges {
+    for change in [&changes.id3, &changes.flac, &changes.ape]
+        .into_iter()
+        .flatten()
+    {
+        if let TagChanges::Set(TagSpecificChanges {
             lyrics: Some((lyrics, _)),
             ..
-        })) = change
+        }) = change
         {
             return Some(lyrics);
         }
@@ -250,13 +253,12 @@ fn get_tag_lyrics(changes: &AddToSongReport) -> Option<&SomeLyrics> {
 }
 
 fn handle_song_results(
-    results: &mut ProcessSongResults,
+    results: &ProcessSongResults,
     nice_path: &Path,
     library_config: &mut LibraryConfig,
-) -> bool {
-    let mut fatal_error = false;
-    for load in &results.configs.loaded {
-        fatal_error |= handle_config_loaded(load, library_config);
+) {
+    for load in &results.configs.newly_loaded {
+        handle_config_loaded(load, library_config);
     }
     if let Some(GetArtResults::Processed {
         processed: Some(result),
@@ -264,10 +266,10 @@ fn handle_song_results(
         ..
     }) = &results.art
     {
-        fatal_error |= handle_art_loaded(result, full_path, library_config);
+        handle_art_loaded(result, full_path, library_config);
     }
-    if fatal_error {
-        return true;
+    if results.has_fatal_shared_error() {
+        return;
     }
     println!("{}", nice_path.display());
     if let Some(GetArtResults::NoTemplateFound { tried }) = &results.art {
@@ -276,21 +278,17 @@ fn handle_song_results(
             cformat!("⚠️ <yellow>No matching templates found: {:?}</>", tried)
         );
     }
-    if let Some(results) = &mut results.metadata {
-        handle_apply_reports(&mut results.reports);
+    if let Some(results) = &results.metadata {
+        handle_apply_reports(&results.reports);
     }
     if let Some(added) = &results.added {
-        fatal_error |= handle_tag_changes(added.id3.as_ref(), "ID3");
-        fatal_error |= handle_tag_changes(added.flac.as_ref(), "FLAC");
-        fatal_error |= handle_tag_changes(added.ape.as_ref(), "APE");
+        handle_tag_changes(added.id3.as_ref(), "ID3");
+        handle_tag_changes(added.flac.as_ref(), "FLAC");
+        handle_tag_changes(added.ape.as_ref(), "APE");
     }
-    fatal_error
 }
 
-fn handle_tag_changes(
-    changes: Result<&TagChanges, &AddToSongError>,
-    tag_type: &'static str,
-) -> bool {
+fn handle_tag_changes(changes: Result<&TagChanges, &AddToSongError>, tag_type: &'static str) {
     match changes {
         Ok(TagChanges::None) => {}
         Ok(TagChanges::Removed) => {
@@ -342,10 +340,8 @@ fn handle_tag_changes(
                 "{}",
                 cformat!("\t❌ <red>Error updating {} tag\n\t{}</>", tag_type, err)
             );
-            return true;
         }
     }
-    false
 }
 
 fn handle_folder_results(results: &ProcessFolderResults) {}
@@ -450,11 +446,8 @@ fn save_processed_art(disk: &ArtDiskCache, processed: &ProcessedArtCache) {
     }
 }
 
-fn handle_apply_reports(reports: &mut Vec<SourcedReport>) {
+fn handle_apply_reports(reports: &Vec<SourcedReport>) {
     for report in reports {
-        report
-            .errors
-            .retain(|x| !matches!(x, ValueError::ExitRequested));
         if !report.errors.is_empty() {
             eprintln!(
                 "{}",
@@ -474,23 +467,19 @@ fn handle_art_loaded(
     processed: &GetProcessedResult,
     full_path: &Path,
     library_config: &mut LibraryConfig,
-) -> bool {
-    let mut fatal_error = false;
+) {
     for load in &processed.newly_loaded {
         match &load.result {
             Err(error) => {
-                if !song_config::is_not_found(error) {
-                    library_config.date_cache.remove(&load.full_path);
-                    eprintln!(
-                        "{}",
-                        cformat!(
-                            "❌ <red>Error loading config: {}\n{}</>",
-                            load.full_path.display(),
-                            error
-                        )
-                    );
-                    fatal_error = true;
-                }
+                library_config.date_cache.remove(&load.full_path);
+                eprintln!(
+                    "{}",
+                    cformat!(
+                        "❌ <red>Error loading config: {}\n{}</>",
+                        load.full_path.display(),
+                        error
+                    )
+                );
             }
             Ok(_) => {
                 library_config
@@ -510,30 +499,25 @@ fn handle_art_loaded(
                     error
                 )
             );
-            fatal_error = true;
         }
         Ok(_) => {
             library_config.date_cache.mark_updated(full_path.to_owned());
         }
     }
-    fatal_error
 }
 
-fn handle_config_loaded(load: &ConfigLoadResults, library_config: &mut LibraryConfig) -> bool {
+fn handle_config_loaded(load: &ConfigLoadResults, library_config: &mut LibraryConfig) {
     match &load.result {
         Err(error) => {
             library_config.date_cache.remove(&load.full_path);
-            if !song_config::is_not_found(error) {
-                eprintln!(
-                    "{}",
-                    cformat!(
-                        "❌ <red>Error loading config\n{}\n{}</>",
-                        load.full_path.display(),
-                        error
-                    )
-                );
-                return true;
-            }
+            eprintln!(
+                "{}",
+                cformat!(
+                    "❌ <red>Error loading config\n{}\n{}</>",
+                    load.full_path.display(),
+                    error
+                )
+            );
         }
         Ok(config) => {
             library_config
@@ -572,7 +556,6 @@ fn handle_config_loaded(load: &ConfigLoadResults, library_config: &mut LibraryCo
             }
         }
     }
-    false
 }
 
 struct ScanResults {

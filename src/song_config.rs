@@ -143,7 +143,7 @@ impl AllSetter {
 
 pub struct GetConfigsResults {
     pub result: Result<Vec<LoadedConfig>, Rc<ConfigError>>,
-    pub loaded: Vec<ConfigLoadResults>,
+    pub newly_loaded: Vec<ConfigLoadResults>,
 }
 pub struct ConfigLoadResults {
     pub result: Result<Rc<SongConfig>, Rc<ConfigError>>,
@@ -175,11 +175,16 @@ pub fn get_relevant_configs(
                 let config = load_config(x, nice_folder, library_config)
                     .map(Rc::new)
                     .map_err(Rc::new);
-                newly_loaded.push(ConfigLoadResults {
-                    result: config.clone(),
-                    full_path: x.clone(),
-                    nice_folder: nice_folder.to_owned(),
-                });
+                match &config {
+                    Err(err) if is_not_found(err) => {}
+                    _ => {
+                        newly_loaded.push(ConfigLoadResults {
+                            result: config.clone(),
+                            full_path: x.clone(),
+                            nice_folder: nice_folder.to_owned(),
+                        });
+                    }
+                }
                 config
             });
         match loaded {
@@ -193,7 +198,7 @@ pub fn get_relevant_configs(
             Err(err) => {
                 if !is_not_found(err) {
                     return GetConfigsResults {
-                        loaded: newly_loaded,
+                        newly_loaded,
                         result: Err(err.clone()),
                     };
                 }
@@ -201,7 +206,7 @@ pub fn get_relevant_configs(
         }
     }
     GetConfigsResults {
-        loaded: newly_loaded,
+        newly_loaded,
         result: Ok(results),
     }
 }

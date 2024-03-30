@@ -3,7 +3,7 @@ use std::{path::Path, rc::Rc};
 use image::DynamicImage;
 
 use crate::{
-    art::GetArtResults,
+    art::{GetArtResults, GetProcessedResult},
     library_config::{LibraryConfig, LyricsConfig, SetLyricsReport, TagOptions, TagSettings},
     lyrics::SomeLyrics,
     metadata::{self, GetMetadataResults, Metadata, MetadataField, MetadataValue},
@@ -56,6 +56,29 @@ pub struct ProcessSongResults {
     pub metadata: Option<GetMetadataResults>,
     pub art: Option<GetArtResults>,
     pub added: Option<AddToSongReport>,
+}
+impl ProcessSongResults {
+    pub fn has_fatal_shared_error(&self) -> bool {
+        if self.configs.result.is_err() {
+            return true;
+        }
+        if let Some(GetArtResults::Processed {
+            processed: Some(GetProcessedResult { result: Err(_), .. }),
+            ..
+        }) = &self.art
+        {
+            return true;
+        }
+        false
+    }
+    pub fn has_fatal_local_error(&self) -> bool {
+        if let Some(added) = &self.added {
+            if added.id3.is_err() || added.ape.is_err() || added.flac.is_err() {
+                return true;
+            }
+        }
+        false
+    }
 }
 pub fn process_song(
     nice_path: &ItemPath,

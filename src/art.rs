@@ -502,11 +502,16 @@ impl ArtRepo {
                         .load_new_config(config_path)
                         .map(Rc::new)
                         .map_err(Rc::new);
-                    newly_loaded.push(ArtConfigLoadResults {
-                        nice_folder: ancestor.to_owned(),
-                        full_path: config_path.to_owned(),
-                        result: result.clone(),
-                    });
+                    match &result {
+                        Err(err) if song_config::is_not_found(err) => {}
+                        _ => {
+                            newly_loaded.push(ArtConfigLoadResults {
+                                nice_folder: ancestor.to_owned(),
+                                full_path: config_path.to_owned(),
+                                result: result.clone(),
+                            });
+                        }
+                    }
                     result
                 })
                 .clone();

@@ -51,6 +51,11 @@ impl ApplyReport {
     pub fn merge(&mut self, mut other: Self) {
         self.errors.append(&mut other.errors);
     }
+    pub fn add_error(&mut self, error: ValueError) {
+        if !matches!(error, ValueError::ExitRequested) {
+            self.errors.push(error);
+        }
+    }
 }
 impl MetadataOperation {
     pub fn apply(
@@ -86,7 +91,7 @@ impl MetadataOperation {
                     }
                 }
                 Err(err) => {
-                    report.errors.push(err);
+                    report.add_error(err);
                 }
             },
             Self::SharedModify { fields, modify } => {
@@ -98,11 +103,11 @@ impl MetadataOperation {
                                     metadata.insert(field, modified);
                                 }
                                 Err(err) => {
-                                    report.errors.push(err);
+                                    report.add_error(err);
                                 }
                             };
                         } else {
-                            report.errors.push(ValueError::MissingField {
+                            report.add_error(ValueError::MissingField {
                                 modifier: modify.clone(),
                                 field,
                             });
@@ -117,7 +122,7 @@ impl MetadataOperation {
                             metadata.insert(field.clone(), value);
                         }
                         Err(err) => {
-                            report.errors.push(err);
+                            report.add_error(err);
                         }
                     }
                 }
@@ -130,13 +135,13 @@ impl MetadataOperation {
                                 metadata.insert(field.clone(), modified);
                             }
                             Err(err) => {
-                                report.errors.push(err);
+                                report.add_error(err);
                             }
                         }
                     }
                 }
                 Err(err) => {
-                    report.errors.push(err);
+                    report.add_error(err);
                 }
             },
             Self::Modify { modify } => {
@@ -147,11 +152,11 @@ impl MetadataOperation {
                                 metadata.insert(field.clone(), modified);
                             }
                             Err(err) => {
-                                report.errors.push(err);
+                                report.add_error(err);
                             }
                         };
                     } else {
-                        report.errors.push(ValueError::MissingField {
+                        report.add_error(ValueError::MissingField {
                             modifier: modifier.clone(),
                             field: field.clone(),
                         });
