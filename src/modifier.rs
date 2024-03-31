@@ -71,11 +71,6 @@ pub enum ValueError {
     ItemNotFound {
         selector: Rc<LocalItemSelector>,
     },
-    WrongFieldType {
-        field: MetadataField,
-        got: MetadataValue,
-        expected: &'static str,
-    },
 }
 pub fn inline_data<T>(item: &T) -> String
 where
@@ -93,13 +88,6 @@ impl std::fmt::Display for ValueError {
             } => {
                 let mod_str = inline_data(&modifier);
                 write!(f, "Modifier {mod_str} expected {expected}, but got {got}")
-            }
-            Self::WrongFieldType {
-                field,
-                expected,
-                got,
-            } => {
-                write!(f, "Field {field} expected {expected}, but got {got}")
             }
             Self::MissingField { modifier, field } => {
                 let mod_str = inline_data(&modifier);

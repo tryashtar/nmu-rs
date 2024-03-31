@@ -111,8 +111,44 @@ impl MetadataValue {
     pub const fn blank() -> Self {
         Self::List(vec![])
     }
+    pub fn is_blank(&self) -> bool {
+        match self {
+            MetadataValue::List(list) => list.is_empty(),
+            _ => false,
+        }
+    }
     pub fn string(single: String) -> Self {
         Self::List(vec![single])
+    }
+    pub fn from_option(value: Option<String>) -> Self {
+        match value {
+            None => Self::blank(),
+            Some(val) => Self::string(val),
+        }
+    }
+    pub fn into_num(self) -> Option<u32> {
+        match self {
+            Self::Number(num) => Some(num),
+            _ => None,
+        }
+    }
+    pub fn into_list(self) -> Option<Vec<String>> {
+        match self {
+            Self::List(list) => Some(list),
+            _ => None,
+        }
+    }
+    pub fn into_string(self) -> Option<String> {
+        match self {
+            Self::List(mut list) => {
+                if list.len() == 1 {
+                    Some(list.remove(0))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
     }
     pub fn as_string(&self) -> Option<&str> {
         match self {
@@ -145,6 +181,7 @@ impl fmt::Display for MetadataValue {
 #[serde(rename_all = "lowercase")]
 pub enum MetadataField {
     Title,
+    Subtitle,
     Album,
     #[serde(alias = "performer")]
     Performers,
@@ -179,6 +216,7 @@ impl std::fmt::Display for MetadataField {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Title => write!(f, "Title"),
+            Self::Subtitle => write!(f, "Subtitle"),
             Self::Album => write!(f, "Album"),
             Self::Performers => write!(f, "Performers"),
             Self::AlbumArtist => write!(f, "Album Artist"),

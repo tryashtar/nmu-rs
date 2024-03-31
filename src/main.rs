@@ -1,5 +1,4 @@
 use color_print::cformat;
-use library_config::SetLyricsReport;
 use regex::Regex;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -18,11 +17,13 @@ use crate::{
     file_stuff::YamlError,
     library_config::{
         LibraryConfig, LibraryReport, LyricsConfig, LyricsReplaceMode, LyricsType,
-        RawLibraryConfig, RawLibraryReport, ScanDecision, ScanOptions, SetLyricsResult, TagOptions,
-        TagSettings,
+        RawLibraryConfig, RawLibraryReport, ScanDecision, ScanOptions, SetLyricsReport,
+        SetLyricsResult, TagOptions, TagSettings,
     },
-    metadata::SourcedReport,
-    setting::{AddToSongError, ProcessFolderResults, ProcessSongResults, TagChanges},
+    metadata::{Metadata, SourcedReport},
+    setting::{
+        AddToSongError, AssignResults, ProcessFolderResults, ProcessSongResults, TagChanges,
+    },
     song_config::{ConfigCache, ConfigLoadResults},
     strategy::FieldSelector,
     util::ItemPath,
@@ -210,12 +211,10 @@ fn do_scan(library_config: &mut LibraryConfig) {
         } else {
             progress.changed += 1;
             library_config.date_cache.mark_updated(song_path.clone());
-            if let Some(metadata) = results.metadata {
-                library_config.update_reports(&nice_path, &metadata.metadata);
-            }
-            if let Some(art) = &results.art {
+            if let Some(assigned) = results.assigned {
+                library_config.update_reports(&nice_path, &assigned.metadata.metadata);
                 if let Some(art_repo) = &mut library_config.art_repo {
-                    art_repo.used_templates.add(&song_path, art);
+                    art_repo.used_templates.add(&song_path, &assigned.art);
                 }
             }
         }
@@ -242,11 +241,15 @@ fn handle_song_results(
     for load in &results.configs.newly_loaded {
         handle_config_loaded(load, library_config);
     }
-    if let Some(GetArtResults::Processed {
-        processed: Some(result),
-        full_path,
+    if let Some(AssignResults {
+        art:
+            GetArtResults::Processed {
+                processed: Some(result),
+                full_path,
+                ..
+            },
         ..
-    }) = &results.art
+    }) = &results.assigned
     {
         handle_art_loaded(result, full_path, library_config);
     }
@@ -254,25 +257,35 @@ fn handle_song_results(
         return;
     }
     println!("{}", nice_path.display());
-    if let Some(GetArtResults::NoTemplateFound { tried }) = &results.art {
-        eprintln!(
-            "{}",
-            cformat!("⚠️ <yellow>No matching templates found: {:?}</>", tried)
-        );
-    }
-    if let Some(results) = &results.metadata {
-        handle_apply_reports(&results.reports);
-    }
-    if let Some(added) = &results.added {
-        handle_tag_changes(added.id3.as_ref(), "ID3");
-        handle_tag_changes(added.flac.as_ref(), "FLAC");
-        handle_tag_changes(added.ape.as_ref(), "APE");
-    }
-    if let Some(report) = &results.file_lyrics {
-        if !report.results.is_empty() {
-            println!("\tUpdated file cached lyrics");
+    if let Some(assigned) = &results.assigned {
+        if let GetArtResults::NoTemplateFound { tried } = &assigned.art {
+            eprintln!(
+                "{}",
+                cformat!("⚠️ <yellow>No matching templates found: {:?}</>", tried)
+            );
         }
-        handle_lyrics_report(report);
+        handle_apply_reports(&assigned.metadata.reports);
+        handle_tag_changes(
+            assigned.added.id3.as_ref(),
+            &assigned.metadata.metadata,
+            "ID3",
+        );
+        handle_tag_changes(
+            assigned.added.flac.as_ref(),
+            &assigned.metadata.metadata,
+            "FLAC",
+        );
+        handle_tag_changes(
+            assigned.added.ape.as_ref(),
+            &assigned.metadata.metadata,
+            "APE",
+        );
+        if let Some(report) = &assigned.file_lyrics {
+            if !report.results.is_empty() {
+                println!("\tUpdated file cached lyrics");
+            }
+            handle_lyrics_report(report);
+        }
     }
 }
 
@@ -317,7 +330,11 @@ fn handle_lyrics_report(report: &SetLyricsReport) {
     }
 }
 
-fn handle_tag_changes(changes: Result<&TagChanges, &AddToSongError>, tag_type: &'static str) {
+fn handle_tag_changes(
+    changes: Result<&TagChanges, &AddToSongError>,
+    metadata: &Metadata,
+    tag_type: &'static str,
+) {
     match changes {
         Ok(TagChanges::None) => {}
         Ok(TagChanges::Removed) => {
@@ -332,6 +349,20 @@ fn handle_tag_changes(changes: Result<&TagChanges, &AddToSongError>, tag_type: &
                     handle_lyrics_report(report);
                     if !report.results.is_empty() {
                         println!("\t\tNew lyrics: {:?}", lyrics::display(lyrics));
+                    }
+                }
+                for (field, change) in &changes.metadata.fields {
+                    let new = metadata.get(field).unwrap_or(&metadata::BLANK_VALUE);
+                    match change {
+                        tag_interop::SetFieldResult::Replaced(existing) => {
+                            println!("\t\t{}: {} -> {}", field, existing, new);
+                        }
+                        tag_interop::SetFieldResult::Incompatible { expected } => {
+                            eprintln!(
+                                "{}",
+                                cformat!("⚠️ <yellow>Invalid field value, expected {}</>", expected)
+                            );
+                        }
                     }
                 }
             }

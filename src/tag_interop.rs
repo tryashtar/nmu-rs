@@ -1,7 +1,12 @@
+use std::collections::BTreeMap;
+
 use id3::{frame::SynchronisedLyrics, TagLike};
 use itertools::Itertools;
 
-use crate::lyrics::{ParseError, RichLyrics, SyncedLine, SyncedLyrics};
+use crate::{
+    lyrics::{ParseError, RichLyrics, SyncedLine, SyncedLyrics},
+    metadata::{Metadata, MetadataField, MetadataValue},
+};
 
 pub enum SetValue<T> {
     Keep,
@@ -31,6 +36,237 @@ pub trait GetLyrics {
     fn get_rich_lyrics(&self) -> Result<RichLyrics, GetLyricsError>;
     fn remove_rich_lyrics(&mut self) -> Result<RichLyrics, GetLyricsError>;
     fn set_rich_lyrics(&mut self, lyrics: RichLyrics) -> Result<RichLyrics, GetLyricsError>;
+}
+
+pub trait SetMetadata {
+    fn set_field(&mut self, field: &MetadataField, value: MetadataValue) -> Option<SetFieldResult>;
+}
+pub fn set_metadata(tag: &mut impl SetMetadata, metadata: Metadata) -> SetMetadataReport {
+    let mut report = SetMetadataReport {
+        fields: BTreeMap::new(),
+    };
+    for (field, value) in metadata {
+        if let Some(result) = tag.set_field(&field, value) {
+            report.fields.insert(field, result);
+        }
+    }
+    report
+}
+
+fn from_str(val: Option<&str>) -> MetadataValue {
+    MetadataValue::from_option(val.map(|x| x.to_owned()))
+}
+
+fn from_num(val: Option<u32>) -> MetadataValue {
+    match val {
+        None => MetadataValue::blank(),
+        Some(val) => MetadataValue::Number(val),
+    }
+}
+
+fn from_vec(val: Option<Vec<&str>>) -> MetadataValue {
+    MetadataValue::List(
+        val.unwrap_or_default()
+            .into_iter()
+            .map(|x| x.to_owned())
+            .collect(),
+    )
+}
+
+fn handle_str(
+    tag: &mut id3::Tag,
+    key: &'static str,
+    incoming: MetadataValue,
+) -> Option<SetFieldResult> {
+    let existing = from_str(tag.text_for_frame_id(key));
+    if existing == incoming {
+        return None;
+    }
+    if incoming.is_blank() {
+        tag.remove(key);
+        return Some(SetFieldResult::Replaced(existing));
+    }
+    let str = incoming.into_string();
+    match str {
+        None => Some(SetFieldResult::Incompatible { expected: "string" }),
+        Some(str) => {
+            tag.set_text(key, str);
+            Some(SetFieldResult::Replaced(existing))
+        }
+    }
+}
+
+fn handle_list(
+    tag: &mut id3::Tag,
+    key: &'static str,
+    incoming: MetadataValue,
+) -> Option<SetFieldResult> {
+    let existing = from_vec(tag.text_values_for_frame_id(key));
+    if existing == incoming {
+        return None;
+    }
+    if incoming.is_blank() {
+        tag.remove(key);
+        return Some(SetFieldResult::Replaced(existing));
+    }
+    let list = incoming.into_list();
+    match list {
+        None => Some(SetFieldResult::Incompatible { expected: "list" }),
+        Some(list) => {
+            tag.set_text_values(key, list);
+            Some(SetFieldResult::Replaced(existing))
+        }
+    }
+}
+
+pub enum SetFieldResult {
+    Replaced(MetadataValue),
+    Incompatible { expected: &'static str },
+}
+
+impl SetMetadata for id3::Tag {
+    fn set_field(&mut self, field: &MetadataField, value: MetadataValue) -> Option<SetFieldResult> {
+        match field {
+            MetadataField::Title => handle_str(self, "TIT2", value),
+            MetadataField::Subtitle => handle_str(self, "TIT3", value),
+            MetadataField::Album => handle_str(self, "TALB", value),
+            MetadataField::Performers => handle_list(self, "TPE1", value),
+            MetadataField::AlbumArtist => handle_str(self, "TPE2", value),
+            MetadataField::Composers => handle_list(self, "TCOM", value),
+            MetadataField::Arranger => handle_str(self, "TPE4", value),
+            MetadataField::Comment => {
+                let existing =
+                    MetadataValue::List(self.comments().map(|x| x.text.to_owned()).collect());
+                if existing == value {
+                    return None;
+                }
+                if value.is_blank() {
+                    self.remove("COMM");
+                    return Some(SetFieldResult::Replaced(existing));
+                }
+                let str = value.into_string();
+                match str {
+                    None => Some(SetFieldResult::Incompatible { expected: "string" }),
+                    Some(str) => {
+                        self.remove("COMM");
+                        self.add_frame(id3::frame::Comment {
+                            lang: String::from(""),
+                            description: String::from(""),
+                            text: str,
+                        });
+                        Some(SetFieldResult::Replaced(existing))
+                    }
+                }
+            }
+            MetadataField::Track => {
+                let existing = from_num(self.track());
+                if existing == value {
+                    return None;
+                }
+                if value.is_blank() {
+                    self.remove_track();
+                    return Some(SetFieldResult::Replaced(existing));
+                }
+                let num = value.into_num();
+                match num {
+                    None => Some(SetFieldResult::Incompatible { expected: "number" }),
+                    Some(num) => {
+                        self.set_track(num);
+                        Some(SetFieldResult::Replaced(existing))
+                    }
+                }
+            }
+            MetadataField::TrackTotal => {
+                let existing = from_num(self.total_tracks());
+                if existing == value {
+                    return None;
+                }
+                if value.is_blank() {
+                    self.remove_total_tracks();
+                    return Some(SetFieldResult::Replaced(existing));
+                }
+                let num = value.into_num();
+                match num {
+                    None => Some(SetFieldResult::Incompatible { expected: "number" }),
+                    Some(num) => {
+                        self.set_total_tracks(num);
+                        Some(SetFieldResult::Replaced(existing))
+                    }
+                }
+            }
+            MetadataField::Disc => {
+                let existing = from_num(self.disc());
+                if existing == value {
+                    return None;
+                }
+                if value.is_blank() {
+                    self.remove_disc();
+                    return Some(SetFieldResult::Replaced(existing));
+                }
+                let num = value.into_num();
+                match num {
+                    None => Some(SetFieldResult::Incompatible { expected: "number" }),
+                    Some(num) => {
+                        self.set_disc(num);
+                        Some(SetFieldResult::Replaced(existing))
+                    }
+                }
+            }
+            MetadataField::DiscTotal => {
+                let existing = from_num(self.total_discs());
+                if existing == value {
+                    return None;
+                }
+                if value.is_blank() {
+                    self.remove_total_discs();
+                    return Some(SetFieldResult::Replaced(existing));
+                }
+                let num = value.into_num();
+                match num {
+                    None => Some(SetFieldResult::Incompatible { expected: "number" }),
+                    Some(num) => {
+                        self.set_total_discs(num);
+                        Some(SetFieldResult::Replaced(existing))
+                    }
+                }
+            }
+            MetadataField::Year => {
+                let existing = from_num(self.year().map(|x| x as u32));
+                if existing == value {
+                    return None;
+                }
+                if value.is_blank() {
+                    self.remove_year();
+                    return Some(SetFieldResult::Replaced(existing));
+                }
+                let num = value.into_num();
+                match num {
+                    None => Some(SetFieldResult::Incompatible { expected: "number" }),
+                    Some(num) => {
+                        self.set_year(num as i32);
+                        Some(SetFieldResult::Replaced(existing))
+                    }
+                }
+            }
+            MetadataField::Language => handle_str(self, "TLAN", value),
+            MetadataField::Genres => handle_list(self, "TCON", value),
+            MetadataField::Art | MetadataField::SimpleLyrics | MetadataField::Custom(_) => None,
+        }
+    }
+}
+impl SetMetadata for metaflac::Tag {
+    fn set_field(&mut self, field: &MetadataField, value: MetadataValue) -> Option<SetFieldResult> {
+        None
+    }
+}
+impl SetMetadata for ape::Tag {
+    fn set_field(&mut self, field: &MetadataField, value: MetadataValue) -> Option<SetFieldResult> {
+        None
+    }
+}
+
+pub struct SetMetadataReport {
+    pub fields: BTreeMap<MetadataField, SetFieldResult>,
 }
 
 impl GetLyrics for id3::Tag {
