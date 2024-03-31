@@ -357,6 +357,9 @@ impl LyricsConfig {
     }
 
     fn write_rich(path: &Path, lyrics: &RichLyrics) -> Result<(), std::io::Error> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         let file = std::fs::File::create(path)?;
         let writer = std::io::BufWriter::new(file);
         serde_json::to_writer_pretty(writer, lyrics)?;
@@ -364,6 +367,9 @@ impl LyricsConfig {
     }
 
     fn write_synced(path: &Path, lyrics: &SyncedLyrics) -> Result<(), std::io::Error> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         let file = std::fs::File::create(path)?;
         let mut writer = std::io::LineWriter::new(file);
         writer.write_all(lyrics.save().join("\n").as_bytes())?;
@@ -371,6 +377,9 @@ impl LyricsConfig {
     }
 
     fn write_simple(path: &Path, lyrics: &str) -> Result<(), std::io::Error> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         let file = std::fs::File::create(path)?;
         let mut writer = std::io::LineWriter::new(file);
         writer.write_all(lyrics.as_bytes())?;

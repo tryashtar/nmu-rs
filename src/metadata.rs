@@ -27,6 +27,7 @@ pub fn get_metadata(
 ) -> GetMetadataResults {
     let mut metadata;
     let mut config_reports;
+    let mut copy_source = Metadata::new();
     loop {
         metadata = Metadata::new();
         config_reports = vec![];
@@ -34,9 +35,13 @@ pub fn get_metadata(
             let select_path = nice_path
                 .strip_prefix(&config.nice_folder)
                 .unwrap_or(&config.nice_folder);
-            let report = config
-                .config
-                .apply(nice_path, select_path, &mut metadata, library_config);
+            let report = config.config.apply(
+                nice_path,
+                select_path,
+                &mut metadata,
+                &copy_source,
+                library_config,
+            );
             config_reports.push(SourcedReport {
                 full_path: config.full_path.clone(),
                 errors: report.errors,
@@ -53,6 +58,7 @@ pub fn get_metadata(
         if !redo {
             break;
         }
+        copy_source = metadata;
     }
     GetMetadataResults {
         metadata,

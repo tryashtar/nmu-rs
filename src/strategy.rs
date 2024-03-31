@@ -61,6 +61,7 @@ impl MetadataOperation {
     pub fn apply(
         &self,
         metadata: &mut Metadata,
+        copy_source: &Metadata,
         nice_path: &Path,
         config: &LibraryConfig,
     ) -> ApplyReport {
@@ -68,7 +69,7 @@ impl MetadataOperation {
         match self {
             Self::Many(items) => {
                 for item in items {
-                    let more = item.apply(metadata, nice_path, config);
+                    let more = item.apply(metadata, copy_source, nice_path, config);
                     report.merge(more);
                 }
             }
@@ -82,7 +83,7 @@ impl MetadataOperation {
             Self::Keep { keep } => {
                 metadata.retain(|k, _| !keep.is_match(k));
             }
-            Self::Shared { fields, set } => match set.get(metadata, nice_path, config) {
+            Self::Shared { fields, set } => match set.get(copy_source, nice_path, config) {
                 Ok(value) => {
                     for field in config.get_all_fields() {
                         if fields.is_match(&field) {
@@ -98,7 +99,7 @@ impl MetadataOperation {
                 for field in config.get_all_fields() {
                     if fields.is_match(&field) {
                         if let Some(existing) = metadata.get(&field) {
-                            match modify.modify(metadata, existing.clone(), nice_path, config) {
+                            match modify.modify(copy_source, existing.clone(), nice_path, config) {
                                 Ok(modified) => {
                                     metadata.insert(field, modified);
                                 }
@@ -117,7 +118,7 @@ impl MetadataOperation {
             }
             Self::Set(set) => {
                 for (field, value) in set {
-                    match value.get(metadata, nice_path, config) {
+                    match value.get(copy_source, nice_path, config) {
                         Ok(value) => {
                             metadata.insert(field.clone(), value);
                         }
@@ -127,10 +128,10 @@ impl MetadataOperation {
                     }
                 }
             }
-            Self::Context { source, modify } => match source.get(metadata, nice_path, config) {
+            Self::Context { source, modify } => match source.get(copy_source, nice_path, config) {
                 Ok(value) => {
                     for (field, modifier) in modify {
-                        match modifier.modify(metadata, value.clone(), nice_path, config) {
+                        match modifier.modify(copy_source, value.clone(), nice_path, config) {
                             Ok(modified) => {
                                 metadata.insert(field.clone(), modified);
                             }
@@ -147,7 +148,7 @@ impl MetadataOperation {
             Self::Modify { modify } => {
                 for (field, modifier) in modify {
                     if let Some(existing) = metadata.get(field) {
-                        match modifier.modify(metadata, existing.clone(), nice_path, config) {
+                        match modifier.modify(copy_source, existing.clone(), nice_path, config) {
                             Ok(modified) => {
                                 metadata.insert(field.clone(), modified);
                             }
@@ -430,12 +431,12 @@ impl ValueGetter {
                 }
             }
             Self::Copy { copy, modify } => {
-                let result = copy_source
+                let copied = copy_source
                     .get(copy)
                     .ok_or_else(|| ValueError::CopyNotFound {
                         field: copy.clone(),
-                    })?
-                    .clone();
+                    })?;
+                let result = copied.clone();
                 match modify {
                     None => Ok(result),
                     Some(modify) => modify.modify(copy_source, result, nice_path, config),

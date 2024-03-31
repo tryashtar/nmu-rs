@@ -80,6 +80,7 @@ impl SongConfig {
         nice_path: &ItemPath,
         select: &Path,
         metadata: &mut Metadata,
+        copy_source: &Metadata,
         library_config: &LibraryConfig,
     ) -> ApplyReport {
         let mut report = ApplyReport { errors: vec![] };
@@ -111,15 +112,22 @@ impl SongConfig {
             if setter.names.matches(select)
                 && MusicItemType::matches(nice_path.as_type(), setter.must_be)
             {
-                let more = setter
-                    .set
-                    .apply(metadata, nice_path.as_ref(), library_config);
+                let more =
+                    setter
+                        .set
+                        .apply(metadata, copy_source, nice_path.as_ref(), library_config);
                 report.merge(more);
             }
         }
         for (path, sub) in &self.subconfigs {
             let select_path = nice_path.strip_prefix(path).unwrap_or(path);
-            let more = sub.apply(nice_path, select_path, metadata, library_config);
+            let more = sub.apply(
+                nice_path,
+                select_path,
+                metadata,
+                copy_source,
+                library_config,
+            );
             report.merge(more);
         }
         report
