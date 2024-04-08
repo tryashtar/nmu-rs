@@ -8,7 +8,7 @@ use serde::{ser::SerializeTuple, Deserialize, Serialize};
 
 use crate::strategy::MusicItemType;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Range {
     pub start: i32,
     pub stop: i32,
@@ -138,7 +138,7 @@ impl From<i32> for Range {
     }
 }
 
-#[derive(Deserialize, Serialize, Clone, Copy)]
+#[derive(Deserialize, Serialize, Clone, Copy, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum OutOfBoundsDecision {
     Exit,

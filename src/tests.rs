@@ -774,7 +774,13 @@ fn copy_full_self() {
     )];
     let results = metadata::get_metadata(&path, &configs, &config);
     let field = results.metadata.get(&MetadataField::Title);
-    assert!(field.is_none());
+    assert!(matches!(
+        field,
+        Some(Err(ValueError::CopyNotFound {
+            field: MetadataField::Title,
+            ..
+        }))
+    ));
     assert!(matches!(
         results.reports[0].errors[0],
         ValueError::CopyNotFound {
@@ -797,7 +803,13 @@ fn copy_full_missing() {
     )];
     let results = metadata::get_metadata(&path, &configs, &config);
     let field = results.metadata.get(&MetadataField::Title);
-    assert!(field.is_none());
+    assert!(matches!(
+        field,
+        Some(Err(ValueError::CopyNotFound {
+            field: MetadataField::Performers,
+            ..
+        }))
+    ));
     assert!(matches!(
         results.reports[0].errors[0],
         ValueError::CopyNotFound {
@@ -805,6 +817,94 @@ fn copy_full_missing() {
             ..
         }
     ));
+}
+
+#[test]
+fn copy_full_chain() {
+    let config = dummy_config();
+    let path = ItemPath::Song(PathBuf::from("a/b/c"));
+    let configs = [
+        fast_config(
+            ItemSelector::All { recursive: true },
+            MetadataOperation::Set(HashMap::from([(
+                MetadataField::Title,
+                ValueGetter::Direct(MetadataValue::string("test".to_string())),
+            )])),
+        ),
+        fast_config(
+            ItemSelector::All { recursive: true },
+            MetadataOperation::Set(HashMap::from([(
+                MetadataField::Performers,
+                fast_copy(MetadataField::Title),
+            )])),
+        ),
+        fast_config(
+            ItemSelector::All { recursive: true },
+            MetadataOperation::Set(HashMap::from([(
+                MetadataField::Composers,
+                fast_copy(MetadataField::Performers),
+            )])),
+        ),
+        fast_config(
+            ItemSelector::All { recursive: true },
+            MetadataOperation::Set(HashMap::from([(
+                MetadataField::Genres,
+                fast_copy(MetadataField::Composers),
+            )])),
+        ),
+    ];
+    let results = metadata::get_metadata(&path, &configs, &config);
+    assert!(
+        matches!(results.metadata.get(&MetadataField::Title).unwrap(), Ok(MetadataValue::List(x)) if x.as_slice() == ["test"])
+    );
+    assert!(
+        matches!(results.metadata.get(&MetadataField::Performers).unwrap(), Ok(MetadataValue::List(x)) if x.as_slice() == ["test"])
+    );
+    assert!(
+        matches!(results.metadata.get(&MetadataField::Composers).unwrap(), Ok(MetadataValue::List(x)) if x.as_slice() == ["test"])
+    );
+    assert!(
+        matches!(results.metadata.get(&MetadataField::Genres).unwrap(), Ok(MetadataValue::List(x)) if x.as_slice() == ["test"])
+    );
+    assert!(results.reports.into_iter().all(|x| x.errors.is_empty()));
+}
+
+#[test]
+fn copy_full_modify() {
+    let config = dummy_config();
+    let path = ItemPath::Song(PathBuf::from("a/b/c"));
+    let configs = [
+        fast_config(
+            ItemSelector::All { recursive: true },
+            MetadataOperation::Set(HashMap::from([(
+                MetadataField::Title,
+                ValueGetter::Direct(MetadataValue::string("test".to_string())),
+            )])),
+        ),
+        fast_config(
+            ItemSelector::All { recursive: true },
+            MetadataOperation::Set(HashMap::from([(
+                MetadataField::Performers,
+                ValueGetter::Direct(MetadataValue::string("before-".to_string())),
+            )])),
+        ),
+        fast_config(
+            ItemSelector::All { recursive: true },
+            MetadataOperation::Modify {
+                modify: HashMap::from([(
+                    MetadataField::Performers,
+                    Rc::new(ValueModifier::Append {
+                        index: None,
+                        append: Box::new(fast_copy(MetadataField::Title)),
+                    }),
+                )]),
+            },
+        ),
+    ];
+    let results = metadata::get_metadata(&path, &configs, &config);
+    let field = results.metadata.get(&MetadataField::Performers).unwrap();
+    assert!(matches!(field, Ok(MetadataValue::List(x)) if x.as_slice() == ["before-test"]));
+    assert!(results.reports.into_iter().all(|x| x.errors.is_empty()));
 }
 
 #[test]

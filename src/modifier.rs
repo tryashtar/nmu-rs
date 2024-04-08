@@ -10,7 +10,7 @@ use crate::{
     util::{OutOfBoundsDecision, Range},
 };
 
-#[derive(Deserialize, Serialize, Clone)]
+#[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(untagged)]
 pub enum ValueModifier {
     Prepend {
@@ -54,7 +54,7 @@ pub enum ValueModifier {
     Multiple(Vec<Rc<ValueModifier>>),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum ValueError {
     ExitRequested,
     CopyNotFound {
@@ -338,7 +338,7 @@ impl ValueModifier {
     }
 }
 
-#[derive(Deserialize, Serialize, Clone)]
+#[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(untagged)]
 pub enum TakeModifier {
     Simple(Range),

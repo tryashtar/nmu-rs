@@ -163,7 +163,7 @@ impl MetadataOperation {
     }
 }
 
-#[derive(Deserialize, Serialize, Clone)]
+#[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(untagged)]
 pub enum ItemSelector {
     #[serde(skip)]
@@ -237,7 +237,7 @@ impl ItemSelector {
     }
 }
 
-#[derive(Deserialize, Serialize, Clone)]
+#[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(untagged)]
 pub enum PathSegment {
     Literal(String),
@@ -255,7 +255,7 @@ impl PathSegment {
     }
 }
 
-#[derive(Deserialize, Serialize, Clone)]
+#[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum LocalItemSelector {
     #[serde(alias = "self")]
@@ -327,7 +327,7 @@ impl LocalItemSelector {
     }
 }
 
-#[derive(Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum MusicItemType {
     Song,
@@ -361,7 +361,7 @@ impl FieldSelector {
     }
 }
 
-#[derive(Deserialize, Serialize, Clone)]
+#[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(untagged)]
 pub enum ValueGetter {
     Direct(MetadataValue),
@@ -380,7 +380,7 @@ pub enum ValueGetter {
         modify: Option<Rc<ValueModifier>>,
     },
 }
-#[derive(Deserialize, Serialize, Clone, Copy)]
+#[derive(Deserialize, Serialize, Clone, Copy, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum WarnBehavior {
     Warn,
@@ -440,7 +440,7 @@ impl ValueGetter {
     }
 }
 
-#[derive(Deserialize, Serialize, Clone, Copy)]
+#[derive(Deserialize, Serialize, Clone, Copy, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum FieldValueGetter {
     FileName,
