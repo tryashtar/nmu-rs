@@ -51,11 +51,6 @@ impl ApplyReport {
     pub fn merge(&mut self, mut other: Self) {
         self.errors.append(&mut other.errors);
     }
-    pub fn add_error(&mut self, error: ValueError) {
-        if !matches!(error, ValueError::ExitRequested) {
-            self.errors.push(error);
-        }
-    }
 }
 impl MetadataOperation {
     pub fn apply(
@@ -83,11 +78,13 @@ impl MetadataOperation {
             }
             Self::Shared { fields, set } => {
                 let value = set.get(copy_source, nice_path, config);
-                for field in config.get_fields(fields) {
-                    metadata.insert(field, value.clone());
-                }
-                if let Err(err) = value {
-                    report.add_error(err);
+                if !matches!(value, Err(ValueError::ExitRequested)) {
+                    for field in config.get_fields(fields) {
+                        metadata.insert(field, value.clone());
+                    }
+                    if let Err(err) = value {
+                        report.errors.push(err);
+                    }
                 }
             }
             Self::SharedModify { fields, modify } => {
@@ -96,13 +93,15 @@ impl MetadataOperation {
                         if let Ok(existing) = existing {
                             let result =
                                 modify.modify(copy_source, existing.clone(), nice_path, config);
-                            if let Err(err) = &result {
-                                report.add_error(err.clone());
+                            if !matches!(result, Err(ValueError::ExitRequested)) {
+                                if let Err(err) = &result {
+                                    report.errors.push(err.clone());
+                                }
+                                metadata.insert(field, result);
                             }
-                            metadata.insert(field, result);
                         }
                     } else {
-                        report.add_error(ValueError::MissingField {
+                        report.errors.push(ValueError::MissingField {
                             modifier: modify.clone(),
                             field,
                         });
@@ -112,31 +111,37 @@ impl MetadataOperation {
             Self::Set(set) => {
                 for (field, value) in set {
                     let result = value.get(copy_source, nice_path, config);
-                    if let Err(err) = &result {
-                        report.add_error(err.clone());
+                    if !matches!(result, Err(ValueError::ExitRequested)) {
+                        if let Err(err) = &result {
+                            report.errors.push(err.clone());
+                        }
+                        metadata.insert(field.clone(), result);
                     }
-                    metadata.insert(field.clone(), result);
                 }
             }
             Self::Context { source, modify } => {
                 let value = source.get(copy_source, nice_path, config);
-                for (field, modifier) in modify {
-                    match &value {
-                        Ok(value) => {
-                            let result =
-                                modifier.modify(copy_source, value.clone(), nice_path, config);
-                            if let Err(err) = &result {
-                                report.add_error(err.clone());
+                if !matches!(value, Err(ValueError::ExitRequested)) {
+                    for (field, modifier) in modify {
+                        match &value {
+                            Ok(value) => {
+                                let result =
+                                    modifier.modify(copy_source, value.clone(), nice_path, config);
+                                if !matches!(result, Err(ValueError::ExitRequested)) {
+                                    if let Err(err) = &result {
+                                        report.errors.push(err.clone());
+                                    }
+                                    metadata.insert(field.clone(), result);
+                                }
                             }
-                            metadata.insert(field.clone(), result);
-                        }
-                        Err(_) => {
-                            metadata.insert(field.clone(), value.clone());
+                            Err(_) => {
+                                metadata.insert(field.clone(), value.clone());
+                            }
                         }
                     }
-                }
-                if let Err(err) = value {
-                    report.add_error(err);
+                    if let Err(err) = value {
+                        report.errors.push(err);
+                    }
                 }
             }
             Self::Modify { modify } => {
@@ -145,13 +150,15 @@ impl MetadataOperation {
                         if let Ok(existing) = existing {
                             let result =
                                 modifier.modify(copy_source, existing.clone(), nice_path, config);
-                            if let Err(err) = &result {
-                                report.add_error(err.clone());
+                            if !matches!(result, Err(ValueError::ExitRequested)) {
+                                if let Err(err) = &result {
+                                    report.errors.push(err.clone());
+                                }
+                                metadata.insert(field.clone(), result);
                             }
-                            metadata.insert(field.clone(), result);
                         }
                     } else {
-                        report.add_error(ValueError::MissingField {
+                        report.errors.push(ValueError::MissingField {
                             modifier: modifier.clone(),
                             field: field.clone(),
                         });
