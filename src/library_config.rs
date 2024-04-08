@@ -230,7 +230,7 @@ impl LibraryReport {
                 for list in map.values_mut() {
                     list.0.remove(item_path);
                 }
-                let value = metadata::get_value(metadata, key);
+                let value = metadata.get(key).unwrap_or(&metadata::BLANK_VALUE);
                 if *include_blanks || !Self::is_blank(value) {
                     let list = map.entry(Self::val_to_str(value, sep)).or_default();
                     list.0.insert(item_path.to_owned());
@@ -242,7 +242,7 @@ impl LibraryReport {
                 map,
                 ..
             } => {
-                let value = metadata::get_value(metadata, key);
+                let value = metadata.get(key).unwrap_or(&metadata::BLANK_VALUE);
                 if *include_blanks && Self::is_blank(value) {
                     let list = map.entry(None).or_default();
                     list.0.insert(item_path.to_owned());
@@ -261,7 +261,6 @@ impl LibraryReport {
             } => {
                 let mut results = BTreeMap::new();
                 for (field, value) in metadata {
-                    let value = value.as_ref().unwrap_or(&metadata::BLANK_VALUE);
                     if values.is_match(field) && (*include_blanks || !Self::is_blank(value)) {
                         results.insert(
                             field.clone(),

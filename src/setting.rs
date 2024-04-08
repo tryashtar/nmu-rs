@@ -30,9 +30,7 @@ pub fn process_folder(
         let mut art_results = GetArtResults::Keep;
         let mut results = metadata::get_metadata(nice_path, loaded, library_config);
         if let Some(repo) = &mut library_config.art_repo {
-            if let Some(Ok(MetadataValue::List(art))) =
-                results.metadata.get_mut(&MetadataField::Art)
-            {
+            if let Some(MetadataValue::List(art)) = results.metadata.get_mut(&MetadataField::Art) {
                 art_results = repo.get_image(art);
                 repo.used_templates.add(full_path, &art_results);
                 if let GetArtResults::Processed { nice_path, .. } = &art_results {
@@ -116,9 +114,7 @@ pub fn process_song(
         let mut art_results = GetArtResults::Keep;
         let mut results = metadata::get_metadata(nice_path, loaded, library_config);
         if let Some(repo) = &mut library_config.art_repo {
-            if let Some(Ok(MetadataValue::List(art))) =
-                results.metadata.get_mut(&MetadataField::Art)
-            {
+            if let Some(MetadataValue::List(art)) = results.metadata.get_mut(&MetadataField::Art) {
                 art_results = repo.get_image(art);
                 if let GetArtResults::Processed { nice_path, .. } = &art_results {
                     art.clear();
@@ -147,7 +143,7 @@ pub fn process_song(
         if let Some(lyrics) = get_tag_lyrics(&added) {
             results.metadata.insert(
                 MetadataField::SimpleLyrics,
-                Ok(MetadataValue::string(lyrics.clone().into_simple())),
+                MetadataValue::string(lyrics.clone().into_simple()),
             );
             if let Some(lyrics_config) = &library_config.lyrics {
                 let report = lyrics_config.write(nice_path, lyrics);

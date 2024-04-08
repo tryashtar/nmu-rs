@@ -664,7 +664,7 @@ fn copy_field_simple() {
     let mut copy_source = HashMap::new();
     copy_source.insert(
         MetadataField::Performers,
-        Ok(MetadataValue::List(vec!["item".to_string()])),
+        MetadataValue::List(vec!["item".to_string()]),
     );
     let result = getter
         .get(&copy_source, &path, &config)
@@ -691,7 +691,7 @@ fn copy_field_nested() {
     let mut copy_source = HashMap::new();
     copy_source.insert(
         MetadataField::Performers,
-        Ok(MetadataValue::List(vec!["item".to_string()])),
+        MetadataValue::List(vec!["item".to_string()]),
     );
     let result = getter
         .get(&copy_source, &path, &config)
@@ -757,7 +757,7 @@ fn copy_full_simple() {
     ];
     let results = metadata::get_metadata(&path, &configs, &config);
     let field = results.metadata.get(&MetadataField::Performers).unwrap();
-    assert!(matches!(field, Ok(MetadataValue::List(x)) if x.as_slice() == ["test"]));
+    assert!(matches!(field, MetadataValue::List(x) if x.as_slice() == ["test"]));
     assert!(results.reports.into_iter().all(|x| x.errors.is_empty()));
 }
 
@@ -774,13 +774,7 @@ fn copy_full_self() {
     )];
     let results = metadata::get_metadata(&path, &configs, &config);
     let field = results.metadata.get(&MetadataField::Title);
-    assert!(matches!(
-        field,
-        Some(Err(ValueError::CopyNotFound {
-            field: MetadataField::Title,
-            ..
-        }))
-    ));
+    assert!(field.is_none());
     assert!(matches!(
         results.reports[0].errors[0],
         ValueError::CopyNotFound {
@@ -803,13 +797,7 @@ fn copy_full_missing() {
     )];
     let results = metadata::get_metadata(&path, &configs, &config);
     let field = results.metadata.get(&MetadataField::Title);
-    assert!(matches!(
-        field,
-        Some(Err(ValueError::CopyNotFound {
-            field: MetadataField::Performers,
-            ..
-        }))
-    ));
+    assert!(field.is_none());
     assert!(matches!(
         results.reports[0].errors[0],
         ValueError::CopyNotFound {
@@ -855,16 +843,16 @@ fn copy_full_chain() {
     ];
     let results = metadata::get_metadata(&path, &configs, &config);
     assert!(
-        matches!(results.metadata.get(&MetadataField::Title).unwrap(), Ok(MetadataValue::List(x)) if x.as_slice() == ["test"])
+        matches!(results.metadata.get(&MetadataField::Title).unwrap(), MetadataValue::List(x) if x.as_slice() == ["test"])
     );
     assert!(
-        matches!(results.metadata.get(&MetadataField::Performers).unwrap(), Ok(MetadataValue::List(x)) if x.as_slice() == ["test"])
+        matches!(results.metadata.get(&MetadataField::Performers).unwrap(), MetadataValue::List(x) if x.as_slice() == ["test"])
     );
     assert!(
-        matches!(results.metadata.get(&MetadataField::Composers).unwrap(), Ok(MetadataValue::List(x)) if x.as_slice() == ["test"])
+        matches!(results.metadata.get(&MetadataField::Composers).unwrap(), MetadataValue::List(x) if x.as_slice() == ["test"])
     );
     assert!(
-        matches!(results.metadata.get(&MetadataField::Genres).unwrap(), Ok(MetadataValue::List(x)) if x.as_slice() == ["test"])
+        matches!(results.metadata.get(&MetadataField::Genres).unwrap(), MetadataValue::List(x) if x.as_slice() == ["test"])
     );
     assert!(results.reports.into_iter().all(|x| x.errors.is_empty()));
 }
@@ -903,7 +891,7 @@ fn copy_full_modify() {
     ];
     let results = metadata::get_metadata(&path, &configs, &config);
     let field = results.metadata.get(&MetadataField::Performers).unwrap();
-    assert!(matches!(field, Ok(MetadataValue::List(x)) if x.as_slice() == ["before-test"]));
+    assert!(matches!(field, MetadataValue::List(x) if x.as_slice() == ["before-test"]));
     assert!(results.reports.into_iter().all(|x| x.errors.is_empty()));
 }
 

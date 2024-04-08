@@ -1,6 +1,7 @@
 use core::fmt;
 use std::{collections::HashMap, path::PathBuf};
 
+use itertools::Itertools;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use strum::EnumIter;
@@ -9,7 +10,8 @@ use crate::{
     library_config::LibraryConfig, modifier::ValueError, song_config::LoadedConfig, util::ItemPath,
 };
 
-pub type Metadata = HashMap<MetadataField, Result<MetadataValue, ValueError>>;
+pub type PendingMetadata = HashMap<MetadataField, Result<MetadataValue, ValueError>>;
+pub type Metadata = HashMap<MetadataField, MetadataValue>;
 
 pub struct GetMetadataResults {
     pub metadata: Metadata,
@@ -18,14 +20,6 @@ pub struct GetMetadataResults {
 pub struct SourcedReport {
     pub full_path: PathBuf,
     pub errors: Vec<ValueError>,
-}
-
-pub fn get_value<'a>(metadata: &'a Metadata, field: &MetadataField) -> &'a MetadataValue {
-    let value = metadata.get(field);
-    if let Some(Ok(result)) = value {
-        return result;
-    }
-    &BLANK_VALUE
 }
 
 pub fn get_metadata(
@@ -37,7 +31,7 @@ pub fn get_metadata(
     let mut config_reports;
     let mut copy_source = Metadata::new();
     loop {
-        metadata = Metadata::new();
+        metadata = PendingMetadata::new();
         config_reports = vec![];
         for config in configs {
             let select_path = nice_path
@@ -67,12 +61,19 @@ pub fn get_metadata(
         if !redo {
             break;
         }
-        copy_source = metadata;
+        copy_source = finalize(metadata);
     }
     GetMetadataResults {
-        metadata,
+        metadata: finalize(metadata),
         reports: config_reports,
     }
+}
+
+fn finalize(metadata: PendingMetadata) -> Metadata {
+    metadata
+        .into_iter()
+        .filter_map(|(k, v)| v.ok().map(|v| (k, v)))
+        .collect()
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

@@ -352,7 +352,7 @@ fn handle_tag_changes(
                     }
                 }
                 for (field, change) in &changes.metadata.fields {
-                    let new = metadata::get_value(metadata, field);
+                    let new = metadata.get(field).unwrap_or(&metadata::BLANK_VALUE);
                     match change {
                         tag_interop::SetFieldResult::Replaced(existing) => {
                             println!("\t\t{}: {} -> {}", field, existing, new);

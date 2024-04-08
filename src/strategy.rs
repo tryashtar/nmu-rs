@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     file_stuff,
     library_config::LibraryConfig,
-    metadata::{Metadata, MetadataField, MetadataValue},
+    metadata::{Metadata, MetadataField, MetadataValue, PendingMetadata},
     modifier::{ValueError, ValueModifier},
     util::{OutOfBoundsDecision, Range},
 };
@@ -60,7 +60,7 @@ impl ApplyReport {
 impl MetadataOperation {
     pub fn apply(
         &self,
-        metadata: &mut Metadata,
+        metadata: &mut PendingMetadata,
         copy_source: &Metadata,
         nice_path: &Path,
         config: &LibraryConfig,
@@ -430,7 +430,7 @@ impl ValueGetter {
                     .ok_or_else(|| ValueError::CopyNotFound {
                         field: copy.clone(),
                     })?;
-                let result = copied.clone()?;
+                let result = copied.clone();
                 match modify {
                     None => Ok(result),
                     Some(modify) => modify.modify(copy_source, result, nice_path, config),

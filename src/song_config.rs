@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     file_stuff::{self, ConfigError, YamlError},
     library_config::LibraryConfig,
-    metadata::{Metadata, MetadataField, MetadataValue},
+    metadata::{Metadata, MetadataField, MetadataValue, PendingMetadata},
     strategy::{ApplyReport, ItemSelector, MetadataOperation, MusicItemType, ValueGetter},
     util::ItemPath,
 };
@@ -79,7 +79,7 @@ impl SongConfig {
         &self,
         nice_path: &ItemPath,
         select: &Path,
-        metadata: &mut Metadata,
+        metadata: &mut PendingMetadata,
         copy_source: &Metadata,
         library_config: &LibraryConfig,
     ) -> ApplyReport {
