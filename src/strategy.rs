@@ -74,88 +74,82 @@ impl MetadataOperation {
                 }
             }
             Self::Blank { remove } => {
-                for field in config.get_all_fields() {
-                    if remove.is_match(&field) {
-                        metadata.insert(field, MetadataValue::blank());
-                    }
+                for field in config.get_fields(remove) {
+                    metadata.insert(field, Ok(MetadataValue::blank()));
                 }
             }
             Self::Keep { keep } => {
                 metadata.retain(|k, _| !keep.is_match(k));
             }
-            Self::Shared { fields, set } => match set.get(copy_source, nice_path, config) {
-                Ok(value) => {
-                    for field in config.get_all_fields() {
-                        if fields.is_match(&field) {
-                            metadata.insert(field, value.clone());
-                        }
-                    }
+            Self::Shared { fields, set } => {
+                let value = set.get(copy_source, nice_path, config);
+                for field in config.get_fields(fields) {
+                    metadata.insert(field, value.clone());
                 }
-                Err(err) => {
+                if let Err(err) = value {
                     report.add_error(err);
                 }
-            },
+            }
             Self::SharedModify { fields, modify } => {
-                for field in config.get_all_fields() {
-                    if fields.is_match(&field) {
-                        if let Some(existing) = metadata.get(&field) {
-                            match modify.modify(copy_source, existing.clone(), nice_path, config) {
-                                Ok(modified) => {
-                                    metadata.insert(field, modified);
-                                }
-                                Err(err) => {
-                                    report.add_error(err);
-                                }
-                            };
-                        } else {
-                            report.add_error(ValueError::MissingField {
-                                modifier: modify.clone(),
-                                field,
-                            });
+                for field in config.get_fields(fields) {
+                    if let Some(existing) = metadata.get(&field) {
+                        if let Ok(existing) = existing {
+                            let result =
+                                modify.modify(copy_source, existing.clone(), nice_path, config);
+                            if let Err(err) = &result {
+                                report.add_error(err.clone());
+                            }
+                            metadata.insert(field, result);
                         }
+                    } else {
+                        report.add_error(ValueError::MissingField {
+                            modifier: modify.clone(),
+                            field,
+                        });
                     }
                 }
             }
             Self::Set(set) => {
                 for (field, value) in set {
-                    match value.get(copy_source, nice_path, config) {
-                        Ok(value) => {
-                            metadata.insert(field.clone(), value);
-                        }
-                        Err(err) => {
-                            report.add_error(err);
-                        }
+                    let result = value.get(copy_source, nice_path, config);
+                    if let Err(err) = &result {
+                        report.add_error(err.clone());
                     }
+                    metadata.insert(field.clone(), result);
                 }
             }
-            Self::Context { source, modify } => match source.get(copy_source, nice_path, config) {
-                Ok(value) => {
-                    for (field, modifier) in modify {
-                        match modifier.modify(copy_source, value.clone(), nice_path, config) {
-                            Ok(modified) => {
-                                metadata.insert(field.clone(), modified);
+            Self::Context { source, modify } => {
+                let value = source.get(copy_source, nice_path, config);
+                for (field, modifier) in modify {
+                    match &value {
+                        Ok(value) => {
+                            let result =
+                                modifier.modify(copy_source, value.clone(), nice_path, config);
+                            if let Err(err) = &result {
+                                report.add_error(err.clone());
                             }
-                            Err(err) => {
-                                report.add_error(err);
-                            }
+                            metadata.insert(field.clone(), result);
+                        }
+                        Err(_) => {
+                            metadata.insert(field.clone(), value.clone());
                         }
                     }
                 }
-                Err(err) => {
+                if let Err(err) = value {
                     report.add_error(err);
                 }
-            },
+            }
             Self::Modify { modify } => {
                 for (field, modifier) in modify {
                     if let Some(existing) = metadata.get(field) {
-                        match modifier.modify(copy_source, existing.clone(), nice_path, config) {
-                            Ok(modified) => {
-                                metadata.insert(field.clone(), modified);
+                        if let Ok(existing) = existing {
+                            let result =
+                                modifier.modify(copy_source, existing.clone(), nice_path, config);
+                            if let Err(err) = &result {
+                                report.add_error(err.clone());
                             }
-                            Err(err) => {
-                                report.add_error(err);
-                            }
-                        };
+                            metadata.insert(field.clone(), result);
+                        }
                     } else {
                         report.add_error(ValueError::MissingField {
                             modifier: modifier.clone(),
@@ -436,7 +430,7 @@ impl ValueGetter {
                     .ok_or_else(|| ValueError::CopyNotFound {
                         field: copy.clone(),
                     })?;
-                let result = copied.clone();
+                let result = copied.clone()?;
                 match modify {
                     None => Ok(result),
                     Some(modify) => modify.modify(copy_source, result, nice_path, config),

@@ -54,6 +54,7 @@ pub enum ValueModifier {
     Multiple(Vec<Rc<ValueModifier>>),
 }
 
+#[derive(Clone)]
 pub enum ValueError {
     ExitRequested,
     CopyNotFound {

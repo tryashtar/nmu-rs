@@ -9,7 +9,7 @@ use crate::{
     library_config::LibraryConfig, modifier::ValueError, song_config::LoadedConfig, util::ItemPath,
 };
 
-pub type Metadata = HashMap<MetadataField, MetadataValue>;
+pub type Metadata = HashMap<MetadataField, Result<MetadataValue, ValueError>>;
 
 pub struct GetMetadataResults {
     pub metadata: Metadata,
@@ -18,6 +18,14 @@ pub struct GetMetadataResults {
 pub struct SourcedReport {
     pub full_path: PathBuf,
     pub errors: Vec<ValueError>,
+}
+
+pub fn get_value<'a>(metadata: &'a Metadata, field: &MetadataField) -> &'a MetadataValue {
+    let value = metadata.get(field);
+    if let Some(Ok(result)) = value {
+        return result;
+    }
+    &BLANK_VALUE
 }
 
 pub fn get_metadata(

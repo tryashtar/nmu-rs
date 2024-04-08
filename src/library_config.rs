@@ -15,7 +15,7 @@ use crate::{
     art::{ArtRepo, RawArtRepo},
     file_stuff::{self, YamlError},
     lyrics::{self, RichLyrics, SomeLyrics, SyncedLyrics},
-    metadata::{Metadata, MetadataField, MetadataValue, BLANK_VALUE},
+    metadata::{self, Metadata, MetadataField, MetadataValue},
     modifier::ValueModifier,
     song_config::{
         AllSetter, DiscSet, OrderingSetter, RawSongConfig, ReferencableOperation, SongConfig,
@@ -230,7 +230,7 @@ impl LibraryReport {
                 for list in map.values_mut() {
                     list.0.remove(item_path);
                 }
-                let value = metadata.get(key).unwrap_or(&BLANK_VALUE);
+                let value = metadata::get_value(metadata, key);
                 if *include_blanks || !Self::is_blank(value) {
                     let list = map.entry(Self::val_to_str(value, sep)).or_default();
                     list.0.insert(item_path.to_owned());
@@ -242,7 +242,7 @@ impl LibraryReport {
                 map,
                 ..
             } => {
-                let value = metadata.get(key).unwrap_or(&BLANK_VALUE);
+                let value = metadata::get_value(metadata, key);
                 if *include_blanks && Self::is_blank(value) {
                     let list = map.entry(None).or_default();
                     list.0.insert(item_path.to_owned());
@@ -261,6 +261,7 @@ impl LibraryReport {
             } => {
                 let mut results = BTreeMap::new();
                 for (field, value) in metadata {
+                    let value = value.as_ref().unwrap_or(&metadata::BLANK_VALUE);
                     if values.is_match(field) && (*include_blanks || !Self::is_blank(value)) {
                         results.insert(
                             field.clone(),
@@ -704,6 +705,12 @@ impl LibraryConfig {
         let builtin = MetadataField::iter().filter(|x| !matches!(x, MetadataField::Custom(_)));
         let custom = self.custom_fields.clone().into_iter();
         builtin.chain(custom)
+    }
+    pub fn get_fields<'a>(
+        &'a self,
+        selector: &'a FieldSelector,
+    ) -> impl Iterator<Item = MetadataField> + 'a {
+        self.get_all_fields().filter(|x| selector.is_match(x))
     }
     pub fn update_reports(&mut self, nice_path: &Path, metadata: &Metadata) {
         for report in &mut self.reports {

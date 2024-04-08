@@ -46,8 +46,10 @@ pub fn set_metadata(tag: &mut impl SetMetadata, metadata: Metadata) -> SetMetada
         fields: BTreeMap::new(),
     };
     for (field, value) in metadata {
-        if let Some(result) = tag.set_field(&field, value) {
-            report.fields.insert(field, result);
+        if let Ok(value) = value {
+            if let Some(result) = tag.set_field(&field, value) {
+                report.fields.insert(field, result);
+            }
         }
     }
     report

@@ -664,7 +664,7 @@ fn copy_field_simple() {
     let mut copy_source = HashMap::new();
     copy_source.insert(
         MetadataField::Performers,
-        MetadataValue::List(vec!["item".to_string()]),
+        Ok(MetadataValue::List(vec!["item".to_string()])),
     );
     let result = getter
         .get(&copy_source, &path, &config)
@@ -691,7 +691,7 @@ fn copy_field_nested() {
     let mut copy_source = HashMap::new();
     copy_source.insert(
         MetadataField::Performers,
-        MetadataValue::List(vec!["item".to_string()]),
+        Ok(MetadataValue::List(vec!["item".to_string()])),
     );
     let result = getter
         .get(&copy_source, &path, &config)
@@ -757,7 +757,7 @@ fn copy_full_simple() {
     ];
     let results = metadata::get_metadata(&path, &configs, &config);
     let field = results.metadata.get(&MetadataField::Performers).unwrap();
-    assert!(matches!(field, MetadataValue::List(x) if x.as_slice() == ["test"]));
+    assert!(matches!(field, Ok(MetadataValue::List(x)) if x.as_slice() == ["test"]));
     assert!(results.reports.into_iter().all(|x| x.errors.is_empty()));
 }
 
