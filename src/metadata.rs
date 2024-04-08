@@ -50,8 +50,8 @@ pub fn get_metadata(
             });
         }
         let mut redo = false;
-        for value in metadata.values() {
-            if let Err(ValueError::CopyNotFound { field }) = value {
+        for error in config_reports.iter().flat_map(|x| &x.errors) {
+            if let ValueError::CopyNotFound { field } = error {
                 if metadata.get(field).is_some_and(|x| x.is_ok()) {
                     redo = true;
                     break;
