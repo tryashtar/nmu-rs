@@ -341,28 +341,34 @@ fn handle_tag_changes(
             println!("\tRemoved {} tag", tag_type);
         }
         Ok(TagChanges::Set(changes)) => {
-            if changes.created {
-                println!("\tAdded {} tag", tag_type);
-            } else if changes.any() {
-                println!("\tUpdated {} tag", tag_type);
-                if let Some((lyrics, report)) = &changes.lyrics {
-                    handle_lyrics_report(report);
-                    if !report.results.is_empty() {
-                        println!("\t\tNew lyrics: {:?}", lyrics::display(lyrics));
-                    }
+            if changes.any() {
+                if changes.created {
+                    println!("\tAdded {} tag", tag_type);
+                } else {
+                    println!("\tUpdated {} tag", tag_type);
                 }
-                for (field, change) in &changes.metadata.fields {
-                    let new = metadata.get(field).unwrap_or(&metadata::BLANK_VALUE);
-                    match change {
-                        tag_interop::SetFieldResult::Replaced(existing) => {
+            }
+            if let Some((lyrics, report)) = &changes.lyrics {
+                handle_lyrics_report(report);
+                if !report.results.is_empty() {
+                    println!("\t\tNew lyrics: {:?}", lyrics::display(lyrics));
+                }
+            }
+            for (field, change) in &changes.metadata.fields {
+                let new = metadata.get(field).unwrap_or(&metadata::BLANK_VALUE);
+                match change {
+                    tag_interop::SetFieldResult::Replaced(existing) => {
+                        if changes.created {
+                            println!("\t\t{}: {}", field, new);
+                        } else {
                             println!("\t\t{}: {} -> {}", field, existing, new);
                         }
-                        tag_interop::SetFieldResult::Incompatible { expected } => {
-                            eprintln!(
-                                "{}",
-                                cformat!("⚠️ <yellow>Invalid field value, expected {}</>", expected)
-                            );
-                        }
+                    }
+                    tag_interop::SetFieldResult::Incompatible { expected } => {
+                        eprintln!(
+                            "{}",
+                            cformat!("⚠️ <yellow>Invalid field value, expected {}</>", expected)
+                        );
                     }
                 }
             }

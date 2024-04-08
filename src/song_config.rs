@@ -127,15 +127,16 @@ impl SongConfig {
             }
         }
         for (path, sub) in &self.subconfigs {
-            let select_path = nice_path.strip_prefix(path).unwrap_or(path);
-            let more = sub.apply(
-                nice_path,
-                select_path,
-                metadata,
-                copy_source,
-                library_config,
-            );
-            report.merge(more);
+            if let Ok(select_path) = nice_path.strip_prefix(path) {
+                let more = sub.apply(
+                    nice_path,
+                    select_path,
+                    metadata,
+                    copy_source,
+                    library_config,
+                );
+                report.merge(more);
+            }
         }
         report
     }
