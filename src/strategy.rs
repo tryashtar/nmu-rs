@@ -44,14 +44,17 @@ pub enum MetadataOperation {
     Set(HashMap<MetadataField, ValueGetter>),
     Many(Vec<Rc<MetadataOperation>>),
 }
+
 pub struct ApplyReport {
     pub errors: Vec<ValueError>,
 }
+
 impl ApplyReport {
     pub fn merge(&mut self, mut other: Self) {
         self.errors.append(&mut other.errors);
     }
 }
+
 impl MetadataOperation {
     pub fn apply(
         &self,
@@ -189,6 +192,7 @@ pub enum ItemSelector {
         select: Box<ItemSelector>,
     },
 }
+
 impl ItemSelector {
     pub fn matches(&self, check_path: &Path) -> bool {
         match self {
@@ -253,6 +257,7 @@ pub enum PathSegment {
         regex: Regex,
     },
 }
+
 impl PathSegment {
     pub fn matches(&self, component: &OsStr) -> bool {
         component.to_str().map_or(false, |str| match self {
@@ -282,6 +287,7 @@ pub enum LocalItemSelector {
         must_be: Option<MusicItemType>,
     },
 }
+
 impl LocalItemSelector {
     fn get(&self, start: &Path, config: &LibraryConfig) -> Vec<PathBuf> {
         match self {
@@ -340,6 +346,7 @@ pub enum MusicItemType {
     Song,
     Folder,
 }
+
 impl MusicItemType {
     pub fn matches(self, against: Option<Self>) -> bool {
         against.map_or(true, |required| self == required)
@@ -357,6 +364,7 @@ pub enum FieldSelector {
     #[serde(untagged)]
     AllExcept { exclude: HashSet<MetadataField> },
 }
+
 impl FieldSelector {
     pub fn is_match(&self, field: &MetadataField) -> bool {
         match self {
@@ -387,15 +395,18 @@ pub enum ValueGetter {
         modify: Option<Rc<ValueModifier>>,
     },
 }
+
 #[derive(Deserialize, Serialize, Clone, Copy, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum WarnBehavior {
     Warn,
     Exit,
 }
+
 const fn default_missing() -> WarnBehavior {
     WarnBehavior::Warn
 }
+
 impl ValueGetter {
     pub fn get(
         &self,
@@ -454,6 +465,7 @@ pub enum FieldValueGetter {
     CleanName,
     Path,
 }
+
 impl FieldValueGetter {
     fn file_name(path: &Path) -> Cow<str> {
         path.file_name()
@@ -474,6 +486,7 @@ impl FieldValueGetter {
         }
     }
 }
+
 const fn default_value() -> FieldValueGetter {
     FieldValueGetter::CleanName
 }

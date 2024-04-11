@@ -39,14 +39,23 @@ pub trait GetLyrics {
 }
 
 pub trait SetMetadata {
-    fn set_field(&mut self, field: &MetadataField, value: MetadataValue) -> Option<SetFieldResult>;
+    fn set_field(
+        &mut self,
+        field: &MetadataField,
+        value: MetadataValue,
+        separator: &str,
+    ) -> Option<SetFieldResult>;
 }
-pub fn set_metadata(tag: &mut impl SetMetadata, metadata: Metadata) -> SetMetadataReport {
+pub fn set_metadata(
+    tag: &mut impl SetMetadata,
+    metadata: Metadata,
+    separator: &str,
+) -> SetMetadataReport {
     let mut report = SetMetadataReport {
         fields: BTreeMap::new(),
     };
     for (field, value) in metadata {
-        if let Some(result) = tag.set_field(&field, value) {
+        if let Some(result) = tag.set_field(&field, value, separator) {
             report.fields.insert(field, result);
         }
     }
@@ -100,8 +109,12 @@ fn handle_list(
     tag: &mut id3::Tag,
     key: &'static str,
     incoming: MetadataValue,
+    separator: &str,
 ) -> Option<SetFieldResult> {
-    let existing = from_vec(tag.text_values_for_frame_id(key));
+    let existing = from_vec(
+        tag.text_for_frame_id(key)
+            .map(|x| x.split(separator).collect()),
+    );
     if existing == incoming {
         return None;
     }
@@ -113,7 +126,7 @@ fn handle_list(
     match list {
         None => Some(SetFieldResult::Incompatible { expected: "list" }),
         Some(list) => {
-            tag.set_text_values(key, list);
+            tag.set_text(key, list.join(separator));
             Some(SetFieldResult::Replaced(existing))
         }
     }
@@ -125,14 +138,19 @@ pub enum SetFieldResult {
 }
 
 impl SetMetadata for id3::Tag {
-    fn set_field(&mut self, field: &MetadataField, value: MetadataValue) -> Option<SetFieldResult> {
+    fn set_field(
+        &mut self,
+        field: &MetadataField,
+        value: MetadataValue,
+        separator: &str,
+    ) -> Option<SetFieldResult> {
         match field {
             MetadataField::Title => handle_str(self, "TIT2", value),
             MetadataField::Subtitle => handle_str(self, "TIT3", value),
             MetadataField::Album => handle_str(self, "TALB", value),
-            MetadataField::Performers => handle_list(self, "TPE1", value),
+            MetadataField::Performers => handle_list(self, "TPE1", value, separator),
             MetadataField::AlbumArtist => handle_str(self, "TPE2", value),
-            MetadataField::Composers => handle_list(self, "TCOM", value),
+            MetadataField::Composers => handle_list(self, "TCOM", value, separator),
             MetadataField::Arranger => handle_str(self, "TPE4", value),
             MetadataField::Comment => {
                 let existing =
@@ -249,18 +267,28 @@ impl SetMetadata for id3::Tag {
                 }
             }
             MetadataField::Language => handle_str(self, "TLAN", value),
-            MetadataField::Genres => handle_list(self, "TCON", value),
+            MetadataField::Genres => handle_list(self, "TCON", value, separator),
             MetadataField::Art | MetadataField::SimpleLyrics | MetadataField::Custom(_) => None,
         }
     }
 }
 impl SetMetadata for metaflac::Tag {
-    fn set_field(&mut self, field: &MetadataField, value: MetadataValue) -> Option<SetFieldResult> {
+    fn set_field(
+        &mut self,
+        field: &MetadataField,
+        value: MetadataValue,
+        separator: &str,
+    ) -> Option<SetFieldResult> {
         None
     }
 }
 impl SetMetadata for ape::Tag {
-    fn set_field(&mut self, field: &MetadataField, value: MetadataValue) -> Option<SetFieldResult> {
+    fn set_field(
+        &mut self,
+        field: &MetadataField,
+        value: MetadataValue,
+        separator: &str,
+    ) -> Option<SetFieldResult> {
         None
     }
 }

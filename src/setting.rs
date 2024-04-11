@@ -2,11 +2,10 @@ use std::{path::Path, rc::Rc};
 
 use image::DynamicImage;
 
+use crate::tag_interop::{GetLyrics, SetMetadata};
 use crate::{
     art::{GetArtResults, GetProcessedResult},
-    library_config::{
-        LibraryConfig, LyricsConfig, SetLyricsReport, SetLyricsResult, TagOptions, TagSettings,
-    },
+    library_config::{LibraryConfig, SetLyricsReport, SetLyricsResult, TagOptions, TagSettings},
     lyrics::SomeLyrics,
     metadata::{self, GetMetadataResults, Metadata, MetadataField, MetadataValue},
     song_config::{self, ConfigCache, GetConfigsResults},
@@ -235,7 +234,7 @@ fn set_id3(
     nice_path: &Path,
     metadata: Metadata,
     art: &SetValue<Rc<DynamicImage>>,
-    lyrics_config: Option<&LyricsConfig>,
+    config: &LibraryConfig,
 ) -> Result<TagChanges, AddToSongError> {
     match mode {
         TagSettings::Ignore => Ok(TagChanges::None),
@@ -248,7 +247,6 @@ fn set_id3(
         }
         TagSettings::Set {} => {
             let mut created = false;
-            let mut lyrics_report = None;
             let mut tag = id3::Tag::read_from_path(file_path);
             if let Err(id3::Error {
                 kind: id3::ErrorKind::NoTag,
@@ -259,23 +257,8 @@ fn set_id3(
                 created = true;
             }
             let mut tag = tag?;
-            if let Some(lyrics_config) = lyrics_config {
-                let best = lyrics_config.get_best(nice_path, &tag);
-                match best {
-                    Ok(lyrics) => {
-                        let report = lyrics_config.set(&lyrics, &mut tag);
-                        lyrics_report = Some((lyrics, report));
-                    }
-                    Err(GetLyricsError::NotEmbedded) => {}
-                    Err(err) => return Err(AddToSongError::Lyrics(err)),
-                }
-            }
-            let metadata_report = tag_interop::set_metadata(&mut tag, metadata);
-            Ok(TagChanges::Set(TagSpecificChanges {
-                created,
-                lyrics: lyrics_report,
-                metadata: metadata_report,
-            }))
+            let result = set_generic(&mut tag, nice_path, metadata, config, created)?;
+            Ok(TagChanges::Set(result))
         }
     }
 }
@@ -286,7 +269,7 @@ fn set_flac(
     nice_path: &Path,
     metadata: Metadata,
     art: &SetValue<Rc<DynamicImage>>,
-    lyrics_config: Option<&LyricsConfig>,
+    config: &LibraryConfig,
 ) -> Result<TagChanges, AddToSongError> {
     match mode {
         TagSettings::Ignore => Ok(TagChanges::None),
@@ -308,7 +291,6 @@ fn set_flac(
         }
         TagSettings::Set {} => {
             let mut created = false;
-            let mut lyrics_report = None;
             let mut tag = metaflac::Tag::read_from_path(file_path);
             if let Err(metaflac::Error {
                 kind: metaflac::ErrorKind::InvalidInput,
@@ -319,23 +301,8 @@ fn set_flac(
                 created = true;
             }
             let mut tag = tag?;
-            if let Some(lyrics_config) = lyrics_config {
-                let best = lyrics_config.get_best(nice_path, &tag);
-                match best {
-                    Ok(lyrics) => {
-                        let report = lyrics_config.set(&lyrics, &mut tag);
-                        lyrics_report = Some((lyrics, report));
-                    }
-                    Err(GetLyricsError::NotEmbedded) => {}
-                    Err(err) => return Err(AddToSongError::Lyrics(err)),
-                }
-            }
-            let metadata_report = tag_interop::set_metadata(&mut tag, metadata);
-            Ok(TagChanges::Set(TagSpecificChanges {
-                created,
-                lyrics: lyrics_report,
-                metadata: metadata_report,
-            }))
+            let result = set_generic(&mut tag, nice_path, metadata, config, created)?;
+            Ok(TagChanges::Set(result))
         }
     }
 }
@@ -346,7 +313,7 @@ fn set_ape(
     nice_path: &Path,
     metadata: Metadata,
     art: &SetValue<Rc<DynamicImage>>,
-    lyrics_config: Option<&LyricsConfig>,
+    config: &LibraryConfig,
 ) -> Result<TagChanges, AddToSongError> {
     match mode {
         TagSettings::Ignore => Ok(TagChanges::None),
@@ -361,32 +328,46 @@ fn set_ape(
         }
         TagSettings::Set {} => {
             let mut created = false;
-            let mut lyrics_report = None;
             let mut tag = ape::read_from_path(file_path);
             if let Err(ape::Error::TagNotFound) = tag {
                 tag = Ok(ape::Tag::new());
                 created = true;
             }
             let mut tag = tag?;
-            if let Some(lyrics_config) = lyrics_config {
-                let best = lyrics_config.get_best(nice_path, &tag);
-                match best {
-                    Ok(lyrics) => {
-                        let report = lyrics_config.set(&lyrics, &mut tag);
-                        lyrics_report = Some((lyrics, report));
-                    }
-                    Err(GetLyricsError::NotEmbedded) => {}
-                    Err(err) => return Err(AddToSongError::Lyrics(err)),
-                }
-            }
-            let metadata_report = tag_interop::set_metadata(&mut tag, metadata);
-            Ok(TagChanges::Set(TagSpecificChanges {
-                created,
-                lyrics: lyrics_report,
-                metadata: metadata_report,
-            }))
+            let result = set_generic(&mut tag, nice_path, metadata, config, created)?;
+            Ok(TagChanges::Set(result))
         }
     }
+}
+
+fn set_generic<T>(
+    tag: &mut T,
+    nice_path: &Path,
+    metadata: Metadata,
+    config: &LibraryConfig,
+    created: bool,
+) -> Result<TagSpecificChanges, AddToSongError>
+where
+    T: SetMetadata + GetLyrics,
+{
+    let mut lyrics_report = None;
+    if let Some(lyrics_config) = &config.lyrics {
+        let best = lyrics_config.get_best(nice_path, tag);
+        match best {
+            Ok(lyrics) => {
+                let report = lyrics_config.set(&lyrics, tag);
+                lyrics_report = Some((lyrics, report));
+            }
+            Err(GetLyricsError::NotEmbedded) => {}
+            Err(err) => return Err(AddToSongError::Lyrics(err)),
+        }
+    }
+    let metadata_report = tag_interop::set_metadata(tag, metadata, &config.artist_separator);
+    Ok(TagSpecificChanges {
+        created,
+        lyrics: lyrics_report,
+        metadata: metadata_report,
+    })
 }
 
 fn add_to_song(
@@ -403,7 +384,7 @@ fn add_to_song(
         nice_path,
         metadata.clone(),
         &art,
-        config.lyrics.as_ref(),
+        config,
     );
     let flac = set_flac(
         &options.flac,
@@ -411,7 +392,7 @@ fn add_to_song(
         nice_path,
         metadata.clone(),
         &art,
-        config.lyrics.as_ref(),
+        config,
     );
     let ape = set_ape(
         &options.ape,
@@ -419,7 +400,7 @@ fn add_to_song(
         nice_path,
         metadata.clone(),
         &art,
-        config.lyrics.as_ref(),
+        config,
     );
     AddToSongReport { id3, flac, ape }
 }

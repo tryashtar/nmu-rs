@@ -1,7 +1,6 @@
 use core::fmt;
 use std::{collections::HashMap, path::PathBuf};
 
-use itertools::Itertools;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use strum::EnumIter;

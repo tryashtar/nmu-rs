@@ -1,5 +1,3 @@
-use color_print::cformat;
-use regex::Regex;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     env,
@@ -8,6 +6,9 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
 };
+
+use color_print::cformat;
+use regex::Regex;
 use walkdir::DirEntry;
 
 use crate::{
