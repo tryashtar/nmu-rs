@@ -39,23 +39,14 @@ pub trait GetLyrics {
 }
 
 pub trait SetMetadata {
-    fn set_field(
-        &mut self,
-        field: &MetadataField,
-        value: MetadataValue,
-        separator: &str,
-    ) -> Option<SetFieldResult>;
+    fn set_field(&mut self, field: &MetadataField, value: MetadataValue) -> Option<SetFieldResult>;
 }
-pub fn set_metadata(
-    tag: &mut impl SetMetadata,
-    metadata: Metadata,
-    separator: &str,
-) -> SetMetadataReport {
+pub fn set_metadata(tag: &mut impl SetMetadata, metadata: Metadata) -> SetMetadataReport {
     let mut report = SetMetadataReport {
         fields: BTreeMap::new(),
     };
     for (field, value) in metadata {
-        if let Some(result) = tag.set_field(&field, value, separator) {
+        if let Some(result) = tag.set_field(&field, value) {
             report.fields.insert(field, result);
         }
     }
@@ -138,19 +129,14 @@ pub enum SetFieldResult {
 }
 
 impl SetMetadata for id3::Tag {
-    fn set_field(
-        &mut self,
-        field: &MetadataField,
-        value: MetadataValue,
-        separator: &str,
-    ) -> Option<SetFieldResult> {
+    fn set_field(&mut self, field: &MetadataField, value: MetadataValue) -> Option<SetFieldResult> {
         match field {
             MetadataField::Title => handle_str(self, "TIT2", value),
             MetadataField::Subtitle => handle_str(self, "TIT3", value),
             MetadataField::Album => handle_str(self, "TALB", value),
-            MetadataField::Performers => handle_list(self, "TPE1", value, separator),
+            MetadataField::Performers => handle_list(self, "TPE1", value, "\0"),
             MetadataField::AlbumArtist => handle_str(self, "TPE2", value),
-            MetadataField::Composers => handle_list(self, "TCOM", value, separator),
+            MetadataField::Composers => handle_list(self, "TCOM", value, "\0"),
             MetadataField::Arranger => handle_str(self, "TPE4", value),
             MetadataField::Comment => {
                 let existing =
@@ -267,28 +253,18 @@ impl SetMetadata for id3::Tag {
                 }
             }
             MetadataField::Language => handle_str(self, "TLAN", value),
-            MetadataField::Genres => handle_list(self, "TCON", value, separator),
+            MetadataField::Genres => handle_list(self, "TCON", value, "\0"),
             MetadataField::Art | MetadataField::SimpleLyrics | MetadataField::Custom(_) => None,
         }
     }
 }
 impl SetMetadata for metaflac::Tag {
-    fn set_field(
-        &mut self,
-        field: &MetadataField,
-        value: MetadataValue,
-        separator: &str,
-    ) -> Option<SetFieldResult> {
+    fn set_field(&mut self, field: &MetadataField, value: MetadataValue) -> Option<SetFieldResult> {
         None
     }
 }
 impl SetMetadata for ape::Tag {
-    fn set_field(
-        &mut self,
-        field: &MetadataField,
-        value: MetadataValue,
-        separator: &str,
-    ) -> Option<SetFieldResult> {
+    fn set_field(&mut self, field: &MetadataField, value: MetadataValue) -> Option<SetFieldResult> {
         None
     }
 }
@@ -308,22 +284,9 @@ impl GetLyrics for id3::Tag {
     }
 
     fn remove_simple_lyrics(&mut self) -> Result<String, GetLyricsError> {
-        let frames = self.frames_vec_mut();
-        let mut lyrics = vec![];
-        let mut i = 0;
-        while i < frames.len() {
-            if let Some(entry) = frames[i].content().lyrics() {
-                lyrics.push(entry.text.clone());
-                frames.remove(i);
-            } else {
-                i += 1;
-            }
-        }
-        if lyrics.is_empty() {
-            Err(GetLyricsError::NotEmbedded)
-        } else {
-            Ok(lyrics.join("\n"))
-        }
+        let result = self.get_simple_lyrics();
+        self.remove_all_lyrics();
+        result
     }
 
     fn set_simple_lyrics(&mut self, lyrics: String) -> Result<String, GetLyricsError> {
@@ -349,22 +312,9 @@ impl GetLyrics for id3::Tag {
     }
 
     fn remove_synced_lyrics(&mut self) -> Result<SyncedLyrics, GetLyricsError> {
-        let frames = self.frames_vec_mut();
-        let mut lyrics = vec![];
-        let mut i = 0;
-        while i < frames.len() {
-            if let Some(entry) = frames[i].content().synchronised_lyrics() {
-                lyrics.append(&mut convert_id3_synced_lyrics(entry));
-                frames.remove(i);
-            } else {
-                i += 1;
-            }
-        }
-        if lyrics.is_empty() {
-            Err(GetLyricsError::NotEmbedded)
-        } else {
-            Ok(SyncedLyrics { lines: lyrics })
-        }
+        let result = self.get_synced_lyrics();
+        self.remove_all_synchronised_lyrics();
+        result
     }
 
     fn set_synced_lyrics(&mut self, lyrics: SyncedLyrics) -> Result<SyncedLyrics, GetLyricsError> {
@@ -397,25 +347,15 @@ impl GetLyrics for id3::Tag {
     }
 
     fn remove_rich_lyrics(&mut self) -> Result<RichLyrics, GetLyricsError> {
+        let result = self.get_rich_lyrics();
         let frames = self.frames_vec_mut();
-        let mut lyrics = Err(GetLyricsError::NotEmbedded);
-        let mut i = 0;
-        while i < frames.len() {
-            if let Some(entry) = frames[i]
+        frames.retain(|frame| {
+            !frame
                 .content()
                 .extended_text()
-                .filter(|x| x.description == "RICH LYRICS")
-            {
-                if lyrics.is_err() {
-                    lyrics = serde_json::from_str::<RichLyrics>(&entry.value)
-                        .map_err(GetLyricsError::Json);
-                }
-                frames.remove(i);
-            } else {
-                i += 1;
-            }
-        }
-        lyrics
+                .is_some_and(|x| x.description == "RICH LYRICS")
+        });
+        result
     }
 
     fn set_rich_lyrics(&mut self, lyrics: RichLyrics) -> Result<RichLyrics, GetLyricsError> {
@@ -428,188 +368,76 @@ impl GetLyrics for id3::Tag {
     }
 }
 
+enum SyncedOrSimple {
+    Simple(String, ParseError),
+    Synced(SyncedLyrics),
+}
+fn try_lyrics(lines: Vec<String>) -> SyncedOrSimple {
+    let lines2 = lines.clone();
+    let lyrics = SyncedLyrics::parse(lines);
+    match lyrics {
+        Ok(result) => SyncedOrSimple::Synced(result),
+        Err(err) => SyncedOrSimple::Simple(lines2.into_iter().join("\n"), err),
+    }
+}
+
 impl GetLyrics for metaflac::Tag {
     fn get_simple_lyrics(&self) -> Result<String, GetLyricsError> {
-        let lyrics = self
-            .blocks()
-            .filter_map(|block| match block {
-                metaflac::Block::VorbisComment(comment) => Some(comment),
-                _ => None,
-            })
-            .filter_map(|x| x.get("UNSYNCED LYRICS"))
-            .flatten()
-            .collect::<Vec<_>>();
-        if lyrics.is_empty() {
-            Err(GetLyricsError::NotEmbedded)
-        } else {
-            Ok(lyrics.into_iter().join("\n"))
+        let lyrics = self.get_vorbis("UNSYNCED LYRICS");
+        match lyrics {
+            None => Err(GetLyricsError::NotEmbedded),
+            Some(mut iter) => Ok(iter.join("\n")),
         }
     }
 
     fn remove_simple_lyrics(&mut self) -> Result<String, GetLyricsError> {
-        let lyrics = self
-            .blocks()
-            .filter_map(|block| match block {
-                metaflac::Block::VorbisComment(comment) => Some(comment),
-                _ => None,
-            })
-            .filter_map(|x| x.get("UNSYNCED LYRICS"))
-            .collect::<Vec<_>>();
-        match lyrics.len() {
-            0 => Err(GetLyricsError::NotEmbedded),
-            1 => {
-                let result = lyrics[0].join("\n");
-                self.vorbis_comments_mut().remove("UNSYNCED LYRICS");
-                Ok(result)
-            }
-            2.. => {
-                // psycho path
-                let result = lyrics.into_iter().flatten().join("\n");
-                let blocks = self
-                    .blocks()
-                    .filter_map(|block| match block {
-                        metaflac::Block::VorbisComment(comment) => Some(comment.clone()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>();
-                self.remove_blocks(metaflac::BlockType::VorbisComment);
-                for mut block in blocks {
-                    block.remove("UNSYNCED LYRICS");
-                    self.push_block(metaflac::Block::VorbisComment(block));
-                }
-                Ok(result)
-            }
-        }
+        let result = self.get_simple_lyrics();
+        self.remove_vorbis("UNSYNCED LYRICS");
+        result
     }
 
     fn set_simple_lyrics(&mut self, lyrics: String) -> Result<String, GetLyricsError> {
         let result = self.remove_simple_lyrics();
-        self.set_vorbis("UNSYNCED LYRICS", lyrics.split('\n').collect());
+        self.set_vorbis("UNSYNCED LYRICS", vec![lyrics]);
         result
     }
 
     fn get_synced_lyrics(&self) -> Result<SyncedLyrics, GetLyricsError> {
-        let lyrics = self
-            .blocks()
-            .filter_map(|block| match block {
-                metaflac::Block::VorbisComment(comment) => Some(comment),
-                _ => None,
-            })
-            .filter_map(|x| x.get("LYRICS"))
-            .flatten()
-            .cloned()
-            .collect::<Vec<_>>();
-        if lyrics.is_empty() {
-            Err(GetLyricsError::NotEmbedded)
-        } else {
-            Ok(SyncedLyrics::parse(lyrics)?)
+        let lyrics = self.get_vorbis("LYRICS");
+        match lyrics {
+            None => Err(GetLyricsError::NotEmbedded),
+            Some(iter) => Ok(SyncedLyrics::parse(
+                iter.flat_map(|x| x.split('\n'))
+                    .map(|x| x.to_owned())
+                    .collect(),
+            )?),
         }
     }
 
     fn remove_synced_lyrics(&mut self) -> Result<SyncedLyrics, GetLyricsError> {
-        let lyrics = self
-            .blocks()
-            .filter_map(|block| match block {
-                metaflac::Block::VorbisComment(comment) => Some(comment),
-                _ => None,
-            })
-            .filter_map(|x| x.get("LYRICS"))
-            .collect::<Vec<_>>();
-        match lyrics.len() {
-            0 => Err(GetLyricsError::NotEmbedded),
-            1 => {
-                let result = SyncedLyrics::parse(lyrics[0].clone());
-                self.vorbis_comments_mut().remove("LYRICS");
-                Ok(result?)
-            }
-            2.. => {
-                // psycho path
-                let result = SyncedLyrics::parse(lyrics.into_iter().flatten().cloned().collect());
-                let blocks = self
-                    .blocks()
-                    .filter_map(|block| match block {
-                        metaflac::Block::VorbisComment(comment) => Some(comment.clone()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>();
-                self.remove_blocks(metaflac::BlockType::VorbisComment);
-                for mut block in blocks {
-                    block.remove("LYRICS");
-                    self.push_block(metaflac::Block::VorbisComment(block));
-                }
-                Ok(result?)
-            }
-        }
+        let result = self.get_synced_lyrics();
+        self.remove_vorbis("LYRICS");
+        result
     }
 
     fn set_synced_lyrics(&mut self, lyrics: SyncedLyrics) -> Result<SyncedLyrics, GetLyricsError> {
         let result = self.remove_synced_lyrics();
-        self.set_vorbis("LYRICS", lyrics.save());
+        self.set_vorbis("LYRICS", vec![lyrics.save().into_iter().join("\n")]);
         result
     }
 
     fn get_rich_lyrics(&self) -> Result<RichLyrics, GetLyricsError> {
-        let lyrics = self
-            .blocks()
-            .filter_map(|block| match block {
-                metaflac::Block::VorbisComment(comment) => Some(comment),
-                _ => None,
-            })
-            .filter_map(|x| x.get("RICH LYRICS"))
-            .flatten()
-            .next();
+        let lyrics = self.get_vorbis("RICH LYRICS").and_then(|mut x| x.next());
         match lyrics {
             None => Err(GetLyricsError::NotEmbedded),
-            Some(str) => Ok(serde_json::from_str(str)?),
+            Some(first) => Ok(serde_json::from_str(first)?),
         }
     }
 
     fn remove_rich_lyrics(&mut self) -> Result<RichLyrics, GetLyricsError> {
-        let lyrics = self
-            .blocks()
-            .filter_map(|block| match block {
-                metaflac::Block::VorbisComment(comment) => Some(comment),
-                _ => None,
-            })
-            .filter_map(|x| x.get("RICH LYRICS"))
-            .collect::<Vec<_>>();
-        match lyrics.len() {
-            0 => Err(GetLyricsError::NotEmbedded),
-            1 => {
-                if lyrics[0].is_empty() {
-                    self.vorbis_comments_mut().remove("RICH LYRICS");
-                    Err(GetLyricsError::NotEmbedded)
-                } else {
-                    let result = serde_json::from_str(&lyrics[0][0]);
-                    self.vorbis_comments_mut().remove("RICH LYRICS");
-                    Ok(result?)
-                }
-            }
-            2.. => {
-                // psycho path
-                let result = lyrics
-                    .into_iter()
-                    .flatten()
-                    .next()
-                    .map(|x| serde_json::from_str::<RichLyrics>(x));
-                let blocks = self
-                    .blocks()
-                    .filter_map(|block| match block {
-                        metaflac::Block::VorbisComment(comment) => Some(comment.clone()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>();
-                self.remove_blocks(metaflac::BlockType::VorbisComment);
-                for mut block in blocks {
-                    block.remove("RICH LYRICS");
-                    self.push_block(metaflac::Block::VorbisComment(block));
-                }
-                match result {
-                    None => Err(GetLyricsError::NotEmbedded),
-                    Some(result) => Ok(result?),
-                }
-            }
-        }
+        let result = self.get_rich_lyrics();
+        self.remove_vorbis("RICH LYRICS");
+        result
     }
 
     fn set_rich_lyrics(&mut self, lyrics: RichLyrics) -> Result<RichLyrics, GetLyricsError> {
@@ -647,7 +475,10 @@ impl GetLyrics for ape::Tag {
 
     fn set_simple_lyrics(&mut self, lyrics: String) -> Result<String, GetLyricsError> {
         let result = self.remove_simple_lyrics();
-        self.add_item(ape::Item::from_text("LYRICS", lyrics).expect("lyrics is a valid key"));
+        self.add_item(ape::Item {
+            key: String::from("LYRICS"),
+            value: ape::ItemValue::Text(lyrics),
+        });
         result
     }
 
@@ -663,7 +494,13 @@ impl GetLyrics for ape::Tag {
         if lyrics.is_empty() {
             Err(GetLyricsError::NotEmbedded)
         } else {
-            Ok(SyncedLyrics::parse(lyrics)?)
+            Ok(SyncedLyrics::parse(
+                lyrics
+                    .iter()
+                    .flat_map(|x| x.split('\n'))
+                    .map(|x| x.to_owned())
+                    .collect(),
+            )?)
         }
     }
 
@@ -675,10 +512,10 @@ impl GetLyrics for ape::Tag {
 
     fn set_synced_lyrics(&mut self, lyrics: SyncedLyrics) -> Result<SyncedLyrics, GetLyricsError> {
         let result = self.remove_synced_lyrics();
-        self.add_item(
-            ape::Item::from_text("SYNCED LYRICS", lyrics.save().join("\n"))
-                .expect("lyrics is a valid key"),
-        );
+        self.add_item(ape::Item {
+            key: String::from("SYNCED LYRICS"),
+            value: ape::ItemValue::Text(lyrics.save().join("\n")),
+        });
         result
     }
 
@@ -705,13 +542,10 @@ impl GetLyrics for ape::Tag {
 
     fn set_rich_lyrics(&mut self, lyrics: RichLyrics) -> Result<RichLyrics, GetLyricsError> {
         let result = self.remove_rich_lyrics();
-        self.add_item(
-            ape::Item::from_text(
-                "RICH LYRICS",
-                serde_json::to_string(&lyrics).unwrap_or_default(),
-            )
-            .expect("lyrics is a valid key"),
-        );
+        self.add_item(ape::Item {
+            key: String::from("RICH LYRICS"),
+            value: ape::ItemValue::Text(serde_json::to_string(&lyrics).unwrap_or_default()),
+        });
         result
     }
 }

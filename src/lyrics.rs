@@ -244,6 +244,7 @@ impl SyncedLyrics {
     pub fn parse(lines: Vec<String>) -> Result<Self, ParseError> {
         let lines = lines
             .into_iter()
+            .filter(|x| !x.is_empty())
             .map(|x| SyncedLine::parse(&x))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self { lines })

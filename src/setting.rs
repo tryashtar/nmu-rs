@@ -362,7 +362,7 @@ where
             Err(err) => return Err(AddToSongError::Lyrics(err)),
         }
     }
-    let metadata_report = tag_interop::set_metadata(tag, metadata, &config.artist_separator);
+    let metadata_report = tag_interop::set_metadata(tag, metadata);
     Ok(TagSpecificChanges {
         created,
         lyrics: lyrics_report,

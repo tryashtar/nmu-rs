@@ -138,7 +138,6 @@ fn main_generate(path: &Path) -> Result<(), YamlError> {
         }),
         named_strategies: HashMap::default(),
         find_replace: HashMap::default(),
-        artist_separator: String::from("/"),
         scan: vec![
             ScanOptions {
                 pattern: Regex::new("\\.mp3$").expect("valid hardcoded regex"),

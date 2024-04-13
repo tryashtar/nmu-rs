@@ -641,7 +641,6 @@ fn dummy_config() -> LibraryConfig {
         art_repo: None,
         named_strategies: HashMap::new(),
         find_replace: HashMap::new(),
-        artist_separator: ";".to_owned(),
         scan: vec![ScanOptions {
             pattern: Regex::new("\\.mp3$").unwrap(),
             tags: ScanDecision::Set(Rc::new(TagOptions {

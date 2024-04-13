@@ -35,7 +35,6 @@ pub struct RawLibraryConfig {
     pub art: Option<RawArtRepo>,
     pub named_strategies: HashMap<String, MetadataOperation>,
     pub find_replace: HashMap<String, String>,
-    pub artist_separator: String,
     pub scan: Vec<ScanOptions>,
 }
 
@@ -219,7 +218,7 @@ impl LibraryReport {
             _ => false,
         }
     }
-    pub fn record(&mut self, item_path: &Path, metadata: &Metadata, sep: &str) {
+    pub fn record(&mut self, item_path: &Path, metadata: &Metadata) {
         match self {
             Self::MergedFields {
                 key,
@@ -232,7 +231,7 @@ impl LibraryReport {
                 }
                 let value = metadata.get(key).unwrap_or(&metadata::BLANK_VALUE);
                 if *include_blanks || !Self::is_blank(value) {
-                    let list = map.entry(Self::val_to_str(value, sep)).or_default();
+                    let list = map.entry(Self::val_to_str(value, "/")).or_default();
                     list.0.insert(item_path.to_owned());
                 }
             }
@@ -657,7 +656,6 @@ pub struct LibraryConfig {
     pub art_repo: Option<ArtRepo>,
     pub named_strategies: HashMap<String, Rc<MetadataOperation>>,
     pub find_replace: HashMap<String, String>,
-    pub artist_separator: String,
     pub scan: Vec<ScanOptions>,
 }
 impl LibraryConfig {
@@ -692,7 +690,6 @@ impl LibraryConfig {
                 .map(|(k, v)| (k, Rc::new(v)))
                 .collect(),
             find_replace: raw.find_replace,
-            artist_separator: raw.artist_separator,
             scan: raw.scan,
         };
         for strat in result.named_strategies.values() {
@@ -713,7 +710,7 @@ impl LibraryConfig {
     }
     pub fn update_reports(&mut self, nice_path: &Path, metadata: &Metadata) {
         for report in &mut self.reports {
-            report.record(nice_path, metadata, &self.artist_separator);
+            report.record(nice_path, metadata);
         }
     }
     pub fn scan_settings(&self, full_path: &Path) -> Option<Rc<TagOptions>> {
