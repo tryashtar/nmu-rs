@@ -78,7 +78,11 @@ fn handle_str(
     key: &'static str,
     incoming: MetadataValue,
 ) -> Option<SetFieldResult> {
-    let existing = from_str(tag.text_for_frame_id(key));
+    let existing = from_str(
+        tag.text_for_frame_id(key)
+            .map(|x| x.replace('\0', "/"))
+            .as_deref(),
+    );
     if existing == incoming {
         return None;
     }
@@ -100,12 +104,8 @@ fn handle_list(
     tag: &mut id3::Tag,
     key: &'static str,
     incoming: MetadataValue,
-    separator: &str,
 ) -> Option<SetFieldResult> {
-    let existing = from_vec(
-        tag.text_for_frame_id(key)
-            .map(|x| x.split(separator).collect()),
-    );
+    let existing = from_vec(tag.text_for_frame_id(key).map(|x| x.split('\0').collect()));
     if existing == incoming {
         return None;
     }
@@ -117,7 +117,7 @@ fn handle_list(
     match list {
         None => Some(SetFieldResult::Incompatible { expected: "list" }),
         Some(list) => {
-            tag.set_text(key, list.join(separator));
+            tag.set_text(key, list.join("\0"));
             Some(SetFieldResult::Replaced(existing))
         }
     }
@@ -134,9 +134,9 @@ impl SetMetadata for id3::Tag {
             MetadataField::Title => handle_str(self, "TIT2", value),
             MetadataField::Subtitle => handle_str(self, "TIT3", value),
             MetadataField::Album => handle_str(self, "TALB", value),
-            MetadataField::Performers => handle_list(self, "TPE1", value, "\0"),
+            MetadataField::Performers => handle_list(self, "TPE1", value),
             MetadataField::AlbumArtist => handle_str(self, "TPE2", value),
-            MetadataField::Composers => handle_list(self, "TCOM", value, "\0"),
+            MetadataField::Composers => handle_list(self, "TCOM", value),
             MetadataField::Arranger => handle_str(self, "TPE4", value),
             MetadataField::Comment => {
                 let existing =
@@ -253,7 +253,7 @@ impl SetMetadata for id3::Tag {
                 }
             }
             MetadataField::Language => handle_str(self, "TLAN", value),
-            MetadataField::Genres => handle_list(self, "TCON", value, "\0"),
+            MetadataField::Genres => handle_list(self, "TCON", value),
             MetadataField::Art | MetadataField::SimpleLyrics | MetadataField::Custom(_) => None,
         }
     }

@@ -295,7 +295,7 @@ fn handle_lyrics_report(report: &SetLyricsReport) {
             SetLyricsResult::Replaced(existing) => match existing {
                 Ok(existing) => {
                     println!(
-                        "\t\tReplaced {:?} lyrics: {:?}",
+                        "\t\tReplaced {:?} lyrics: {}",
                         lyrics_type,
                         lyrics::display(existing)
                     );
@@ -307,7 +307,7 @@ fn handle_lyrics_report(report: &SetLyricsReport) {
             SetLyricsResult::Removed(existing) => match existing {
                 Ok(existing) => {
                     println!(
-                        "\t\tRemoved {:?} lyrics: {:?}",
+                        "\t\tRemoved {:?} lyrics: {}",
                         lyrics_type,
                         lyrics::display(existing)
                     );
@@ -351,7 +351,7 @@ fn handle_tag_changes(
             if let Some((lyrics, report)) = &changes.lyrics {
                 handle_lyrics_report(report);
                 if !report.results.is_empty() {
-                    println!("\t\tNew lyrics: {:?}", lyrics::display(lyrics));
+                    println!("\t\tNew lyrics: {}", lyrics::display(lyrics));
                 }
             }
             for (field, change) in &changes.metadata.fields {
