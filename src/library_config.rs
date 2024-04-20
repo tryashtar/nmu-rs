@@ -133,6 +133,23 @@ impl Serialize for PathList {
 }
 
 impl LibraryReport {
+    pub fn clean(&mut self, config: &LibraryConfig) {
+        // when extract_if is stabilized, use it here instead of retain, so we can print out removed entries
+        match self {
+            LibraryReport::SplitFields { map, .. } | LibraryReport::MergedFields { map, .. } => {
+                for entry in map.values_mut() {
+                    entry.0.retain(|x| {
+                        !file_stuff::find_from_clean(config, &config.library_folder, x).is_empty()
+                    });
+                }
+            }
+            LibraryReport::ItemData { map, .. } => {
+                map.retain(|k, _| {
+                    !file_stuff::find_from_clean(config, &config.library_folder, k).is_empty()
+                });
+            }
+        }
+    }
     pub fn save(&self) -> Result<(), YamlError> {
         match self {
             Self::SplitFields { path, map, .. } => {
@@ -999,9 +1016,10 @@ impl std::fmt::Display for LibraryError {
     }
 }
 
+#[derive(Default)]
 pub struct DateCache {
     path: Option<PathBuf>,
-    cache: HashMap<PathBuf, DateTime<Utc>>,
+    pub cache: HashMap<PathBuf, DateTime<Utc>>,
     updated: HashSet<PathBuf>,
 }
 impl DateCache {
@@ -1018,9 +1036,6 @@ impl DateCache {
                 updated: HashSet::new(),
             },
         )
-    }
-    pub fn clear(&mut self) {
-        self.cache.clear();
     }
     pub fn mark_updated(&mut self, path: PathBuf) {
         self.updated.insert(path);

@@ -28,6 +28,7 @@ use crate::{
     },
     song_config::{ConfigCache, ConfigLoadResults},
     strategy::FieldSelector,
+    tag_interop::GetLyricsError,
     util::ItemPath,
 };
 
@@ -109,10 +110,7 @@ fn main() {
                             );
                         }
                         Ok(mut library_config) => {
-                            if full {
-                                library_config.date_cache.clear();
-                            }
-                            do_scan(&mut library_config);
+                            do_scan(&mut library_config, library_config_path, full);
                         }
                     }
                 }
@@ -178,12 +176,19 @@ struct WorkProgress {
     failed: u32,
 }
 
-fn do_scan(library_config: &mut LibraryConfig) {
+fn do_scan(library_config: &mut LibraryConfig, library_config_path: PathBuf, full: bool) {
     let mut config_cache: ConfigCache = HashMap::new();
     let mut progress = WorkProgress {
         changed: 0,
         failed: 0,
     };
+    if full
+        || library_config
+            .date_cache
+            .changed_recently(&library_config_path)
+    {
+        library_config.date_cache.cache.clear();
+    }
     let ScanResults {
         songs: scan_songs,
         folders: scan_folders,
@@ -236,13 +241,16 @@ fn do_scan(library_config: &mut LibraryConfig) {
     } else {
         println!("Updated {}, errored {}", progress.changed, progress.failed);
     }
+    println!("Saving caches...");
+    library_config.date_cache.mark_updated(library_config_path);
     save_caches(library_config);
-    save_reports(&library_config.reports);
+    save_reports(library_config);
     if let Some(art_repo) = &library_config.art_repo {
         if let Some(disk) = &art_repo.disk_cache {
             save_processed_art(disk, &art_repo.processed_cache);
         }
     }
+    println!("Done");
 }
 
 fn handle_song_results(
@@ -311,6 +319,9 @@ fn handle_lyrics_report(report: &SetLyricsReport) {
                         lyrics_type,
                         lyrics::display(existing)
                     );
+                }
+                Err(GetLyricsError::NotEmbedded) => {
+                    println!("\t\tAdded {:?} lyrics", lyrics_type);
                 }
                 Err(err) => {
                     println!("\t\tReplaced {:?} lyrics ({})", lyrics_type, err);
@@ -397,6 +408,7 @@ fn handle_tag_changes(
 fn handle_folder_results(results: &ProcessFolderResults) {}
 
 fn save_caches(library_config: &mut LibraryConfig) {
+    library_config.date_cache.cache.retain(|k, _| k.exists());
     if let Err(err) = library_config.date_cache.save() {
         eprintln!(
             "{}",
@@ -406,16 +418,19 @@ fn save_caches(library_config: &mut LibraryConfig) {
     if let Some(repo) = &mut library_config.art_repo {
         repo.used_templates
             .template_to_users
-            .retain(|x, y| x.exists() && !y.is_empty());
+            .retain(|k, v| k.exists() && !v.is_empty());
         if let Err(err) = repo.used_templates.save() {
             eprintln!("{}", cformat!("❌ <red>Error saving art cache\n{}</>", err));
         }
     }
 }
 
-fn save_reports(reports: &[LibraryReport]) {
-    for report in reports {
-        let path = match report {
+fn save_reports(library_config: &mut LibraryConfig) {
+    // partial borrow hack
+    let mut reports = std::mem::take(&mut library_config.reports);
+    for report in &mut reports {
+        report.clean(library_config);
+        let path = match &report {
             LibraryReport::SplitFields { path, .. }
             | LibraryReport::MergedFields { path, .. }
             | LibraryReport::ItemData { path, .. } => path,
@@ -431,6 +446,7 @@ fn save_reports(reports: &[LibraryReport]) {
             );
         }
     }
+    library_config.reports = reports;
 }
 
 fn clean_processed_art(templates: &BTreeSet<PathBuf>, folder: &Path, disk: &mut ArtDiskCache) {

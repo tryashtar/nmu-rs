@@ -61,6 +61,37 @@ pub fn matches_name(path: &Path, name: &str) -> bool {
     path.file_name().is_some_and(|x| x == name)
 }
 
+pub fn find_from_clean(config: &LibraryConfig, full_start: &Path, path: &Path) -> Vec<ItemPath> {
+    if let Some(name) = path.file_name().and_then(|x| x.to_str()) {
+        if let Ok(read) = std::fs::read_dir(full_start.join(path).parent().unwrap_or(Path::new("")))
+        {
+            return read
+                .into_iter()
+                .filter_map(|x| x.ok())
+                .filter_map(|entry| {
+                    let full_path = entry.path();
+                    let path = full_path.strip_prefix(full_start).ok();
+                    path.and_then(|path| {
+                        if is_dir(&entry) {
+                            if matches_name(path, name) {
+                                return Some(ItemPath::Folder(path.to_owned()));
+                            }
+                        } else {
+                            config.scan_settings(&full_path)?;
+                            let stripped = path.with_extension("");
+                            if matches_name(&stripped, name) {
+                                return Some(ItemPath::Song(stripped));
+                            }
+                        }
+                        None
+                    })
+                })
+                .collect();
+        }
+    }
+    vec![]
+}
+
 pub fn find_matches(
     selector: &ItemSelector,
     nice_start: &Path,
@@ -113,37 +144,7 @@ pub fn find_matches(
             .iter()
             .flat_map(|selector| find_matches(selector, nice_start, config))
             .collect(),
-        ItemSelector::Path(path) => {
-            if let Some(name) = path.file_name().and_then(|x| x.to_str()) {
-                if let Ok(read) =
-                    std::fs::read_dir(full_start.join(path).parent().unwrap_or(Path::new("")))
-                {
-                    return read
-                        .into_iter()
-                        .filter_map(|x| x.ok())
-                        .filter_map(|entry| {
-                            let full_path = entry.path();
-                            let path = full_path.strip_prefix(&full_start).ok();
-                            path.and_then(|path| {
-                                if is_dir(&entry) {
-                                    if matches_name(path, name) {
-                                        return Some(ItemPath::Folder(path.to_owned()));
-                                    }
-                                } else {
-                                    config.scan_settings(&full_path)?;
-                                    let stripped = path.with_extension("");
-                                    if matches_name(&stripped, name) {
-                                        return Some(ItemPath::Song(stripped));
-                                    }
-                                }
-                                None
-                            })
-                        })
-                        .collect();
-                }
-            }
-            vec![]
-        }
+        ItemSelector::Path(path) => find_from_clean(config, &full_start, path),
         ItemSelector::Segmented { path } => {
             if let Some((last, segments)) = path.split_last() {
                 let mut items = vec![full_start.clone()];
