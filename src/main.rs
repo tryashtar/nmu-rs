@@ -7,6 +7,7 @@ use std::{
     rc::Rc,
 };
 
+use clap::Parser;
 use color_print::cformat;
 use regex::Regex;
 use walkdir::DirEntry;
@@ -45,18 +46,36 @@ mod util;
 #[cfg(test)]
 mod tests;
 
+#[derive(clap::Parser)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(clap::Subcommand)]
+enum Commands {
+    /// Scan and update songs
+    Scan {
+        /// Rescan songs that haven't changed recently
+        #[clap(long)]
+        full: bool,
+        /// Path to library config file
+        library_config_path: PathBuf,
+    },
+    /// Create a template library config file
+    Generate {
+        /// Output path for config file
+        library_config_path: PathBuf,
+    },
+}
+
 fn main() {
     println!("NAIVE MUSIC UPDATER");
-    let args = env::args().collect::<Vec<_>>();
-    let library_argument = args.get(1);
-    let library_config_path = Path::new(
-        library_argument
-            .map(|x| x.as_str())
-            .unwrap_or("library.yaml"),
-    );
-    let mode = args.get(2).map(|x| x.as_str()).unwrap_or("scan");
-    match mode {
-        "generate" => match main_generate(library_config_path) {
+    let cli = Cli::parse();
+    match cli.command {
+        Commands::Generate {
+            library_config_path,
+        } => match main_generate(&library_config_path) {
             Ok(()) => {
                 println!("Created template library configuration file");
             }
@@ -67,19 +86,12 @@ fn main() {
                 );
             }
         },
-        "scan" => {
-            let raw_config = file_stuff::load_yaml::<RawLibraryConfig>(library_config_path);
+        Commands::Scan {
+            library_config_path,
+            full,
+        } => {
+            let raw_config = file_stuff::load_yaml::<RawLibraryConfig>(&library_config_path);
             match raw_config {
-                Err(YamlError::Io(error))
-                    if error.kind() == ErrorKind::NotFound && library_argument.is_none() =>
-                {
-                    if let Ok(dir) = std::env::current_dir() {
-                        eprintln!(
-                    "Provide the path to a library.yaml or add one to '{}'\nOr use '<path> generate' to create a template",
-                    dir.display()
-                );
-                    }
-                }
                 Err(error) => {
                     eprintln!(
                         "{}",
@@ -97,14 +109,14 @@ fn main() {
                             );
                         }
                         Ok(mut library_config) => {
+                            if full {
+                                library_config.date_cache.clear();
+                            }
                             do_scan(&mut library_config);
                         }
                     }
                 }
             }
-        }
-        word => {
-            eprintln!("Unknown mode '{word}', try 'generate' or 'scan'");
         }
     }
 }

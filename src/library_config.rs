@@ -658,10 +658,15 @@ pub struct LibraryConfig {
     pub find_replace: HashMap<String, String>,
     pub scan: Vec<ScanOptions>,
 }
+
+fn full_path(path: PathBuf) -> PathBuf {
+    path.canonicalize().unwrap_or(path)
+}
+
 impl LibraryConfig {
     pub fn new(folder: &Path, raw: RawLibraryConfig) -> Result<Self, LibraryError> {
         let result = Self {
-            library_folder: folder.join(raw.library),
+            library_folder: full_path(folder.join(raw.library)),
             reports: raw
                 .reports
                 .into_iter()
@@ -675,7 +680,7 @@ impl LibraryConfig {
             config_folders: raw
                 .config_folders
                 .into_iter()
-                .map(|x| folder.join(x))
+                .map(|x| full_path(folder.join(x)))
                 .collect(),
             custom_fields: raw
                 .custom_fields
@@ -1008,11 +1013,14 @@ impl DateCache {
                 updated: HashSet::new(),
             },
             |path| Self {
-                path: Some(path.clone()),
                 cache: file_stuff::load_yaml(&path).unwrap_or_default(),
+                path: Some(path),
                 updated: HashSet::new(),
             },
         )
+    }
+    pub fn clear(&mut self) {
+        self.cache.clear();
     }
     pub fn mark_updated(&mut self, path: PathBuf) {
         self.updated.insert(path);
