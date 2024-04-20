@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     env,
     io::{ErrorKind, IsTerminal, Write},
     ops::Deref,
@@ -193,6 +193,7 @@ fn do_scan(library_config: &mut LibraryConfig, library_config_path: PathBuf, ful
         songs: scan_songs,
         folders: scan_folders,
         images: scan_images,
+        skipped,
     } = find_scan_items(library_config);
     if let Some(art_repo) = &mut library_config.art_repo {
         if let Some(disk) = &mut art_repo.disk_cache {
@@ -207,34 +208,36 @@ fn do_scan(library_config: &mut LibraryConfig, library_config_path: PathBuf, ful
                 .to_owned(),
         );
     }
-    for (song_path, options) in scan_songs {
+    let mut all_valid = HashSet::new();
+    for (song_path, options) in &scan_songs {
         let nice_path = ItemPath::Song(
             song_path
                 .strip_prefix(&library_config.library_folder)
-                .unwrap_or(&song_path)
+                .unwrap_or(song_path)
                 .with_extension(""),
         );
         let results = setting::process_song(
             &nice_path,
-            &song_path,
+            song_path,
             library_config,
             &mut config_cache,
-            &options,
+            options,
         );
         handle_song_results(&results, &nice_path, library_config);
         if results.has_fatal_shared_error() || results.has_fatal_local_error() {
             progress.failed += 1;
-            library_config.date_cache.remove(&song_path);
+            library_config.date_cache.remove(song_path);
         } else {
             progress.changed += 1;
             library_config.date_cache.mark_updated(song_path.clone());
             if let Some(assigned) = results.assigned {
                 library_config.update_reports(&nice_path, &assigned.metadata.metadata);
                 if let Some(art_repo) = &mut library_config.art_repo {
-                    art_repo.used_templates.add(&song_path, &assigned.art);
+                    art_repo.used_templates.add(song_path, &assigned.art);
                 }
             }
         }
+        all_valid.insert(nice_path.into());
     }
     if progress.failed == 0 {
         println!("Updated {}", progress.changed);
@@ -242,15 +245,22 @@ fn do_scan(library_config: &mut LibraryConfig, library_config_path: PathBuf, ful
         println!("Updated {}, errored {}", progress.changed, progress.failed);
     }
     println!("Saving caches...");
+    for path in skipped {
+        all_valid.insert(
+            path.strip_prefix(&library_config.library_folder)
+                .unwrap_or(&path)
+                .with_extension(""),
+        );
+    }
     library_config.date_cache.mark_updated(library_config_path);
     save_caches(library_config);
-    save_reports(library_config);
+    save_reports(library_config, &all_valid);
     if let Some(art_repo) = &library_config.art_repo {
         if let Some(disk) = &art_repo.disk_cache {
             save_processed_art(disk, &art_repo.processed_cache);
         }
     }
-    println!("Done");
+    println!("Done!");
 }
 
 fn handle_song_results(
@@ -408,28 +418,22 @@ fn handle_tag_changes(
 fn handle_folder_results(results: &ProcessFolderResults) {}
 
 fn save_caches(library_config: &mut LibraryConfig) {
-    library_config.date_cache.cache.retain(|k, _| k.exists());
     if let Err(err) = library_config.date_cache.save() {
         eprintln!(
             "{}",
             cformat!("❌ <red>Error saving date cache\n{}</>", err)
         );
     }
-    if let Some(repo) = &mut library_config.art_repo {
-        repo.used_templates
-            .template_to_users
-            .retain(|k, v| k.exists() && !v.is_empty());
+    if let Some(repo) = &library_config.art_repo {
         if let Err(err) = repo.used_templates.save() {
             eprintln!("{}", cformat!("❌ <red>Error saving art cache\n{}</>", err));
         }
     }
 }
 
-fn save_reports(library_config: &mut LibraryConfig) {
-    // partial borrow hack
-    let mut reports = std::mem::take(&mut library_config.reports);
-    for report in &mut reports {
-        report.clean(library_config);
+fn save_reports(library_config: &mut LibraryConfig, valid_names: &HashSet<PathBuf>) {
+    for report in &mut library_config.reports {
+        report.clean(valid_names);
         let path = match &report {
             LibraryReport::SplitFields { path, .. }
             | LibraryReport::MergedFields { path, .. }
@@ -446,7 +450,6 @@ fn save_reports(library_config: &mut LibraryConfig) {
             );
         }
     }
-    library_config.reports = reports;
 }
 
 fn clean_processed_art(templates: &BTreeSet<PathBuf>, folder: &Path, disk: &mut ArtDiskCache) {
@@ -630,6 +633,7 @@ struct ScanResults {
     songs: BTreeMap<PathBuf, Rc<TagOptions>>,
     folders: BTreeSet<PathBuf>,
     images: BTreeSet<PathBuf>,
+    skipped: HashSet<PathBuf>,
 }
 
 fn is_hidden(entry: &DirEntry) -> bool {
@@ -645,6 +649,59 @@ fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
     let mut scan_songs = BTreeMap::new();
     let mut scan_folders = BTreeSet::new();
     let mut scan_images = BTreeSet::new();
+    let mut skipped_songs = HashSet::new();
+    let mut add_corresponding = |config_root: &Path, config_folder: &Path| {
+        let corresponding_folder = &library_config.library_folder.join(
+            config_folder
+                .strip_prefix(config_root)
+                .unwrap_or(config_folder),
+        );
+        for entry in walkdir::WalkDir::new(corresponding_folder)
+            .into_iter()
+            .filter_entry(|entry| entry.file_type().is_file() || !is_hidden(entry))
+            .filter_map(|x| x.ok())
+        {
+            let is_dir = entry.file_type().is_dir();
+            let path = entry.into_path();
+            if is_dir {
+                scan_folders.insert(path);
+            } else if let Some(settings) = library_config.scan_settings(&path) {
+                if scan_songs.insert(path, settings).is_none() && is_terminal {
+                    _ = write!(lock, "\rFound {}", scan_songs.len());
+                }
+            }
+        }
+    };
+    let add_templates = |config_folder: &Path, to: &mut BTreeSet<PathBuf>| {
+        for image in walkdir::WalkDir::new(config_folder)
+            .into_iter()
+            .filter_entry(|entry| entry.file_type().is_file() || !is_hidden(entry))
+            .filter_map(|x| x.ok())
+            .filter(|x| x.file_type().is_file())
+        {
+            let is_config = image.file_name() == "images.yaml";
+            if !is_config {
+                let path = image.into_path();
+                to.insert(path);
+            }
+        }
+    };
+    // scan songs affected by a removed config
+    for path in &library_config.date_cache.removed {
+        if path.file_name().is_some_and(|x| x == "config.yaml") {
+            let config_folder = path.parent().unwrap_or(Path::new(""));
+            let config_root = library_config
+                .config_folders
+                .iter()
+                .find(|x| path.starts_with(x));
+            if let Some(config_root) = config_root {
+                add_corresponding(config_root, config_folder);
+            }
+        } else if path.file_name().is_some_and(|x| x == "images.yaml") {
+            let config_folder = path.parent().unwrap_or(Path::new(""));
+            add_templates(config_folder, &mut scan_images);
+        }
+    }
     // for every config that's changed, scan all songs it applies to
     for config_root in &library_config.config_folders {
         for config_folder in walkdir::WalkDir::new(config_root)
@@ -659,30 +716,25 @@ fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
                     .date_cache
                     .changed_recently(&config_file_path)
             {
-                let corresponding_folder = &library_config.library_folder.join(
-                    config_folder_path
-                        .strip_prefix(config_root)
-                        .unwrap_or(config_folder_path),
-                );
-                for entry in walkdir::WalkDir::new(corresponding_folder)
-                    .into_iter()
-                    .filter_entry(|entry| entry.file_type().is_file() || !is_hidden(entry))
-                    .filter_map(|x| x.ok())
-                {
-                    let is_dir = entry.file_type().is_dir();
-                    let path = entry.into_path();
-                    if is_dir {
-                        scan_folders.insert(path);
-                    } else if let Some(settings) = library_config.scan_settings(&path) {
-                        if scan_songs.insert(path, settings).is_none() && is_terminal {
+                add_corresponding(config_root, config_folder_path);
+            }
+        }
+    }
+    if let Some(art_repo) = &library_config.art_repo {
+        // scan songs affected by a removed template
+        for songs in art_repo.used_templates.removed.values() {
+            for path in songs {
+                if path.is_dir() {
+                    scan_folders.insert(path.clone());
+                } else if path.is_file() {
+                    if let Some(settings) = library_config.scan_settings(path) {
+                        if scan_songs.insert(path.clone(), settings).is_none() && is_terminal {
                             _ = write!(lock, "\rFound {}", scan_songs.len());
                         }
                     }
                 }
             }
         }
-    }
-    if let Some(art_repo) = &library_config.art_repo {
         // for every config that's changed, find all templates it applies to
         // also find all templates that have changed
         for template_file in walkdir::WalkDir::new(&art_repo.templates_folder)
@@ -698,19 +750,8 @@ fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
                     .date_cache
                     .changed_recently(&template_file_path)
                 {
-                    for image in
-                        walkdir::WalkDir::new(template_file_path.parent().unwrap_or(Path::new("")))
-                            .into_iter()
-                            .filter_entry(|entry| entry.file_type().is_file() || !is_hidden(entry))
-                            .filter_map(|x| x.ok())
-                            .filter(|x| x.file_type().is_file())
-                    {
-                        let is_config = image.file_name() == "images.yaml";
-                        if !is_config {
-                            let path = image.into_path();
-                            scan_images.insert(path);
-                        }
-                    }
+                    let config_folder = template_file_path.parent().unwrap_or(Path::new(""));
+                    add_templates(config_folder, &mut scan_images);
                 }
             } else if library_config
                 .date_cache
@@ -739,24 +780,8 @@ fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
                 }
             }
         }
-        for (template, songs) in &art_repo.used_templates.template_to_users {
-            if !template.exists() {
-                for path in songs {
-                    if path.is_dir() {
-                        scan_folders.insert(path.clone());
-                    } else if path.is_file() {
-                        if let Some(settings) = library_config.scan_settings(path) {
-                            if scan_songs.insert(path.clone(), settings).is_none() && is_terminal {
-                                _ = write!(lock, "\rFound {}", scan_songs.len());
-                            }
-                        }
-                    }
-                }
-            }
-        }
     }
     // scan all songs that have changed
-    let mut skipped = 0;
     for entry in walkdir::WalkDir::new(&library_config.library_folder)
         .into_iter()
         .filter_entry(|entry| entry.file_type().is_file() || !is_hidden(entry))
@@ -769,24 +794,39 @@ fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
                 scan_folders.insert(path);
             } else if let Some(settings) = library_config.scan_settings(&path) {
                 if scan_songs.insert(path, settings).is_none() && is_terminal {
-                    _ = write!(lock, "\rFound {}, skipped {}", scan_songs.len(), skipped);
+                    _ = write!(
+                        lock,
+                        "\rFound {}, skipped {}",
+                        scan_songs.len(),
+                        skipped_songs.len()
+                    );
                 }
             }
         } else if !is_dir && !scan_songs.contains_key(&path) {
-            skipped += 1;
+            skipped_songs.insert(path);
             if is_terminal {
-                _ = write!(lock, "\rFound {}, skipped {}", scan_songs.len(), skipped);
+                _ = write!(
+                    lock,
+                    "\rFound {}, skipped {}",
+                    scan_songs.len(),
+                    skipped_songs.len()
+                );
             }
         }
     }
     if is_terminal {
         _ = write!(lock, "\r");
     }
-    println!("Found {}, skipped {}", scan_songs.len(), skipped);
+    println!(
+        "Found {}, skipped {}",
+        scan_songs.len(),
+        skipped_songs.len()
+    );
     scan_folders.remove(&library_config.library_folder);
     ScanResults {
         songs: scan_songs,
         folders: scan_folders,
         images: scan_images,
+        skipped: skipped_songs,
     }
 }

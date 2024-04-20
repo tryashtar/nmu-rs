@@ -133,20 +133,16 @@ impl Serialize for PathList {
 }
 
 impl LibraryReport {
-    pub fn clean(&mut self, config: &LibraryConfig) {
+    pub fn clean(&mut self, valid_names: &HashSet<PathBuf>) {
         // when extract_if is stabilized, use it here instead of retain, so we can print out removed entries
         match self {
             LibraryReport::SplitFields { map, .. } | LibraryReport::MergedFields { map, .. } => {
                 for entry in map.values_mut() {
-                    entry.0.retain(|x| {
-                        !file_stuff::find_from_clean(config, &config.library_folder, x).is_empty()
-                    });
+                    entry.0.retain(|x| valid_names.contains(x));
                 }
             }
             LibraryReport::ItemData { map, .. } => {
-                map.retain(|k, _| {
-                    !file_stuff::find_from_clean(config, &config.library_folder, k).is_empty()
-                });
+                map.retain(|k, _| valid_names.contains(k));
             }
         }
     }
@@ -1020,6 +1016,7 @@ impl std::fmt::Display for LibraryError {
 pub struct DateCache {
     path: Option<PathBuf>,
     pub cache: HashMap<PathBuf, DateTime<Utc>>,
+    pub removed: Vec<PathBuf>,
     updated: HashSet<PathBuf>,
 }
 impl DateCache {
@@ -1029,11 +1026,27 @@ impl DateCache {
                 path: None,
                 cache: HashMap::new(),
                 updated: HashSet::new(),
+                removed: vec![],
             },
-            |path| Self {
-                cache: file_stuff::load_yaml(&path).unwrap_or_default(),
-                path: Some(path),
-                updated: HashSet::new(),
+            |path| {
+                let mut cache = file_stuff::load_yaml::<HashMap<PathBuf, DateTime<Utc>>>(&path)
+                    .unwrap_or_default();
+                let mut removed = vec![];
+                // replace with extract_if when stable
+                cache.retain(|k, _| {
+                    if !k.exists() {
+                        removed.push(k.clone());
+                        false
+                    } else {
+                        true
+                    }
+                });
+                Self {
+                    cache,
+                    path: Some(path),
+                    updated: HashSet::new(),
+                    removed,
+                }
             },
         )
     }

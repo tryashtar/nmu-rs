@@ -553,6 +553,7 @@ pub struct ArtUsageCache {
     path: Option<PathBuf>,
     pub template_to_users: HashMap<PathBuf, HashSet<PathBuf>>,
     user_to_template: HashMap<PathBuf, PathBuf>,
+    pub removed: HashMap<PathBuf, HashSet<PathBuf>>,
 }
 impl ArtUsageCache {
     fn new(path: Option<PathBuf>) -> Self {
@@ -561,6 +562,7 @@ impl ArtUsageCache {
                 path: None,
                 template_to_users: HashMap::new(),
                 user_to_template: HashMap::new(),
+                removed: HashMap::new(),
             },
             Some(path) => {
                 let map = file_stuff::load_yaml::<HashMap<PathBuf, HashSet<PathBuf>>>(&path);
@@ -569,8 +571,19 @@ impl ArtUsageCache {
                         path: Some(path),
                         template_to_users: HashMap::new(),
                         user_to_template: HashMap::new(),
+                        removed: HashMap::new(),
                     },
-                    Ok(map) => {
+                    Ok(mut map) => {
+                        let mut removed = HashMap::new();
+                        // replace with extract_if when stable
+                        map.retain(|k, v| {
+                            if !k.exists() {
+                                removed.insert(k.clone(), v.clone());
+                                false
+                            } else {
+                                true
+                            }
+                        });
                         let mut reverse = HashMap::new();
                         for (template, songs) in &map {
                             for song in songs {
@@ -581,6 +594,7 @@ impl ArtUsageCache {
                             path: Some(path),
                             template_to_users: map,
                             user_to_template: reverse,
+                            removed,
                         }
                     }
                 }
