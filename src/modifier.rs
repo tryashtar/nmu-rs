@@ -101,9 +101,7 @@ impl std::fmt::Display for ValueError {
                 let sel_str = inline_data(&selector);
                 write!(f, "Selector {sel_str} didn't find anything")
             }
-            Self::ExitRequested => {
-                write!(f, "Conditions not met, skipping")
-            }
+            Self::ExitRequested => f.write_str("Conditions not met, skipping"),
             Self::CopyNotFound { field } => {
                 write!(f, "Tried to copy {field}, but no value was found",)
             }

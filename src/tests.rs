@@ -6,7 +6,10 @@ use crate::{
     },
     metadata::{self, MetadataField, MetadataValue},
     modifier::{ValueError, ValueModifier},
-    song_config::{AllSetter, LoadedConfig, SongConfig},
+    song_config::{
+        AllSetter, LoadedConfig, RawSongConfig, RawSongConfigFile, ReferencableOperation,
+        ReverseMode, SongConfig,
+    },
     strategy::{
         FieldSelector, FieldValueGetter, ItemSelector, LocalItemSelector, MetadataOperation,
         PathSegment, ValueGetter, WarnBehavior,
@@ -665,9 +668,7 @@ fn copy_field_simple() {
         MetadataField::Performers,
         MetadataValue::List(vec!["item".to_string()]),
     );
-    let result = getter
-        .get(&copy_source, &path, &config)
-        .unwrap_or_else(|x| panic!("{}", x));
+    let result = getter.get(&copy_source, &path, &config).ok().unwrap();
     assert!(matches!(result, MetadataValue::List(x) if x.as_slice() == ["item"]));
 }
 
@@ -692,9 +693,7 @@ fn copy_field_nested() {
         MetadataField::Performers,
         MetadataValue::List(vec!["item".to_string()]),
     );
-    let result = getter
-        .get(&copy_source, &path, &config)
-        .unwrap_or_else(|x| panic!("{}", x));
+    let result = getter.get(&copy_source, &path, &config).ok().unwrap();
     assert!(matches!(result, MetadataValue::List(x) if x.as_slice() == ["citem"]));
 }
 
@@ -1007,4 +1006,131 @@ fn selector_matches() {
         "",
         &["sub/a", "sub/deep1/one"],
     );
+}
+
+#[test]
+fn reverse_config() {
+    let files = vec![
+        (
+            PathBuf::from("a"),
+            HashMap::from([
+                (
+                    MetadataField::Title,
+                    MetadataValue::string(String::from("a")),
+                ),
+                (
+                    MetadataField::Album,
+                    MetadataValue::string(String::from("test")),
+                ),
+                (
+                    MetadataField::Performers,
+                    MetadataValue::string(String::from("guy 1")),
+                ),
+            ]),
+        ),
+        (
+            PathBuf::from("b"),
+            HashMap::from([
+                (
+                    MetadataField::Title,
+                    MetadataValue::string(String::from("b")),
+                ),
+                (
+                    MetadataField::Album,
+                    MetadataValue::string(String::from("test")),
+                ),
+                (
+                    MetadataField::Performers,
+                    MetadataValue::string(String::from("guy 1")),
+                ),
+            ]),
+        ),
+        (
+            PathBuf::from("c"),
+            HashMap::from([
+                (
+                    MetadataField::Title,
+                    MetadataValue::string(String::from("c")),
+                ),
+                (
+                    MetadataField::Album,
+                    MetadataValue::string(String::from("test")),
+                ),
+                (
+                    MetadataField::Performers,
+                    MetadataValue::string(String::from("guy 1")),
+                ),
+            ]),
+        ),
+        (
+            PathBuf::from("d"),
+            HashMap::from([
+                (
+                    MetadataField::Title,
+                    MetadataValue::string(String::from("d")),
+                ),
+                (
+                    MetadataField::Album,
+                    MetadataValue::string(String::from("test")),
+                ),
+                (
+                    MetadataField::Performers,
+                    MetadataValue::string(String::from("guy 2")),
+                ),
+            ]),
+        ),
+        (
+            PathBuf::from("e"),
+            HashMap::from([
+                (
+                    MetadataField::Title,
+                    MetadataValue::string(String::from("e")),
+                ),
+                (
+                    MetadataField::Album,
+                    MetadataValue::string(String::from("test")),
+                ),
+                (
+                    MetadataField::Performers,
+                    MetadataValue::string(String::from("guy 2")),
+                ),
+            ]),
+        ),
+        (
+            PathBuf::from("f"),
+            HashMap::from([
+                (
+                    MetadataField::Title,
+                    MetadataValue::string(String::from("f")),
+                ),
+                (
+                    MetadataField::Album,
+                    MetadataValue::string(String::from("test")),
+                ),
+                (
+                    MetadataField::Performers,
+                    MetadataValue::string(String::from("guy 2")),
+                ),
+            ]),
+        ),
+        (
+            PathBuf::from("g"),
+            HashMap::from([
+                (
+                    MetadataField::Title,
+                    MetadataValue::string(String::from("g")),
+                ),
+                (
+                    MetadataField::Album,
+                    MetadataValue::string(String::from("test")),
+                ),
+                (
+                    MetadataField::Performers,
+                    MetadataValue::string(String::from("guy 3")),
+                ),
+            ]),
+        ),
+    ];
+    let config = RawSongConfigFile::make_reverse(ReverseMode::Full, files);
+    println!("{}", serde_yaml::to_string(&config).unwrap());
 }

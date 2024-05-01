@@ -1,12 +1,21 @@
 use core::fmt;
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::HashMap,
+    hash::Hash,
+    path::{Path, PathBuf},
+};
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use strum::EnumIter;
 
 use crate::{
-    library_config::LibraryConfig, modifier::ValueError, song_config::LoadedConfig, util::ItemPath,
+    library_config::{LibraryConfig, TagOptions, TagSettings},
+    modifier::ValueError,
+    setting,
+    song_config::LoadedConfig,
+    tag_interop,
+    util::ItemPath,
 };
 
 pub type PendingMetadata = HashMap<MetadataField, Result<MetadataValue, ValueError>>;
@@ -19,6 +28,26 @@ pub struct GetMetadataResults {
 pub struct SourcedReport {
     pub full_path: PathBuf,
     pub errors: Vec<ValueError>,
+}
+
+pub fn get_embedded(full_path: &Path, settings: &TagOptions) -> Metadata {
+    let mut result = HashMap::new();
+    if let TagSettings::Set {} = settings.ape {
+        if let Ok((tag, false)) = setting::get_or_create_ape(full_path) {
+            result.extend(tag_interop::get_metadata(&tag));
+        }
+    }
+    if let TagSettings::Set {} = settings.id3 {
+        if let Ok((tag, false)) = setting::get_or_create_id3(full_path) {
+            result.extend(tag_interop::get_metadata(&tag));
+        }
+    }
+    if let TagSettings::Set {} = settings.flac {
+        if let Ok((tag, false)) = setting::get_or_create_flac(full_path) {
+            result.extend(tag_interop::get_metadata(&tag));
+        }
+    }
+    result
 }
 
 pub fn get_metadata(
@@ -75,7 +104,7 @@ fn finalize(metadata: PendingMetadata) -> Metadata {
         .collect()
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(untagged)]
 pub enum MetadataValue {
     Number(u32),
@@ -92,8 +121,8 @@ pub enum MetadataValue {
 #[derive(Debug, Clone)]
 pub struct RegexWrap(pub Regex);
 impl PartialEq for RegexWrap {
-    fn eq(&self, _other: &Self) -> bool {
-        true
+    fn eq(&self, other: &Self) -> bool {
+        self.0.as_str() == other.0.as_str()
     }
 }
 impl Eq for RegexWrap {}
@@ -103,8 +132,13 @@ impl PartialOrd for RegexWrap {
     }
 }
 impl Ord for RegexWrap {
-    fn cmp(&self, _other: &Self) -> std::cmp::Ordering {
-        std::cmp::Ordering::Equal
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.as_str().cmp(other.0.as_str())
+    }
+}
+impl Hash for RegexWrap {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.as_str().hash(state);
     }
 }
 
@@ -230,23 +264,23 @@ pub enum MetadataField {
 impl std::fmt::Display for MetadataField {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Title => write!(f, "Title"),
-            Self::Subtitle => write!(f, "Subtitle"),
-            Self::Album => write!(f, "Album"),
-            Self::Performers => write!(f, "Performers"),
-            Self::AlbumArtist => write!(f, "Album Artist"),
-            Self::Composers => write!(f, "Composers"),
-            Self::Arranger => write!(f, "Arranger"),
-            Self::Comment => write!(f, "Comment"),
-            Self::Track => write!(f, "Track"),
-            Self::TrackTotal => write!(f, "Track Total"),
-            Self::Disc => write!(f, "Disc"),
-            Self::DiscTotal => write!(f, "Disc Total"),
-            Self::Year => write!(f, "Year"),
-            Self::Language => write!(f, "Language"),
-            Self::Genres => write!(f, "Genres"),
-            Self::Art => write!(f, "Art"),
-            Self::SimpleLyrics => write!(f, "Simple Lyrics"),
+            Self::Title => f.write_str("Title"),
+            Self::Subtitle => f.write_str("Subtitle"),
+            Self::Album => f.write_str("Album"),
+            Self::Performers => f.write_str("Performers"),
+            Self::AlbumArtist => f.write_str("Album Artist"),
+            Self::Composers => f.write_str("Composers"),
+            Self::Arranger => f.write_str("Arranger"),
+            Self::Comment => f.write_str("Comment"),
+            Self::Track => f.write_str("Track"),
+            Self::TrackTotal => f.write_str("Track Total"),
+            Self::Disc => f.write_str("Disc"),
+            Self::DiscTotal => f.write_str("Disc Total"),
+            Self::Year => f.write_str("Year"),
+            Self::Language => f.write_str("Language"),
+            Self::Genres => f.write_str("Genres"),
+            Self::Art => f.write_str("Art"),
+            Self::SimpleLyrics => f.write_str("Simple Lyrics"),
             Self::Custom(val) => write!(f, "Custom ({val})"),
         }
     }

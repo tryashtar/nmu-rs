@@ -1,7 +1,8 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use id3::{frame::SynchronisedLyrics, TagLike};
 use itertools::Itertools;
+use strum::IntoEnumIterator;
 
 use crate::{
     lyrics::{ParseError, RichLyrics, SyncedLine, SyncedLyrics},
@@ -38,7 +39,18 @@ pub trait GetLyrics {
     fn set_rich_lyrics(&mut self, lyrics: RichLyrics) -> Result<RichLyrics, GetLyricsError>;
 }
 
+pub fn get_metadata(tag: &impl SetMetadata) -> Metadata {
+    let mut result = HashMap::new();
+    for field in MetadataField::iter() {
+        if let Some(value) = tag.get_field(&field) {
+            result.insert(field, value);
+        }
+    }
+    result
+}
+
 pub trait SetMetadata {
+    fn get_field(&self, field: &MetadataField) -> Option<MetadataValue>;
     fn set_field(&mut self, field: &MetadataField, value: MetadataValue) -> Option<SetFieldResult>;
 }
 pub fn set_metadata(tag: &mut impl SetMetadata, metadata: Metadata) -> SetMetadataReport {
@@ -53,24 +65,21 @@ pub fn set_metadata(tag: &mut impl SetMetadata, metadata: Metadata) -> SetMetada
     report
 }
 
-fn from_str(val: Option<&str>) -> MetadataValue {
-    MetadataValue::from_option(val.map(|x| x.to_owned()))
-}
-
-fn from_num(val: Option<u32>) -> MetadataValue {
+fn or_blank(val: Option<MetadataValue>) -> MetadataValue {
     match val {
         None => MetadataValue::blank(),
-        Some(val) => MetadataValue::Number(val),
+        Some(val) => val,
     }
 }
 
-fn from_vec(val: Option<Vec<&str>>) -> MetadataValue {
-    MetadataValue::List(
-        val.unwrap_or_default()
-            .into_iter()
-            .map(|x| x.to_owned())
-            .collect(),
-    )
+fn get_str(tag: &id3::Tag, key: &'static str) -> Option<MetadataValue> {
+    tag.text_for_frame_id(key)
+        .map(|x| MetadataValue::string(x.replace('\0', "/")))
+}
+
+fn get_list(tag: &id3::Tag, key: &'static str) -> Option<MetadataValue> {
+    tag.text_values_for_frame_id(key)
+        .map(|x| MetadataValue::List(x.into_iter().map(String::from).collect()))
 }
 
 fn handle_str(
@@ -78,11 +87,7 @@ fn handle_str(
     key: &'static str,
     incoming: MetadataValue,
 ) -> Option<SetFieldResult> {
-    let existing = from_str(
-        tag.text_for_frame_id(key)
-            .map(|x| x.replace('\0', "/"))
-            .as_deref(),
-    );
+    let existing = or_blank(get_str(tag, key));
     if existing == incoming {
         return None;
     }
@@ -105,7 +110,7 @@ fn handle_list(
     key: &'static str,
     incoming: MetadataValue,
 ) -> Option<SetFieldResult> {
-    let existing = from_vec(tag.text_for_frame_id(key).map(|x| x.split('\0').collect()));
+    let existing = or_blank(get_list(tag, key));
     if existing == incoming {
         return None;
     }
@@ -117,7 +122,7 @@ fn handle_list(
     match list {
         None => Some(SetFieldResult::Incompatible { expected: "list" }),
         Some(list) => {
-            tag.set_text(key, list.join("\0"));
+            tag.set_text_values(key, list);
             Some(SetFieldResult::Replaced(existing))
         }
     }
@@ -129,6 +134,36 @@ pub enum SetFieldResult {
 }
 
 impl SetMetadata for id3::Tag {
+    fn get_field(&self, field: &MetadataField) -> Option<MetadataValue> {
+        match field {
+            MetadataField::Title => get_str(self, "TIT2"),
+            MetadataField::Subtitle => get_str(self, "TIT3"),
+            MetadataField::Album => get_str(self, "TALB"),
+            MetadataField::Performers => get_list(self, "TPE1"),
+            MetadataField::AlbumArtist => get_str(self, "TPE2"),
+            MetadataField::Composers => get_list(self, "TCOM"),
+            MetadataField::Arranger => get_str(self, "TPE4"),
+            MetadataField::Comment => {
+                let vec = self
+                    .comments()
+                    .map(|x| x.text.to_owned())
+                    .collect::<Vec<_>>();
+                if vec.is_empty() {
+                    None
+                } else {
+                    Some(MetadataValue::List(vec))
+                }
+            }
+            MetadataField::Track => self.track().map(MetadataValue::Number),
+            MetadataField::TrackTotal => self.total_tracks().map(MetadataValue::Number),
+            MetadataField::Disc => self.disc().map(MetadataValue::Number),
+            MetadataField::DiscTotal => self.total_discs().map(MetadataValue::Number),
+            MetadataField::Year => self.year().map(|x| x as u32).map(MetadataValue::Number),
+            MetadataField::Language => get_str(self, "TLAN"),
+            MetadataField::Genres => get_list(self, "TCON"),
+            MetadataField::Art | MetadataField::SimpleLyrics | MetadataField::Custom(_) => None,
+        }
+    }
     fn set_field(&mut self, field: &MetadataField, value: MetadataValue) -> Option<SetFieldResult> {
         match field {
             MetadataField::Title => handle_str(self, "TIT2", value),
@@ -163,7 +198,7 @@ impl SetMetadata for id3::Tag {
                 }
             }
             MetadataField::Track => {
-                let existing = from_num(self.track());
+                let existing = or_blank(self.track().map(MetadataValue::Number));
                 if existing == value {
                     return None;
                 }
@@ -181,7 +216,7 @@ impl SetMetadata for id3::Tag {
                 }
             }
             MetadataField::TrackTotal => {
-                let existing = from_num(self.total_tracks());
+                let existing = or_blank(self.total_tracks().map(MetadataValue::Number));
                 if existing == value {
                     return None;
                 }
@@ -199,7 +234,7 @@ impl SetMetadata for id3::Tag {
                 }
             }
             MetadataField::Disc => {
-                let existing = from_num(self.disc());
+                let existing = or_blank(self.disc().map(MetadataValue::Number));
                 if existing == value {
                     return None;
                 }
@@ -217,7 +252,7 @@ impl SetMetadata for id3::Tag {
                 }
             }
             MetadataField::DiscTotal => {
-                let existing = from_num(self.total_discs());
+                let existing = or_blank(self.total_discs().map(MetadataValue::Number));
                 if existing == value {
                     return None;
                 }
@@ -235,7 +270,7 @@ impl SetMetadata for id3::Tag {
                 }
             }
             MetadataField::Year => {
-                let existing = from_num(self.year().map(|x| x as u32));
+                let existing = or_blank(self.year().map(|x| x as u32).map(MetadataValue::Number));
                 if existing == value {
                     return None;
                 }
@@ -259,11 +294,17 @@ impl SetMetadata for id3::Tag {
     }
 }
 impl SetMetadata for metaflac::Tag {
+    fn get_field(&self, field: &MetadataField) -> Option<MetadataValue> {
+        None
+    }
     fn set_field(&mut self, field: &MetadataField, value: MetadataValue) -> Option<SetFieldResult> {
         None
     }
 }
 impl SetMetadata for ape::Tag {
+    fn get_field(&self, field: &MetadataField) -> Option<MetadataValue> {
+        None
+    }
     fn set_field(&mut self, field: &MetadataField, value: MetadataValue) -> Option<SetFieldResult> {
         None
     }

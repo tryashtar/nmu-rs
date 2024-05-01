@@ -92,6 +92,47 @@ pub fn find_from_clean(config: &LibraryConfig, full_start: &Path, path: &Path) -
     vec![]
 }
 
+pub fn find_all_recursive(config: &LibraryConfig, full_start: &Path) -> Vec<ItemPath> {
+    walkdir::WalkDir::new(full_start)
+        .into_iter()
+        .skip(1)
+        .filter_map(|x| x.ok())
+        .filter_map(|entry| {
+            let is_dir = entry.file_type().is_dir();
+            let full_path = entry.into_path();
+            let path = full_path.strip_prefix(full_start).ok();
+            if is_dir {
+                path.map(|x| ItemPath::Folder(x.to_owned()))
+            } else {
+                config.scan_settings(&full_path)?;
+                path.map(|x| ItemPath::Song(x.with_extension("")))
+            }
+        })
+        .sorted_by(|a, b| Ord::cmp(a.deref(), b.deref()))
+        .collect()
+}
+
+pub fn find_all(config: &LibraryConfig, full_start: &Path) -> Vec<ItemPath> {
+    if let Ok(read) = std::fs::read_dir(full_start) {
+        return read
+            .into_iter()
+            .filter_map(|x| x.ok())
+            .filter_map(|entry| {
+                let full_path = entry.path();
+                let path = full_path.strip_prefix(full_start).unwrap_or(&full_path);
+                if is_dir(&entry) {
+                    Some(ItemPath::Folder(path.to_owned()))
+                } else {
+                    config.scan_settings(&full_path)?;
+                    Some(ItemPath::Song(path.with_extension("")))
+                }
+            })
+            .sorted_by(|a, b| Ord::cmp(a.deref(), b.deref()))
+            .collect();
+    }
+    vec![]
+}
+
 pub fn find_matches(
     selector: &ItemSelector,
     nice_start: &Path,
@@ -102,42 +143,9 @@ pub fn find_matches(
         ItemSelector::This => vec![ItemPath::Folder(PathBuf::from(""))],
         ItemSelector::All { recursive } => {
             if *recursive {
-                walkdir::WalkDir::new(&full_start)
-                    .into_iter()
-                    .skip(1)
-                    .filter_map(|x| x.ok())
-                    .filter_map(|entry| {
-                        let is_dir = entry.file_type().is_dir();
-                        let full_path = entry.into_path();
-                        let path = full_path.strip_prefix(&full_start).ok();
-                        if is_dir {
-                            path.map(|x| ItemPath::Folder(x.to_owned()))
-                        } else {
-                            config.scan_settings(&full_path)?;
-                            path.map(|x| ItemPath::Song(x.with_extension("")))
-                        }
-                    })
-                    .sorted_by(|a, b| Ord::cmp(a.deref(), b.deref()))
-                    .collect()
+                find_all_recursive(config, &full_start)
             } else {
-                if let Ok(read) = std::fs::read_dir(&full_start) {
-                    return read
-                        .into_iter()
-                        .filter_map(|x| x.ok())
-                        .filter_map(|entry| {
-                            let full_path = entry.path();
-                            let path = full_path.strip_prefix(&full_start).unwrap_or(&full_path);
-                            if is_dir(&entry) {
-                                Some(ItemPath::Folder(path.to_owned()))
-                            } else {
-                                config.scan_settings(&full_path)?;
-                                Some(ItemPath::Song(path.with_extension("")))
-                            }
-                        })
-                        .sorted_by(|a, b| Ord::cmp(a.deref(), b.deref()))
-                        .collect();
-                }
-                vec![]
+                find_all(config, &full_start)
             }
         }
         ItemSelector::Multi(checks) => checks

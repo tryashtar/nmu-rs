@@ -246,17 +246,7 @@ fn set_id3(
             }
         }
         TagSettings::Set {} => {
-            let mut created = false;
-            let mut tag = id3::Tag::read_from_path(file_path);
-            if let Err(id3::Error {
-                kind: id3::ErrorKind::NoTag,
-                ..
-            }) = tag
-            {
-                tag = Ok(id3::Tag::new());
-                created = true;
-            }
-            let mut tag = tag?;
+            let (mut tag, created) = get_or_create_id3(file_path)?;
             let result = set_generic(&mut tag, nice_path, metadata, config, created)?;
             Ok(TagChanges::Set(result))
         }
@@ -290,17 +280,7 @@ fn set_flac(
             }
         }
         TagSettings::Set {} => {
-            let mut created = false;
-            let mut tag = metaflac::Tag::read_from_path(file_path);
-            if let Err(metaflac::Error {
-                kind: metaflac::ErrorKind::InvalidInput,
-                ..
-            }) = tag
-            {
-                tag = Ok(metaflac::Tag::new());
-                created = true;
-            }
-            let mut tag = tag?;
+            let (mut tag, created) = get_or_create_flac(file_path)?;
             let result = set_generic(&mut tag, nice_path, metadata, config, created)?;
             Ok(TagChanges::Set(result))
         }
@@ -327,17 +307,46 @@ fn set_ape(
             }
         }
         TagSettings::Set {} => {
-            let mut created = false;
-            let mut tag = ape::read_from_path(file_path);
-            if let Err(ape::Error::TagNotFound) = tag {
-                tag = Ok(ape::Tag::new());
-                created = true;
-            }
-            let mut tag = tag?;
+            let (mut tag, created) = get_or_create_ape(file_path)?;
             let result = set_generic(&mut tag, nice_path, metadata, config, created)?;
             Ok(TagChanges::Set(result))
         }
     }
+}
+
+pub fn get_or_create_ape(path: &Path) -> Result<(ape::Tag, bool), ape::Error> {
+    let tag = ape::read_from_path(path);
+    if let Err(ape::Error::TagNotFound) = tag {
+        return Ok((ape::Tag::new(), true));
+    }
+    let tag = tag?;
+    Ok((tag, false))
+}
+
+pub fn get_or_create_flac(path: &Path) -> Result<(metaflac::Tag, bool), metaflac::Error> {
+    let tag = metaflac::Tag::read_from_path(path);
+    if let Err(metaflac::Error {
+        kind: metaflac::ErrorKind::InvalidInput,
+        ..
+    }) = tag
+    {
+        return Ok((metaflac::Tag::new(), true));
+    }
+    let tag = tag?;
+    Ok((tag, false))
+}
+
+pub fn get_or_create_id3(path: &Path) -> Result<(id3::Tag, bool), id3::Error> {
+    let tag = id3::Tag::read_from_path(path);
+    if let Err(id3::Error {
+        kind: id3::ErrorKind::NoTag,
+        ..
+    }) = tag
+    {
+        return Ok((id3::Tag::new(), true));
+    }
+    let tag = tag?;
+    Ok((tag, false))
 }
 
 fn set_generic<T>(

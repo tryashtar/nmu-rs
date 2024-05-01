@@ -11,28 +11,140 @@ use serde::{Deserialize, Serialize};
 use crate::{
     file_stuff::{self, ConfigError, YamlError},
     library_config::LibraryConfig,
-    metadata::{Metadata, MetadataField, MetadataValue, PendingMetadata},
+    metadata::{self, Metadata, MetadataField, MetadataValue, PendingMetadata},
     strategy::{ApplyReport, ItemSelector, MetadataOperation, MusicItemType, ValueGetter},
     util::ItemPath,
 };
 
 #[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum RawSongConfigFile {
+    Direct(RawSongConfig),
+    Reverse { reverse: ReverseMode },
+}
+impl RawSongConfigFile {
+    pub fn finalize(
+        self,
+        folder: &Path,
+        config: &LibraryConfig,
+        others_so_far: &[LoadedConfig],
+    ) -> Result<RawSongConfig, ConfigError> {
+        match self {
+            Self::Direct(raw) => Ok(raw),
+            Self::Reverse { reverse } => {
+                let files = walkdir::WalkDir::new(folder)
+                    .into_iter()
+                    .skip(1)
+                    .filter_map(|x: Result<walkdir::DirEntry, walkdir::Error>| x.ok())
+                    .filter_map(|entry| {
+                        let path = entry.into_path();
+                        let settings = config.scan_settings(&path)?;
+                        let metadata = metadata::get_embedded(&path, &settings);
+                        Some((
+                            path.strip_prefix(folder)
+                                .unwrap_or(&path)
+                                .with_extension(""),
+                            metadata,
+                        ))
+                    })
+                    .collect::<Vec<_>>();
+                Ok(Self::make_reverse(reverse, files))
+            }
+        }
+    }
+    pub fn make_reverse(mode: ReverseMode, nice_files: Vec<(PathBuf, Metadata)>) -> RawSongConfig {
+        let mut map = HashMap::<MetadataField, HashMap<MetadataValue, BTreeSet<PathBuf>>>::new();
+        let half = nice_files.len() / 2;
+        for (full_path, metadata) in nice_files {
+            for (field, value) in metadata {
+                map.entry(field)
+                    .or_default()
+                    .entry(value)
+                    .or_default()
+                    .insert(full_path.clone());
+            }
+        }
+        let mut songs = HashMap::new();
+        let mut set_fields = vec![];
+        let mut set_many = vec![];
+        for (field, sets) in map {
+            for (value, entries) in &sets {
+                if entries.len() > half {
+                    songs.insert(field.clone(), ValueGetter::Direct(value.clone()));
+                }
+            }
+            if sets.len() > half {
+                let mut set_value = HashMap::new();
+                for (value, entries) in &sets {
+                    for entry in entries {
+                        set_value.insert(entry.to_path_buf(), ValueGetter::Direct(value.clone()));
+                    }
+                }
+                set_fields.push(RawFieldSetter {
+                    field,
+                    set: set_value,
+                })
+            }
+        }
+        RawSongConfig {
+            folders: None,
+            this: None,
+            subconfigs: None,
+            discs: None,
+            order: None,
+            set: None,
+            songs: if songs.is_empty() {
+                None
+            } else {
+                Some(ReferencableOperation::Direct(MetadataOperation::Set(songs)))
+            },
+            set_fields: if set_fields.is_empty() {
+                None
+            } else {
+                Some(set_fields)
+            },
+            set_all: if set_many.is_empty() {
+                None
+            } else {
+                Some(set_many)
+            },
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum ReverseMode {
+    Full,
+    Minimal,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct RawSongConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub songs: Option<ReferencableOperation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub folders: Option<ReferencableOperation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub this: Option<ReferencableOperation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub discs: Option<HashMap<u32, ItemSelector>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub order: Option<ItemSelector>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "set fields")]
     pub set_fields: Option<Vec<RawFieldSetter>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "set all")]
     pub set_all: Option<Vec<RawAllSetter>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub set: Option<HashMap<PathBuf, ReferencableOperation>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub subconfigs: Option<HashMap<PathBuf, RawSongConfig>>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug)]
 #[serde(untagged)]
 pub enum ReferencableOperation {
     Reference(String),
@@ -40,13 +152,13 @@ pub enum ReferencableOperation {
     Many(Vec<ReferencableOperation>),
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct RawAllSetter {
     pub names: ItemSelector,
     pub set: ReferencableOperation,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct RawFieldSetter {
     pub field: MetadataField,
     pub set: HashMap<PathBuf, ValueGetter>,
@@ -188,7 +300,7 @@ pub fn get_relevant_configs(
         let loaded = config_cache
             .entry(config_path.clone())
             .or_insert_with_key(|x| {
-                let config = load_config(x, nice_folder, library_config)
+                let config = load_config(x, nice_folder, library_config, &results)
                     .map(Rc::new)
                     .map_err(Rc::new);
                 match &config {
@@ -231,12 +343,28 @@ fn load_config(
     full_path: &Path,
     nice_folder: &Path,
     library_config: &LibraryConfig,
+    others_so_far: &[LoadedConfig],
 ) -> Result<SongConfig, ConfigError> {
-    match file_stuff::load_yaml::<RawSongConfig>(full_path) {
+    match file_stuff::load_yaml::<RawSongConfigFile>(full_path) {
         Err(error) => Err(ConfigError::Yaml(error)),
-        Ok(config) => library_config
-            .resolve_config(config, nice_folder)
-            .map_err(ConfigError::Library),
+        Ok(config) => {
+            let resave = matches!(config, RawSongConfigFile::Reverse { .. });
+            let raw = config.finalize(
+                full_path.parent().unwrap_or(Path::new("")),
+                library_config,
+                others_so_far,
+            )?;
+            let save_result = if resave {
+                file_stuff::save_yaml(full_path, &raw)
+            } else {
+                Ok(())
+            };
+            let result = library_config
+                .resolve_config(raw, nice_folder)
+                .map_err(ConfigError::Library);
+            save_result?;
+            result
+        }
     }
 }
 

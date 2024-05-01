@@ -140,6 +140,7 @@ impl LibraryReport {
                 for entry in map.values_mut() {
                     entry.0.retain(|x| valid_names.contains(x));
                 }
+                map.retain(|_, v| !v.0.is_empty());
             }
             LibraryReport::ItemData { map, .. } => {
                 map.retain(|k, _| valid_names.contains(k));

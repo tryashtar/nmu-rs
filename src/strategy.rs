@@ -17,7 +17,7 @@ use crate::{
     util::{OutOfBoundsDecision, Range},
 };
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug)]
 #[serde(untagged)]
 pub enum MetadataOperation {
     Blank {
@@ -353,7 +353,7 @@ impl MusicItemType {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug)]
 pub enum FieldSelector {
     #[serde(rename = "*")]
     All,
