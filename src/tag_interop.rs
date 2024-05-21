@@ -5,7 +5,7 @@ use itertools::Itertools;
 use strum::IntoEnumIterator;
 
 use crate::{
-    lyrics::{ParseError, RichLyrics, SyncedLine, SyncedLyrics},
+    lyrics::{LineParseError, RichLyrics, SyncedLine, SyncedLyrics},
     metadata::{Metadata, MetadataField, MetadataValue},
 };
 
@@ -19,12 +19,12 @@ pub enum SetValue<T> {
 pub enum GetLyricsError {
     #[error("Lyrics not present in tag")]
     NotEmbedded,
-    #[error("{0}")]
+    #[error(transparent)]
     Io(#[from] std::io::Error),
-    #[error("{0}")]
+    #[error(transparent)]
     Json(#[from] serde_json::Error),
-    #[error("{0}")]
-    Parsing(#[from] ParseError),
+    #[error(transparent)]
+    Parsing(#[from] LineParseError),
 }
 
 pub trait GetLyrics {
@@ -410,7 +410,7 @@ impl GetLyrics for id3::Tag {
 }
 
 enum SyncedOrSimple {
-    Simple(String, ParseError),
+    Simple(String, LineParseError),
     Synced(SyncedLyrics),
 }
 fn try_lyrics(lines: Vec<String>) -> SyncedOrSimple {

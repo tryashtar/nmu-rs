@@ -21,7 +21,7 @@ pub type ProcessedArtCache = HashMap<PathBuf, Result<Rc<DynamicImage>, Rc<ArtErr
 pub enum ArtError {
     #[error("Config failed")]
     Config,
-    #[error("{0}")]
+    #[error(transparent)]
     Image(#[from] ImageError),
 }
 

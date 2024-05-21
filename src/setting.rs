@@ -182,16 +182,12 @@ pub fn get_tag_lyrics(changes: &AddToSongReport) -> Option<&SomeLyrics> {
 }
 
 #[derive(thiserror::Error, Debug)]
+#[error(transparent)]
 pub enum AddToSongError {
-    #[error("{0}")]
     Io(#[from] std::io::Error),
-    #[error("{0}")]
     Id3(#[from] id3::Error),
-    #[error("{0}")]
     Flac(#[from] metaflac::Error),
-    #[error("{0}")]
     Ape(#[from] ape::Error),
-    #[error("{0}")]
     Lyrics(#[from] GetLyricsError),
 }
 

@@ -4,12 +4,10 @@ use crate::{
     library_config::{
         DateCache, LibraryConfig, ScanDecision, ScanOptions, TagOptions, TagSettings,
     },
+    lyrics::{parse_duration, TimeParseError},
     metadata::{self, MetadataField, MetadataValue},
     modifier::{ValueError, ValueModifier},
-    song_config::{
-        AllSetter, LoadedConfig, RawSongConfig, RawSongConfigFile, ReferencableOperation,
-        ReverseMode, SongConfig,
-    },
+    song_config::{AllSetter, LoadedConfig, RawSongConfigFile, ReverseMode, SongConfig},
     strategy::{
         FieldSelector, FieldValueGetter, ItemSelector, LocalItemSelector, MetadataOperation,
         PathSegment, ValueGetter, WarnBehavior,
@@ -18,11 +16,13 @@ use crate::{
 };
 use std::{
     collections::{HashMap, HashSet},
+    num::IntErrorKind,
     path::{Path, PathBuf},
     rc::Rc,
     str::FromStr,
 };
 
+// replace assert!(matches!()) with assert_matches!() when stable
 mod interop {
     use id3::TagLike;
 
@@ -1133,4 +1133,132 @@ fn reverse_config() {
     ];
     let config = RawSongConfigFile::make_reverse(ReverseMode::Full, files);
     println!("{}", serde_yaml::to_string(&config).unwrap());
+}
+
+#[test]
+fn good_durations() {
+    let durations = [
+        ("0:00", 0.0),
+        ("00:00", 0.0),
+        ("1:00", 60.0),
+        ("1:20", 80.0),
+        ("2:33", 153.0),
+        ("04:10", 250.0),
+        ("3:02.5", 182.5),
+        ("2:20:20", 8420.0),
+        ("1:00:00.250", 3600.25),
+        ("03:15:04.0", 11704.0),
+        ("500:00:00", 1800000.0),
+        ("00:00:00.0", 0.0),
+    ];
+    for (str, secs) in durations {
+        assert_eq!(
+            parse_duration(str).expect(str),
+            core::time::Duration::from_secs_f32(secs),
+            "{str}"
+        );
+    }
+}
+
+#[test]
+fn bad_durations() {
+    assert!(matches!(
+        parse_duration("").unwrap_err(),
+        TimeParseError::MissingColon
+    ));
+    assert!(matches!(
+        parse_duration("aa").unwrap_err(),
+        TimeParseError::MissingColon
+    ));
+    assert!(matches!(
+        parse_duration("a:a").unwrap_err(),
+        TimeParseError::Int(x) if *x.kind() == IntErrorKind::InvalidDigit
+    ));
+    assert!(matches!(
+        parse_duration("0:0").unwrap_err(),
+        TimeParseError::WrongLength
+    ));
+    assert!(matches!(
+        parse_duration("00:0").unwrap_err(),
+        TimeParseError::WrongLength
+    ));
+    assert!(matches!(
+        parse_duration("000:00").unwrap_err(),
+        TimeParseError::WrongLength
+    ));
+    assert!(matches!(
+        parse_duration("0:000").unwrap_err(),
+        TimeParseError::WrongLength
+    ));
+    assert!(matches!(
+        parse_duration("0:5.55").unwrap_err(),
+        TimeParseError::WrongLength
+    ));
+    assert!(matches!(
+        parse_duration("0:-3.5").unwrap_err(),
+        TimeParseError::ExceedsBounds
+    ));
+    assert!(matches!(
+        parse_duration("70:00").unwrap_err(),
+        TimeParseError::ExceedsBounds
+    ));
+    assert!(matches!(
+        parse_duration("10:60").unwrap_err(),
+        TimeParseError::ExceedsBounds
+    ));
+    assert!(matches!(
+        parse_duration("20:00.123asdf").unwrap_err(),
+        TimeParseError::Float(_)
+    ));
+    assert!(matches!(
+        parse_duration("10:2:30").unwrap_err(),
+        TimeParseError::WrongLength
+    ));
+    assert!(matches!(
+        parse_duration("10:20:3").unwrap_err(),
+        TimeParseError::WrongLength
+    ));
+    assert!(matches!(
+        parse_duration("10:20:30:40").unwrap_err(),
+        TimeParseError::WrongLength
+    ));
+    assert!(matches!(
+        parse_duration("10:20:").unwrap_err(),
+        TimeParseError::WrongLength
+    ));
+    assert!(matches!(
+        parse_duration(":10:20").unwrap_err(),
+        TimeParseError::Int(x) if *x.kind() == IntErrorKind::Empty
+    ));
+    assert!(matches!(
+        parse_duration(":").unwrap_err(),
+        TimeParseError::Int(x) if *x.kind() == IntErrorKind::Empty
+    ));
+}
+
+#[test]
+fn duration1() {
+    let str = "1:23:45";
+    let duration = parse_duration(str);
+    assert_eq!(
+        duration.unwrap(),
+        core::time::Duration::from_secs(60 * 60 + 23 * 60 + 45)
+    );
+}
+
+#[test]
+fn duration2() {
+    let str = "01:23:45";
+    let duration = parse_duration(str);
+    assert_eq!(
+        duration.unwrap(),
+        core::time::Duration::from_secs(60 * 60 + 23 * 60 + 45)
+    );
+}
+
+#[test]
+fn duration3() {
+    let str = "001:23:45";
+    let duration = parse_duration(str);
+    assert!(matches!(duration, Err(TimeParseError::WrongLength)));
 }

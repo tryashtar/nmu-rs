@@ -61,11 +61,11 @@ impl SyncedLine {
     pub fn to_str(&self) -> String {
         format!("[{}]{}", duration_to_str(&self.timestamp), self.text)
     }
-    pub fn parse(line: &str) -> Result<Self, ParseError> {
+    pub fn parse(line: &str) -> Result<Self, LineParseError> {
         if !line.starts_with('[') {
-            return Err(ParseError::MissingColon);
+            return Err(LineParseError::MissingBrackets);
         }
-        let close = line.find(']').ok_or(ParseError::MissingColon)?;
+        let close = line.find(']').ok_or(LineParseError::MissingBrackets)?;
         let timestamp = parse_duration(&line[1..close])?;
         Ok(Self {
             timestamp,
@@ -155,7 +155,7 @@ impl From<SyncedLyrics> for RichLyrics {
     }
 }
 
-fn duration_to_str(duration: &std::time::Duration) -> String {
+pub fn duration_to_str(duration: &std::time::Duration) -> String {
     let total_secs = duration.as_secs();
     let hours = total_secs / 60 / 60;
     let minutes = total_secs / 60 % 60;
@@ -171,62 +171,55 @@ fn duration_to_str(duration: &std::time::Duration) -> String {
         format!("{minutes:0>2}:{secs_str}")
     }
 }
-fn parse_duration(string: &str) -> Result<std::time::Duration, ParseError> {
-    if string.len() < 4 {
-        return Err(ParseError::WrongLength);
+fn parse_seconds(seconds: &str) -> Result<f64, TimeParseError> {
+    let decimal_point = seconds.find('.');
+    if decimal_point.unwrap_or(seconds.len()) != 2 {
+        return Err(TimeParseError::WrongLength);
     }
-    let mut colon_index = 0;
-    for (i, char) in string.chars().enumerate().skip(1).take(2) {
-        if char == ':' {
-            colon_index = i;
-        }
+    let number = seconds.parse::<f64>().map_err(TimeParseError::Float)?;
+    if number.is_infinite() || number.is_nan() || !(0.0..60.0).contains(&number) {
+        return Err(TimeParseError::ExceedsBounds);
     }
-    if colon_index == 0 {
-        return Err(ParseError::MissingColon);
-    }
-    let first_number = u64::from(
-        string[..colon_index]
-            .parse::<u8>()
-            .map_err(ParseError::Int)?,
-    );
-    let remaining = &string[colon_index + 1..];
-    if remaining.len() < 2 {
-        return Err(ParseError::WrongLength);
-    }
-    let second_number = u64::from(remaining[..2].parse::<u8>().map_err(ParseError::Int)?);
-    let remaining = &remaining[2..];
-    match remaining.chars().next() {
-        None => Ok(std::time::Duration::from_secs(
-            first_number * 60 + second_number,
-        )),
-        Some('.') => {
-            let fraction = remaining.parse::<f64>().map_err(ParseError::Float)?;
+    Ok(number)
+}
+pub fn parse_duration(string: &str) -> Result<std::time::Duration, TimeParseError> {
+    let mut splits = string.split(':');
+    let first = splits.next().ok_or(TimeParseError::MissingColon)?;
+    let second = splits.next().ok_or(TimeParseError::MissingColon)?;
+    let first_number = first.parse::<u32>().map_err(TimeParseError::Int)?;
+    match splits.next() {
+        None => {
+            // [M]M:SS[.fff]
+            let minutes = first_number;
+            if !matches!(first.len(), 1..=2) {
+                return Err(TimeParseError::WrongLength);
+            }
+            if minutes >= 60 {
+                return Err(TimeParseError::ExceedsBounds);
+            }
+            let seconds = parse_seconds(second)?;
             Ok(std::time::Duration::from_secs_f64(
-                (first_number as f64).mul_add(60.0, second_number as f64 + fraction),
+                minutes as f64 * 60.0 + seconds,
             ))
         }
-        Some(':') => {
-            let remaining = &remaining[1..];
-            if remaining.len() < 2 {
-                return Err(ParseError::WrongLength);
+        Some(third) => {
+            // [HH]H:MM:SS[.fff]
+            let hours = first_number;
+            if splits.next().is_some() {
+                return Err(TimeParseError::WrongLength);
             }
-            let third_number = u64::from(remaining[..2].parse::<u8>().map_err(ParseError::Int)?);
-            let remaining = &remaining[2..];
-            match remaining.chars().next() {
-                None => Ok(std::time::Duration::from_secs(
-                    first_number * 60 * 60 + second_number * 60 + third_number,
-                )),
-                Some('.') => {
-                    let fraction = remaining.parse::<f64>().map_err(ParseError::Float)?;
-                    Ok(std::time::Duration::from_secs_f64(
-                        (first_number as f64 * 60.0).mul_add(60.0, second_number as f64 * 60.0)
-                            + (third_number as f64 + fraction),
-                    ))
-                }
-                Some(_) => Err(ParseError::WrongLength),
+            if !matches!(second.len(), 2) {
+                return Err(TimeParseError::WrongLength);
             }
+            let minutes = second.parse::<u32>().map_err(TimeParseError::Int)?;
+            if minutes >= 60 {
+                return Err(TimeParseError::ExceedsBounds);
+            }
+            let seconds = parse_seconds(third)?;
+            Ok(std::time::Duration::from_secs_f64(
+                hours as f64 * 3600.0 + minutes as f64 * 60.0 + seconds,
+            ))
         }
-        Some(_) => Err(ParseError::WrongLength),
     }
 }
 
@@ -235,7 +228,7 @@ pub struct SyncedLyrics {
     pub lines: Vec<SyncedLine>,
 }
 impl SyncedLyrics {
-    pub fn parse(lines: Vec<String>) -> Result<Self, ParseError> {
+    pub fn parse(lines: Vec<String>) -> Result<Self, LineParseError> {
         let lines = lines
             .into_iter()
             .filter(|x| !x.is_empty())
@@ -252,15 +245,25 @@ impl SyncedLyrics {
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum ParseError {
+pub enum TimeParseError {
     #[error("Missing colon")]
     MissingColon,
+    #[error("Exceeds bounds")]
+    ExceedsBounds,
     #[error("Wrong length")]
     WrongLength,
-    #[error("{0}")]
+    #[error(transparent)]
     Int(#[from] ParseIntError),
-    #[error("{0}")]
+    #[error(transparent)]
     Float(#[from] ParseFloatError),
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum LineParseError {
+    #[error("Missing brackets")]
+    MissingBrackets,
+    #[error(transparent)]
+    TimeError(#[from] TimeParseError),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]

@@ -15,14 +15,14 @@ use crate::{
 };
 
 #[derive(thiserror::Error, Debug)]
-#[error("{0}")]
+#[error(transparent)]
 pub enum YamlError {
     Io(#[from] std::io::Error),
     Yaml(#[from] serde_yaml::Error),
 }
 
 #[derive(thiserror::Error, Debug)]
-#[error("{0}")]
+#[error(transparent)]
 pub enum ConfigError {
     Yaml(#[from] YamlError),
     Library(#[from] LibraryError),
