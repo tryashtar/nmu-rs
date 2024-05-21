@@ -3,7 +3,6 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    fs::File,
     io::{BufRead, BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
     rc::Rc,
@@ -150,19 +149,19 @@ impl LibraryReport {
     pub fn save(&self) -> Result<(), YamlError> {
         match self {
             Self::SplitFields { path, map, .. } => {
-                let file = File::create(path)?;
+                let file = std::fs::File::create(path)?;
                 let writer = BufWriter::new(file);
                 serde_yaml::to_writer(writer, map)?;
                 Ok(())
             }
             Self::MergedFields { path, map, .. } => {
-                let file = File::create(path)?;
+                let file = std::fs::File::create(path)?;
                 let writer = BufWriter::new(file);
                 serde_yaml::to_writer(writer, map)?;
                 Ok(())
             }
             Self::ItemData { path, map, .. } => {
-                let file = File::create(path)?;
+                let file = std::fs::File::create(path)?;
                 let writer = BufWriter::new(file);
                 serde_yaml::to_writer(writer, map)?;
                 Ok(())
@@ -347,14 +346,14 @@ impl LyricsConfig {
     }
 
     fn read_rich(path: &Path) -> Result<RichLyrics, GetLyricsError> {
-        let file = File::open(path)?;
+        let file = std::fs::File::open(path)?;
         let reader = BufReader::new(file);
         let lyrics: RichLyrics = serde_json::de::from_reader(reader)?;
         Ok(lyrics)
     }
 
     fn read_synced(path: &Path) -> Result<SyncedLyrics, GetLyricsError> {
-        let file = File::open(path)?;
+        let file = std::fs::File::open(path)?;
         let reader = BufReader::new(file);
         let lines = reader.lines().collect::<Result<Vec<_>, _>>()?;
         let lyrics = SyncedLyrics::parse(lines)?;
@@ -362,7 +361,7 @@ impl LyricsConfig {
     }
 
     fn read_simple(path: &Path) -> Result<String, GetLyricsError> {
-        let file = File::open(path)?;
+        let file = std::fs::File::open(path)?;
         let mut reader = BufReader::new(file);
         let mut buf = String::new();
         reader.read_to_string(&mut buf)?;
@@ -1066,7 +1065,7 @@ impl DateCache {
                     self.cache.insert(entry, time);
                 }
                 let ordered: BTreeMap<_, _> = self.cache.iter().collect();
-                let file = File::create(path)?;
+                let file = std::fs::File::create(path)?;
                 let writer = BufWriter::new(file);
                 serde_yaml::to_writer(writer, &ordered)?;
                 Ok(())

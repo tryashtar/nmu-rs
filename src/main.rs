@@ -10,7 +10,6 @@ use std::{
 use clap::Parser;
 use color_print::cformat;
 use regex::Regex;
-use walkdir::DirEntry;
 
 use crate::{
     art::{
@@ -56,18 +55,24 @@ struct Cli {
 #[derive(clap::Subcommand)]
 enum Commands {
     /// Scan and update songs
-    Scan {
-        /// Rescan songs that haven't changed recently
-        #[clap(long)]
-        full: bool,
-        /// Path to library config file
-        library_config_path: PathBuf,
-    },
+    Scan(ScanCommand),
     /// Create a template library config file
     Generate {
         /// Output path for config file
         library_config_path: PathBuf,
     },
+}
+
+#[derive(clap::Args)]
+struct ScanCommand {
+    /// Rescan songs that haven't changed recently
+    #[clap(long)]
+    full: bool,
+    /// Only print changes, don't save anything to disk
+    #[clap(long)]
+    dry_run: bool,
+    /// Path to library config file
+    library_config_path: PathBuf,
 }
 
 fn main() {
@@ -87,11 +92,8 @@ fn main() {
                 );
             }
         },
-        Commands::Scan {
-            library_config_path,
-            full,
-        } => {
-            let raw_config = file_stuff::load_yaml::<RawLibraryConfig>(&library_config_path);
+        Commands::Scan(scan) => {
+            let raw_config = file_stuff::load_yaml::<RawLibraryConfig>(&scan.library_config_path);
             match raw_config {
                 Err(error) => {
                     eprintln!(
@@ -101,7 +103,7 @@ fn main() {
                 }
                 Ok(raw_config) => {
                     let library_config_folder =
-                        library_config_path.parent().unwrap_or(Path::new(""));
+                        &scan.library_config_path.parent().unwrap_or(Path::new(""));
                     match LibraryConfig::new(library_config_folder, raw_config) {
                         Err(error) => {
                             eprintln!(
@@ -110,7 +112,7 @@ fn main() {
                             );
                         }
                         Ok(mut library_config) => {
-                            do_scan(&mut library_config, library_config_path, full);
+                            do_scan(scan, &mut library_config);
                         }
                     }
                 }
@@ -176,16 +178,16 @@ struct WorkProgress {
     failed: u32,
 }
 
-fn do_scan(library_config: &mut LibraryConfig, library_config_path: PathBuf, full: bool) {
+fn do_scan(scan: ScanCommand, library_config: &mut LibraryConfig) {
     let mut config_cache: ConfigCache = HashMap::new();
     let mut progress = WorkProgress {
         changed: 0,
         failed: 0,
     };
-    if full
+    if scan.full
         || library_config
             .date_cache
-            .changed_recently(&library_config_path)
+            .changed_recently(&scan.library_config_path)
     {
         library_config.date_cache.cache.clear();
     }
@@ -197,7 +199,14 @@ fn do_scan(library_config: &mut LibraryConfig, library_config_path: PathBuf, ful
     } = find_scan_items(library_config);
     if let Some(art_repo) = &mut library_config.art_repo {
         if let Some(disk) = &mut art_repo.disk_cache {
-            clean_processed_art(&scan_images, &art_repo.templates_folder, disk);
+            if scan.dry_run {
+                println!(
+                    "Not deleting {} cached images in a dry run",
+                    scan_images.len()
+                );
+            } else {
+                clean_processed_art(&scan_images, &art_repo.templates_folder, disk);
+            }
         }
     }
     for folder_path in scan_folders {
@@ -222,6 +231,7 @@ fn do_scan(library_config: &mut LibraryConfig, library_config_path: PathBuf, ful
             library_config,
             &mut config_cache,
             options,
+            scan.dry_run,
         );
         handle_song_results(&results, &nice_path, library_config);
         if results.has_fatal_shared_error() || results.has_fatal_local_error() {
@@ -244,20 +254,33 @@ fn do_scan(library_config: &mut LibraryConfig, library_config_path: PathBuf, ful
     } else {
         println!("Updated {}, errored {}", progress.changed, progress.failed);
     }
-    println!("Saving caches...");
-    for path in skipped {
-        all_valid.insert(
-            path.strip_prefix(&library_config.library_folder)
-                .unwrap_or(&path)
-                .with_extension(""),
+    if scan.dry_run {
+        println!(
+            "Not updating caches or {} reports in a dry run",
+            library_config.reports.len()
         );
-    }
-    library_config.date_cache.mark_updated(library_config_path);
-    save_caches(library_config);
-    save_reports(library_config, &all_valid);
-    if let Some(art_repo) = &library_config.art_repo {
-        if let Some(disk) = &art_repo.disk_cache {
-            save_processed_art(disk, &art_repo.processed_cache);
+    } else {
+        println!("Saving caches...");
+        for path in skipped {
+            all_valid.insert(
+                path.strip_prefix(&library_config.library_folder)
+                    .unwrap_or(&path)
+                    .with_extension(""),
+            );
+        }
+        library_config
+            .date_cache
+            .mark_updated(scan.library_config_path);
+        save_caches(library_config);
+        if !library_config.reports.is_empty() {
+            println!("Updating {} reports...", library_config.reports.len());
+        }
+        save_reports(library_config, &all_valid);
+        if let Some(art_repo) = &library_config.art_repo {
+            if let Some(disk) = &art_repo.disk_cache {
+                println!("Saving {} cached images...", art_repo.processed_cache.len());
+                save_processed_art(disk, &art_repo.processed_cache);
+            }
         }
     }
     println!("Done!");
@@ -461,7 +484,8 @@ fn clean_processed_art(templates: &BTreeSet<PathBuf>, folder: &Path, disk: &mut 
             .with_extension("");
         let full = disk.get_path(&nice);
         match std::fs::remove_file(&full) {
-            Err(err) if err.kind() != ErrorKind::NotFound => {
+            Err(err) if err.kind() == ErrorKind::NotFound => {}
+            Err(err) => {
                 eprintln!(
                     "{}",
                     cformat!(
@@ -475,7 +499,6 @@ fn clean_processed_art(templates: &BTreeSet<PathBuf>, folder: &Path, disk: &mut 
             Ok(_) => {
                 deleted += 1;
             }
-            _ => {}
         }
     }
     if deleted > 0 {
@@ -636,7 +659,7 @@ struct ScanResults {
     skipped: HashSet<PathBuf>,
 }
 
-fn is_hidden(entry: &DirEntry) -> bool {
+fn is_hidden(entry: &walkdir::DirEntry) -> bool {
     entry
         .file_name()
         .to_str()

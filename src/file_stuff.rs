@@ -1,5 +1,4 @@
 use std::{
-    fs::{DirEntry, File},
     io::{BufReader, BufWriter, Write},
     ops::Deref,
     path::{Path, PathBuf},
@@ -32,7 +31,7 @@ pub fn load_yaml<T>(path: &Path) -> Result<T, YamlError>
 where
     T: DeserializeOwned,
 {
-    let file = File::open(path)?;
+    let file = std::fs::File::open(path)?;
     let reader = BufReader::new(file);
     let yaml: T = serde_yaml::from_reader(reader)?;
     Ok(yaml)
@@ -42,14 +41,14 @@ pub fn save_yaml<T>(path: &Path, value: &T) -> Result<(), YamlError>
 where
     T: Serialize,
 {
-    let file = File::create_new(path)?;
+    let file = std::fs::File::create_new(path)?;
     let mut writer = BufWriter::new(file);
     serde_yaml::to_writer(&mut writer, value)?;
     writer.flush()?;
     Ok(())
 }
 
-pub fn is_dir(entry: &DirEntry) -> bool {
+pub fn is_dir(entry: &std::fs::DirEntry) -> bool {
     entry.file_type().map(|x| x.is_dir()).unwrap_or(false)
 }
 

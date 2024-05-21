@@ -293,6 +293,7 @@ pub fn get_relevant_configs(
     library_config: &LibraryConfig,
     nice_path: &Path,
     config_cache: &mut ConfigCache,
+    dry_run: bool,
 ) -> GetConfigsResults {
     let mut newly_loaded = vec![];
     let mut results = vec![];
@@ -300,7 +301,7 @@ pub fn get_relevant_configs(
         let loaded = config_cache
             .entry(config_path.clone())
             .or_insert_with_key(|x| {
-                let config = load_config(x, nice_folder, library_config, &results)
+                let config = load_config(x, nice_folder, library_config, &results, dry_run)
                     .map(Rc::new)
                     .map_err(Rc::new);
                 match &config {
@@ -344,6 +345,7 @@ fn load_config(
     nice_folder: &Path,
     library_config: &LibraryConfig,
     others_so_far: &[LoadedConfig],
+    dry_run: bool,
 ) -> Result<SongConfig, ConfigError> {
     match file_stuff::load_yaml::<RawSongConfigFile>(full_path) {
         Err(error) => Err(ConfigError::Yaml(error)),
@@ -354,7 +356,7 @@ fn load_config(
                 library_config,
                 others_so_far,
             )?;
-            let save_result = if resave {
+            let save_result = if resave && !dry_run {
                 file_stuff::save_yaml(full_path, &raw)
             } else {
                 Ok(())

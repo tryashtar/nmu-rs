@@ -23,8 +23,10 @@ pub fn process_folder(
     full_path: &Path,
     library_config: &mut LibraryConfig,
     config_cache: &mut ConfigCache,
+    dry_run: bool,
 ) -> ProcessFolderResults {
-    let configs = song_config::get_relevant_configs(library_config, nice_path, config_cache);
+    let configs =
+        song_config::get_relevant_configs(library_config, nice_path, config_cache, dry_run);
     if let Ok(loaded) = &configs.result {
         let mut art_results = GetArtResults::Keep;
         let mut results = metadata::get_metadata(nice_path, loaded, library_config);
@@ -107,8 +109,10 @@ pub fn process_song(
     library_config: &mut LibraryConfig,
     config_cache: &mut ConfigCache,
     options: &TagOptions,
+    dry_run: bool,
 ) -> ProcessSongResults {
-    let configs = song_config::get_relevant_configs(library_config, nice_path, config_cache);
+    let configs =
+        song_config::get_relevant_configs(library_config, nice_path, config_cache, dry_run);
     if let Ok(loaded) = &configs.result {
         let mut art_results = GetArtResults::Keep;
         let mut results = metadata::get_metadata(nice_path, loaded, library_config);
@@ -145,8 +149,10 @@ pub fn process_song(
                 MetadataValue::string(lyrics.clone().into_simple()),
             );
             if let Some(lyrics_config) = &library_config.lyrics {
-                let report = lyrics_config.write(nice_path, lyrics);
-                file_lyrics = Some(report);
+                if !dry_run {
+                    let report = lyrics_config.write(nice_path, lyrics);
+                    file_lyrics = Some(report);
+                }
             }
         }
         return ProcessSongResults {
