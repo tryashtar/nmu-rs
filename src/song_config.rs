@@ -35,28 +35,39 @@ impl RawSongConfigFile {
                 let files = walkdir::WalkDir::new(folder)
                     .into_iter()
                     .skip(1)
-                    .filter_map(|x: Result<walkdir::DirEntry, walkdir::Error>| x.ok())
+                    .filter_map(|x| x.ok())
+                    .filter(|x| x.file_type().is_file())
                     .filter_map(|entry| {
-                        let path = entry.into_path();
-                        let settings = config.scan_settings(&path)?;
-                        let metadata = metadata::get_embedded(&path, &settings);
-                        Some((
-                            path.strip_prefix(folder)
-                                .unwrap_or(&path)
-                                .with_extension(""),
-                            metadata,
-                        ))
+                        let full_path = entry.into_path();
+                        let nice_path = full_path
+                            .strip_prefix(folder)
+                            .unwrap_or(&full_path)
+                            .with_extension("");
+                        let settings = config.scan_settings(&full_path)?;
+                        let embedded = metadata::get_embedded(&full_path, &settings);
+                        let current = match reverse {
+                            ReverseMode::Full => HashMap::new(),
+                            ReverseMode::Minimal => {
+                                metadata::get_metadata(
+                                    &ItemPath::Song(nice_path.clone()),
+                                    others_so_far,
+                                    config,
+                                )
+                                .metadata
+                            }
+                        };
+                        Some((nice_path, (current, embedded)))
                     })
-                    .collect::<Vec<_>>();
-                Ok(Self::make_reverse(reverse, files))
+                    .collect::<HashMap<_, _>>();
+                Ok(Self::make_reverse(files))
             }
         }
     }
-    pub fn make_reverse(mode: ReverseMode, nice_files: Vec<(PathBuf, Metadata)>) -> RawSongConfig {
+    pub fn make_reverse(nice_files: HashMap<PathBuf, (Metadata, Metadata)>) -> RawSongConfig {
         let mut map = HashMap::<MetadataField, HashMap<MetadataValue, BTreeSet<PathBuf>>>::new();
         let half = nice_files.len() / 2;
-        for (full_path, metadata) in nice_files {
-            for (field, value) in metadata {
+        for (full_path, (current, embedded)) in nice_files {
+            for (field, value) in embedded {
                 map.entry(field)
                     .or_default()
                     .entry(value)
@@ -147,7 +158,7 @@ pub struct RawSongConfig {
 #[derive(Deserialize, Serialize, Debug)]
 #[serde(untagged)]
 pub enum ReferencableOperation {
-    Reference(String),
+    Reference(Rc<str>),
     Direct(MetadataOperation),
     Many(Vec<ReferencableOperation>),
 }

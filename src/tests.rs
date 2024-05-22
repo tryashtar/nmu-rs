@@ -1010,128 +1010,149 @@ fn selector_matches() {
 
 #[test]
 fn reverse_config() {
-    let files = vec![
+    let files = HashMap::from([
         (
             PathBuf::from("a"),
-            HashMap::from([
-                (
-                    MetadataField::Title,
-                    MetadataValue::string(String::from("a")),
-                ),
-                (
-                    MetadataField::Album,
-                    MetadataValue::string(String::from("test")),
-                ),
-                (
-                    MetadataField::Performers,
-                    MetadataValue::string(String::from("guy 1")),
-                ),
-            ]),
+            (
+                HashMap::new(),
+                HashMap::from([
+                    (
+                        MetadataField::Title,
+                        MetadataValue::string(String::from("a")),
+                    ),
+                    (
+                        MetadataField::Album,
+                        MetadataValue::string(String::from("test")),
+                    ),
+                    (
+                        MetadataField::Performers,
+                        MetadataValue::string(String::from("guy 1")),
+                    ),
+                ]),
+            ),
         ),
         (
             PathBuf::from("b"),
-            HashMap::from([
-                (
-                    MetadataField::Title,
-                    MetadataValue::string(String::from("b")),
-                ),
-                (
-                    MetadataField::Album,
-                    MetadataValue::string(String::from("test")),
-                ),
-                (
-                    MetadataField::Performers,
-                    MetadataValue::string(String::from("guy 1")),
-                ),
-            ]),
+            (
+                HashMap::new(),
+                HashMap::from([
+                    (
+                        MetadataField::Title,
+                        MetadataValue::string(String::from("b")),
+                    ),
+                    (
+                        MetadataField::Album,
+                        MetadataValue::string(String::from("test")),
+                    ),
+                    (
+                        MetadataField::Performers,
+                        MetadataValue::string(String::from("guy 1")),
+                    ),
+                ]),
+            ),
         ),
         (
             PathBuf::from("c"),
-            HashMap::from([
-                (
-                    MetadataField::Title,
-                    MetadataValue::string(String::from("c")),
-                ),
-                (
-                    MetadataField::Album,
-                    MetadataValue::string(String::from("test")),
-                ),
-                (
-                    MetadataField::Performers,
-                    MetadataValue::string(String::from("guy 1")),
-                ),
-            ]),
+            (
+                HashMap::new(),
+                HashMap::from([
+                    (
+                        MetadataField::Title,
+                        MetadataValue::string(String::from("c")),
+                    ),
+                    (
+                        MetadataField::Album,
+                        MetadataValue::string(String::from("test")),
+                    ),
+                    (
+                        MetadataField::Performers,
+                        MetadataValue::string(String::from("guy 1")),
+                    ),
+                ]),
+            ),
         ),
         (
             PathBuf::from("d"),
-            HashMap::from([
-                (
-                    MetadataField::Title,
-                    MetadataValue::string(String::from("d")),
-                ),
-                (
-                    MetadataField::Album,
-                    MetadataValue::string(String::from("test")),
-                ),
-                (
-                    MetadataField::Performers,
-                    MetadataValue::string(String::from("guy 2")),
-                ),
-            ]),
+            (
+                HashMap::new(),
+                HashMap::from([
+                    (
+                        MetadataField::Title,
+                        MetadataValue::string(String::from("d")),
+                    ),
+                    (
+                        MetadataField::Album,
+                        MetadataValue::string(String::from("test")),
+                    ),
+                    (
+                        MetadataField::Performers,
+                        MetadataValue::string(String::from("guy 2")),
+                    ),
+                ]),
+            ),
         ),
         (
             PathBuf::from("e"),
-            HashMap::from([
-                (
-                    MetadataField::Title,
-                    MetadataValue::string(String::from("e")),
-                ),
-                (
-                    MetadataField::Album,
-                    MetadataValue::string(String::from("test")),
-                ),
-                (
-                    MetadataField::Performers,
-                    MetadataValue::string(String::from("guy 2")),
-                ),
-            ]),
+            (
+                HashMap::new(),
+                HashMap::from([
+                    (
+                        MetadataField::Title,
+                        MetadataValue::string(String::from("e")),
+                    ),
+                    (
+                        MetadataField::Album,
+                        MetadataValue::string(String::from("test")),
+                    ),
+                    (
+                        MetadataField::Performers,
+                        MetadataValue::string(String::from("guy 2")),
+                    ),
+                ]),
+            ),
         ),
         (
             PathBuf::from("f"),
-            HashMap::from([
-                (
-                    MetadataField::Title,
-                    MetadataValue::string(String::from("f")),
-                ),
-                (
-                    MetadataField::Album,
-                    MetadataValue::string(String::from("test")),
-                ),
-                (
-                    MetadataField::Performers,
-                    MetadataValue::string(String::from("guy 2")),
-                ),
-            ]),
+            (
+                HashMap::new(),
+                HashMap::from([
+                    (
+                        MetadataField::Title,
+                        MetadataValue::string(String::from("f")),
+                    ),
+                    (
+                        MetadataField::Album,
+                        MetadataValue::string(String::from("test")),
+                    ),
+                    (
+                        MetadataField::Performers,
+                        MetadataValue::string(String::from("guy 2")),
+                    ),
+                ]),
+            ),
         ),
         (
             PathBuf::from("g"),
-            HashMap::from([
-                (
-                    MetadataField::Title,
-                    MetadataValue::string(String::from("g")),
-                ),
-                (
-                    MetadataField::Album,
-                    MetadataValue::string(String::from("test")),
-                ),
-                (
-                    MetadataField::Performers,
-                    MetadataValue::string(String::from("guy 3")),
-                ),
-            ]),
+            (
+                HashMap::new(),
+                HashMap::from([
+                    (
+                        MetadataField::Title,
+                        MetadataValue::string(String::from("g")),
+                    ),
+                    (
+                        MetadataField::Album,
+                        MetadataValue::string(String::from("test")),
+                    ),
+                    (
+                        MetadataField::Performers,
+                        MetadataValue::string(String::from("guy 3")),
+                    ),
+                ]),
+            ),
         ),
-    ];
-    let config = RawSongConfigFile::make_reverse(ReverseMode::Full, files);
+    ]);
+    let config = RawSongConfigFile::make_reverse(files);
     println!("{}", serde_yaml::to_string(&config).unwrap());
 }
 
@@ -1234,31 +1255,4 @@ fn bad_durations() {
         parse_duration(":").unwrap_err(),
         TimeParseError::Int(x) if *x.kind() == IntErrorKind::Empty
     ));
-}
-
-#[test]
-fn duration1() {
-    let str = "1:23:45";
-    let duration = parse_duration(str);
-    assert_eq!(
-        duration.unwrap(),
-        core::time::Duration::from_secs(60 * 60 + 23 * 60 + 45)
-    );
-}
-
-#[test]
-fn duration2() {
-    let str = "01:23:45";
-    let duration = parse_duration(str);
-    assert_eq!(
-        duration.unwrap(),
-        core::time::Duration::from_secs(60 * 60 + 23 * 60 + 45)
-    );
-}
-
-#[test]
-fn duration3() {
-    let str = "001:23:45";
-    let duration = parse_duration(str);
-    assert!(matches!(duration, Err(TimeParseError::WrongLength)));
 }

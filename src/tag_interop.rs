@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, HashMap};
 
 use id3::{frame::SynchronisedLyrics, TagLike};
 use itertools::Itertools;
-use strum::IntoEnumIterator;
 
 use crate::{
     lyrics::{LineParseError, RichLyrics, SyncedLine, SyncedLyrics},
@@ -41,7 +40,7 @@ pub trait GetLyrics {
 
 pub fn get_metadata(tag: &impl SetMetadata) -> Metadata {
     let mut result = HashMap::new();
-    for field in MetadataField::iter() {
+    for field in MetadataField::iter_default() {
         if let Some(value) = tag.get_field(&field) {
             result.insert(field, value);
         }

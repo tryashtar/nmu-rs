@@ -8,7 +8,6 @@ use std::{
     rc::Rc,
     time::SystemTime,
 };
-use strum::IntoEnumIterator;
 
 use crate::{
     art::{ArtRepo, RawArtRepo},
@@ -29,10 +28,10 @@ pub struct RawLibraryConfig {
     pub reports: Vec<RawLibraryReport>,
     pub lyrics: Option<LyricsConfig>,
     pub config_folders: Vec<PathBuf>,
-    pub custom_fields: Vec<String>,
+    pub custom_fields: Vec<Rc<str>>,
     pub cache: Option<PathBuf>,
     pub art: Option<RawArtRepo>,
-    pub named_strategies: HashMap<String, MetadataOperation>,
+    pub named_strategies: HashMap<Rc<str>, MetadataOperation>,
     pub find_replace: HashMap<String, String>,
     pub scan: Vec<ScanOptions>,
 }
@@ -667,7 +666,7 @@ pub struct LibraryConfig {
     pub custom_fields: Vec<MetadataField>,
     pub date_cache: DateCache,
     pub art_repo: Option<ArtRepo>,
-    pub named_strategies: HashMap<String, Rc<MetadataOperation>>,
+    pub named_strategies: HashMap<Rc<str>, Rc<MetadataOperation>>,
     pub find_replace: HashMap<String, String>,
     pub scan: Vec<ScanOptions>,
 }
@@ -716,7 +715,7 @@ impl LibraryConfig {
         Ok(result)
     }
     pub fn get_all_fields(&self) -> impl Iterator<Item = MetadataField> {
-        let builtin = MetadataField::iter().filter(|x| !matches!(x, MetadataField::Custom(_)));
+        let builtin = MetadataField::iter_default();
         let custom = self.custom_fields.clone().into_iter();
         builtin.chain(custom)
     }
@@ -884,7 +883,7 @@ impl LibraryConfig {
                 if self.custom_fields.contains(field) {
                     Ok(())
                 } else {
-                    Err(LibraryError::UnlistedCustomField(str.clone()))
+                    Err(LibraryError::UnlistedCustomField(Rc::clone(str)))
                 }
             }
             _ => Ok(()),
@@ -996,8 +995,8 @@ impl LibraryConfig {
 
 #[derive(thiserror::Error, Debug)]
 pub enum LibraryError {
-    MissingNamedStrategy(String),
-    UnlistedCustomField(String),
+    MissingNamedStrategy(Rc<str>),
+    UnlistedCustomField(Rc<str>),
 }
 impl std::fmt::Display for LibraryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

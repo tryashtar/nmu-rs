@@ -3,11 +3,11 @@ use std::{
     collections::HashMap,
     hash::Hash,
     path::{Path, PathBuf},
+    rc::Rc,
 };
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use strum::EnumIter;
 
 use crate::{
     library_config::{LibraryConfig, TagOptions, TagSettings},
@@ -226,7 +226,7 @@ impl fmt::Display for MetadataValue {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug, EnumIter, Hash, PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(Deserialize, Serialize, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Clone)]
 #[serde(rename_all = "lowercase")]
 pub enum MetadataField {
     Title,
@@ -259,7 +259,31 @@ pub enum MetadataField {
     #[serde(alias = "lyrics")]
     SimpleLyrics,
     #[serde(untagged)]
-    Custom(String),
+    Custom(Rc<str>),
+}
+impl MetadataField {
+    pub fn iter_default() -> impl Iterator<Item = Self> {
+        let fields = [
+            MetadataField::Title,
+            MetadataField::Subtitle,
+            MetadataField::Album,
+            MetadataField::Performers,
+            MetadataField::AlbumArtist,
+            MetadataField::Composers,
+            MetadataField::Arranger,
+            MetadataField::Comment,
+            MetadataField::Track,
+            MetadataField::TrackTotal,
+            MetadataField::Disc,
+            MetadataField::DiscTotal,
+            MetadataField::Year,
+            MetadataField::Language,
+            MetadataField::Genres,
+            MetadataField::Art,
+            MetadataField::SimpleLyrics,
+        ];
+        fields.into_iter()
+    }
 }
 impl std::fmt::Display for MetadataField {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

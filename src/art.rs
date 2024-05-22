@@ -82,7 +82,7 @@ pub enum ArtScale {
     Max,
     Stretch,
 }
-#[derive(Deserialize, Serialize, Clone)]
+#[derive(Deserialize, Serialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtLength {
     Original,
@@ -91,11 +91,11 @@ pub enum ArtLength {
 }
 impl ArtSettings {
     fn merge_in(&mut self, other: &Self) {
-        if let Some(width) = &other.width {
-            self.width = Some(width.clone());
+        if let Some(width) = other.width {
+            self.width = Some(width);
         }
-        if let Some(height) = &other.height {
-            self.height = Some(height.clone());
+        if let Some(height) = other.height {
+            self.height = Some(height);
         }
         if let Some(interpolation) = &other.interpolation {
             self.interpolation = Some(*interpolation);
@@ -241,7 +241,7 @@ pub struct ArtConfig {
 #[derive(Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum ReferencableArtSettings {
-    Reference(String),
+    Reference(Rc<str>),
     Direct(ArtSettings),
     Many(Vec<ReferencableArtSettings>),
 }
@@ -258,7 +258,7 @@ pub struct RawArtRepo {
     pub cache: Option<PathBuf>,
     pub icons: Option<PathBuf>,
     pub file_cache: Option<PathBuf>,
-    pub named_settings: HashMap<String, ArtSettings>,
+    pub named_settings: HashMap<Rc<str>, ArtSettings>,
 }
 
 pub struct GetProcessedResult {
@@ -321,7 +321,7 @@ pub struct ArtRepo {
     pub disk_cache: Option<ArtDiskCache>,
     pub icon_folder: Option<PathBuf>,
     pub used_templates: ArtUsageCache,
-    pub named_settings: HashMap<String, Rc<ArtSettings>>,
+    pub named_settings: HashMap<Rc<str>, Rc<ArtSettings>>,
     pub processed_cache: ProcessedArtCache,
     config_cache: ArtConfigCache,
 }
