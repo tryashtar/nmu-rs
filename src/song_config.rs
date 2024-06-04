@@ -17,52 +17,40 @@ use crate::{
 };
 
 struct SlottedVec<T> {
-    underlying: Vec<T>,
-    occupied: HashSet<usize>,
+    underlying: Vec<Option<T>>,
 }
 impl<T> Default for SlottedVec<T> {
     fn default() -> Self {
         Self {
             underlying: Default::default(),
-            occupied: Default::default(),
         }
     }
 }
 impl<T> SlottedVec<T> {
-    fn insert(&mut self, item: T, index: usize) -> Option<T>
-    where
-        T: Default,
-    {
+    fn insert(&mut self, item: T, index: usize) -> Option<T> {
         self.underlying.resize_with(
             usize::max(self.underlying.len(), index + 1),
             Default::default,
         );
-        let old = std::mem::replace(&mut self.underlying[index], item);
-        if self.occupied.insert(index) {
-            None
-        } else {
-            Some(old)
-        }
+        std::mem::replace(&mut self.underlying[index], Some(item))
     }
-    fn get_or_create(&mut self, index: usize, mut create: impl FnMut() -> T) -> &mut T
-    where
-        T: Default,
-    {
-        if !self.occupied.contains(&index) {
+    fn get_or_create(&mut self, index: usize, mut create: impl FnMut() -> T) -> &mut T {
+        if self
+            .underlying
+            .get(index)
+            .and_then(|x| x.as_ref())
+            .is_none()
+        {
             let new_item = create();
             self.insert(new_item, index);
         }
-        self.underlying.get_mut(index).unwrap()
+        self.underlying.get_mut(index).unwrap().as_mut().unwrap()
     }
     fn into_contiguous(self) -> Option<Vec<T>> {
-        if self.underlying.len() == self.occupied.len() {
-            Some(self.underlying)
-        } else {
-            None
-        }
+        self.underlying.into_iter().collect()
     }
     fn is_empty(&self) -> bool {
-        self.occupied.is_empty()
+        self.underlying.is_empty()
     }
 }
 
