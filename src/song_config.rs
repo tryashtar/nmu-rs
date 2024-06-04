@@ -16,6 +16,67 @@ use crate::{
     util::ItemPath,
 };
 
+struct SlottedVec<T> {
+    underlying: Vec<T>,
+    occupied: HashSet<usize>,
+}
+impl<T> Default for SlottedVec<T> {
+    fn default() -> Self {
+        Self {
+            underlying: Default::default(),
+            occupied: Default::default(),
+        }
+    }
+}
+impl<T> SlottedVec<T> {
+    fn insert(&mut self, item: T, index: usize) -> Option<T>
+    where
+        T: Default,
+    {
+        self.underlying.resize_with(
+            usize::max(self.underlying.len(), index + 1),
+            Default::default,
+        );
+        let old = std::mem::replace(&mut self.underlying[index], item);
+        if self.occupied.insert(index) {
+            None
+        } else {
+            Some(old)
+        }
+    }
+    fn get_or_create(&mut self, index: usize, mut create: impl FnMut() -> T) -> &mut T
+    where
+        T: Default,
+    {
+        if !self.occupied.contains(&index) {
+            let new_item = create();
+            self.insert(new_item, index);
+        }
+        self.underlying.get_mut(index).unwrap()
+    }
+    fn into_contiguous(self) -> Option<Vec<T>> {
+        if self.underlying.len() == self.occupied.len() {
+            Some(self.underlying)
+        } else {
+            None
+        }
+    }
+    fn is_empty(&self) -> bool {
+        self.occupied.is_empty()
+    }
+}
+
+enum NoOrderReason<'a> {
+    TrackOutOfBounds(&'a Path, u32),
+    DiscOutOfBounds(&'a Path, u32),
+    NoTrackNumber(&'a Path),
+    DuplicateTrackNumber(&'a Path, &'a Path, u32),
+    UnexpectedDiscPresent(&'a Path, u32),
+    UnexpectedDiscAbsent(&'a Path),
+    NoTracks,
+    NotContiguous,
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum RawSongConfigFile {
@@ -63,63 +124,119 @@ impl RawSongConfigFile {
             }
         }
     }
-    pub fn make_reverse(nice_files: HashMap<PathBuf, (Metadata, Metadata)>) -> RawSongConfig {
-        let mut map = HashMap::<MetadataField, HashMap<MetadataValue, BTreeSet<PathBuf>>>::new();
-        let half = nice_files.len() / 2;
-        for (full_path, (current, embedded)) in nice_files {
-            for (field, value) in embedded {
-                map.entry(field)
-                    .or_default()
-                    .entry(value)
-                    .or_default()
-                    .insert(full_path.clone());
-            }
-        }
-        let mut songs = HashMap::new();
-        let mut set_fields = vec![];
-        let mut set_many = vec![];
-        for (field, sets) in map {
-            for (value, entries) in &sets {
-                if entries.len() > half {
-                    songs.insert(field.clone(), ValueGetter::Direct(value.clone()));
+    fn get_order<'a>(tracks: HashMap<&'a Path, &Metadata>) -> Result<SongOrder, NoOrderReason<'a>> {
+        let total_tracks = tracks.len();
+        let mut track_list = SlottedVec::<&Path>::default();
+        let mut disc_list = SlottedVec::<SlottedVec<&Path>>::default();
+        for (path, metadata) in tracks {
+            let track_number = metadata.get(&MetadataField::Track);
+            if let Some(MetadataValue::Number(track_number)) = track_number {
+                if *track_number == 0 || (*track_number as usize) > total_tracks {
+                    return Err(NoOrderReason::TrackOutOfBounds(path, *track_number));
                 }
-            }
-            if sets.len() > half {
-                let mut set_value = HashMap::new();
-                for (value, entries) in &sets {
-                    for entry in entries {
-                        set_value.insert(entry.to_path_buf(), ValueGetter::Direct(value.clone()));
+                let disc_number = metadata.get(&MetadataField::Disc);
+                if let Some(MetadataValue::Number(disc_number)) = disc_number {
+                    if *disc_number == 0 || (*disc_number as usize) > total_tracks {
+                        return Err(NoOrderReason::DiscOutOfBounds(path, *disc_number));
+                    }
+                    if !track_list.is_empty() {
+                        return Err(NoOrderReason::UnexpectedDiscPresent(path, *disc_number));
+                    }
+                    let disc_vec =
+                        disc_list.get_or_create(*disc_number as usize, SlottedVec::default);
+                    let existing = disc_vec.insert(path, *track_number as usize);
+                    if let Some(existing) = existing {
+                        return Err(NoOrderReason::DuplicateTrackNumber(
+                            path,
+                            existing,
+                            *track_number,
+                        ));
+                    }
+                } else {
+                    if !disc_list.is_empty() {
+                        return Err(NoOrderReason::UnexpectedDiscAbsent(path));
+                    }
+                    let existing = track_list.insert(path, *track_number as usize);
+                    if let Some(existing) = existing {
+                        return Err(NoOrderReason::DuplicateTrackNumber(
+                            path,
+                            existing,
+                            *track_number,
+                        ));
                     }
                 }
-                set_fields.push(RawFieldSetter {
-                    field,
-                    set: set_value,
-                })
+            } else {
+                return Err(NoOrderReason::NoTrackNumber(path));
             }
         }
-        RawSongConfig {
-            folders: None,
-            this: None,
-            subconfigs: None,
-            discs: None,
-            order: None,
-            set: None,
-            songs: if songs.is_empty() {
-                None
+        if !track_list.is_empty() {
+            let contiguous = track_list.into_contiguous();
+            if let Some(contiguous) = contiguous {
+                Ok(SongOrder::Order(Self::make_selector(
+                    contiguous.into_iter().map(ToOwned::to_owned).collect(),
+                )))
             } else {
-                Some(ReferencableOperation::Direct(MetadataOperation::Set(songs)))
-            },
-            set_fields: if set_fields.is_empty() {
-                None
+                Err(NoOrderReason::NotContiguous)
+            }
+        } else if !disc_list.is_empty() {
+            let contiguous = disc_list.into_contiguous();
+            if let Some(contiguous) = contiguous {
+                let sublists = contiguous
+                    .into_iter()
+                    .map(|x| x.into_contiguous())
+                    .collect::<Option<Vec<_>>>();
+                if let Some(sublists) = sublists {
+                    Ok(SongOrder::Discs(
+                        sublists
+                            .into_iter()
+                            .map(|x| {
+                                Self::make_selector(x.into_iter().map(ToOwned::to_owned).collect())
+                            })
+                            .collect(),
+                    ))
+                } else {
+                    Err(NoOrderReason::NotContiguous)
+                }
             } else {
-                Some(set_fields)
-            },
-            set_all: if set_many.is_empty() {
-                None
-            } else {
-                Some(set_many)
-            },
+                Err(NoOrderReason::NotContiguous)
+            }
+        } else {
+            Err(NoOrderReason::NoTracks)
         }
+    }
+    fn make_selector(mut paths: Vec<PathBuf>) -> ItemSelector {
+        if paths.len() == 1 {
+            ItemSelector::Path(paths.remove(0))
+        } else {
+            let common_prefix = common_path::common_path_all(paths.iter().map(AsRef::as_ref));
+            if let Some(prefix) = common_prefix {
+                let select = ItemSelector::Multi(
+                    paths
+                        .into_iter()
+                        .map(|x| {
+                            ItemSelector::Path(x.strip_prefix(&prefix).unwrap_or(&x).to_owned())
+                        })
+                        .collect(),
+                );
+                ItemSelector::Subpath {
+                    subpath: Box::new(ItemSelector::Path(prefix)),
+                    select: Box::new(select),
+                }
+            } else {
+                ItemSelector::Multi(paths.into_iter().map(ItemSelector::Path).collect())
+            }
+        }
+    }
+    pub fn make_reverse(nice_files: HashMap<PathBuf, (Metadata, Metadata)>) -> RawSongConfig {
+        let mut result = RawSongConfig::blank();
+        result.order = Self::get_order(
+            nice_files
+                .iter()
+                .map(|(path, (_, embedded))| (path.as_path(), embedded))
+                .collect(),
+        )
+        .ok();
+        result
     }
 }
 
@@ -140,9 +257,8 @@ pub struct RawSongConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub this: Option<ReferencableOperation>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub discs: Option<HashMap<u32, ItemSelector>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub order: Option<ItemSelector>,
+    #[serde(flatten)]
+    pub order: Option<SongOrder>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "set fields")]
     pub set_fields: Option<Vec<RawFieldSetter>>,
@@ -153,6 +269,26 @@ pub struct RawSongConfig {
     pub set: Option<HashMap<PathBuf, ReferencableOperation>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subconfigs: Option<HashMap<PathBuf, RawSongConfig>>,
+}
+#[derive(Deserialize, Serialize, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum SongOrder {
+    Discs(Vec<ItemSelector>),
+    Order(ItemSelector),
+}
+impl RawSongConfig {
+    pub fn blank() -> Self {
+        Self {
+            songs: None,
+            folders: None,
+            this: None,
+            order: None,
+            set_fields: None,
+            set_all: None,
+            set: None,
+            subconfigs: None,
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize, Debug)]

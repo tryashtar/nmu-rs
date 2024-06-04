@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    env,
     io::{ErrorKind, IsTerminal, Write},
     ops::Deref,
     path::{Path, PathBuf},
@@ -123,7 +122,7 @@ fn main() {
 
 fn main_generate(path: &Path) -> Result<(), YamlError> {
     let library = RawLibraryConfig {
-        library: env::current_dir()?,
+        library: std::env::current_dir()?,
         reports: vec![RawLibraryReport::Items {
             path: PathBuf::from("report.yaml"),
             values: FieldSelector::All,
@@ -138,7 +137,7 @@ fn main_generate(path: &Path) -> Result<(), YamlError> {
             ],
             config: HashMap::from([(LyricsType::RichFile, LyricsReplaceMode::Replace)]),
         }),
-        config_folders: vec![env::current_dir()?, PathBuf::from("configs")],
+        config_folders: vec![std::env::current_dir()?, PathBuf::from("configs")],
         custom_fields: vec![],
         cache: Some(PathBuf::from("datecache.yaml")),
         art: Some(RawArtRepo {

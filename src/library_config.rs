@@ -17,6 +17,7 @@ use crate::{
     modifier::ValueModifier,
     song_config::{
         AllSetter, DiscSet, OrderingSetter, RawSongConfig, ReferencableOperation, SongConfig,
+        SongOrder,
     },
     strategy::{FieldSelector, ItemSelector, MetadataOperation, MusicItemType, ValueGetter},
     tag_interop::{GetLyrics, GetLyricsError},
@@ -806,44 +807,7 @@ impl LibraryConfig {
                 }));
             }
         }
-        let ordering = {
-            if let Some(discs) = raw_config.discs {
-                let mut map = HashMap::new();
-                for (disc, sel) in &discs {
-                    let matches = file_stuff::find_matches(sel, nice_folder, self);
-                    let track_total = matches.len();
-                    for (track, path) in matches.into_iter().enumerate() {
-                        map.insert(
-                            PathBuf::from(path),
-                            DiscSet {
-                                disc: *disc,
-                                track: (track + 1) as u32,
-                                track_total: track_total as u32,
-                            },
-                        );
-                    }
-                }
-                Some(OrderingSetter::Discs {
-                    map,
-                    disc_total: *(discs.keys().max().unwrap_or(&1)),
-                    original_selectors: discs.into_values().collect(),
-                })
-            } else if let Some(order) = raw_config.order {
-                let map = file_stuff::find_matches(&order, nice_folder, self)
-                    .into_iter()
-                    .enumerate()
-                    .map(|(track, path)| (PathBuf::from(path), (track + 1) as u32))
-                    .collect::<HashMap<_, _>>();
-                let total = map.len() as u32;
-                Some(OrderingSetter::Order {
-                    map,
-                    total,
-                    original_selector: order,
-                })
-            } else {
-                None
-            }
-        };
+        let ordering = raw_config.order.map(|x| self.make_ordering(x, nice_folder));
         let mut subconfigs = HashMap::new();
         if let Some(configs) = raw_config.subconfigs {
             for (path, config) in configs {
@@ -858,6 +822,45 @@ impl LibraryConfig {
             order: ordering,
             subconfigs,
         })
+    }
+    fn make_ordering(&self, order: SongOrder, nice_folder: &Path) -> OrderingSetter {
+        match order {
+            SongOrder::Discs(discs) => {
+                let mut map = HashMap::new();
+                for (disc, sel) in discs.iter().enumerate() {
+                    let matches = file_stuff::find_matches(sel, nice_folder, self);
+                    let track_total = matches.len();
+                    for (track, path) in matches.into_iter().enumerate() {
+                        map.insert(
+                            PathBuf::from(path),
+                            DiscSet {
+                                disc: (disc + 1) as u32,
+                                track: (track + 1) as u32,
+                                track_total: track_total as u32,
+                            },
+                        );
+                    }
+                }
+                OrderingSetter::Discs {
+                    map,
+                    disc_total: discs.len() as u32,
+                    original_selectors: discs,
+                }
+            }
+            SongOrder::Order(order) => {
+                let map = file_stuff::find_matches(&order, nice_folder, self)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(track, path)| (PathBuf::from(path), (track + 1) as u32))
+                    .collect::<HashMap<_, _>>();
+                let total = map.len() as u32;
+                OrderingSetter::Order {
+                    map,
+                    total,
+                    original_selector: order,
+                }
+            }
+        }
     }
     fn check_fields(&self, selector: &FieldSelector) -> Result<(), LibraryError> {
         match selector {

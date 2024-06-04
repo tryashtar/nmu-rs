@@ -176,8 +176,8 @@ fn parse_seconds(seconds: &str) -> Result<f64, TimeParseError> {
     if decimal_point.unwrap_or(seconds.len()) != 2 {
         return Err(TimeParseError::WrongLength);
     }
-    let number = seconds.parse::<f64>().map_err(TimeParseError::Float)?;
-    if number.is_infinite() || number.is_nan() || !(0.0..60.0).contains(&number) {
+    let number = seconds.parse::<f64>()?;
+    if !(0.0..60.0).contains(&number) {
         return Err(TimeParseError::ExceedsBounds);
     }
     Ok(number)
@@ -186,7 +186,7 @@ pub fn parse_duration(string: &str) -> Result<std::time::Duration, TimeParseErro
     let mut splits = string.split(':');
     let first = splits.next().ok_or(TimeParseError::MissingColon)?;
     let second = splits.next().ok_or(TimeParseError::MissingColon)?;
-    let first_number = first.parse::<u32>().map_err(TimeParseError::Int)?;
+    let first_number = first.parse::<u32>()?;
     match splits.next() {
         None => {
             // [M]M:SS[.fff]
@@ -211,7 +211,7 @@ pub fn parse_duration(string: &str) -> Result<std::time::Duration, TimeParseErro
             if !matches!(second.len(), 2) {
                 return Err(TimeParseError::WrongLength);
             }
-            let minutes = second.parse::<u32>().map_err(TimeParseError::Int)?;
+            let minutes = second.parse::<u32>()?;
             if minutes >= 60 {
                 return Err(TimeParseError::ExceedsBounds);
             }
