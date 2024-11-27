@@ -573,8 +573,8 @@ fn select_path_too_far() {
 fn select_segment_full() {
     assert!(ItemSelector::Segmented {
         path: vec![
-            PathSegment::Literal("a".to_owned()),
-            PathSegment::Literal("b".to_owned())
+            PathSegment::Literal(String::from("a")),
+            PathSegment::Literal(String::from("b"))
         ]
     }
     .matches(Path::new("a/b")));
@@ -584,8 +584,8 @@ fn select_segment_full() {
 fn select_segment_partial() {
     assert!(ItemSelector::Segmented {
         path: vec![
-            PathSegment::Literal("a".to_owned()),
-            PathSegment::Literal("b".to_owned())
+            PathSegment::Literal(String::from("a")),
+            PathSegment::Literal(String::from("b"))
         ]
     }
     .matches(Path::new("a/b/c")));
@@ -595,8 +595,8 @@ fn select_segment_partial() {
 fn select_segment_too_far() {
     assert!(!ItemSelector::Segmented {
         path: vec![
-            PathSegment::Literal("a".to_owned()),
-            PathSegment::Literal("b".to_owned())
+            PathSegment::Literal(String::from("a")),
+            PathSegment::Literal(String::from("b"))
         ]
     }
     .matches(Path::new("a")));
@@ -666,7 +666,7 @@ fn copy_field_simple() {
     let mut copy_source = HashMap::new();
     copy_source.insert(
         MetadataField::Performers,
-        MetadataValue::List(vec!["item".to_string()]),
+        MetadataValue::List(vec![String::from("item")]),
     );
     let result = getter.get(&copy_source, &path, &config).ok().unwrap();
     assert!(matches!(result, MetadataValue::List(x) if x.as_slice() == ["item"]));
@@ -691,7 +691,7 @@ fn copy_field_nested() {
     let mut copy_source = HashMap::new();
     copy_source.insert(
         MetadataField::Performers,
-        MetadataValue::List(vec!["item".to_string()]),
+        MetadataValue::List(vec![String::from("item")]),
     );
     let result = getter.get(&copy_source, &path, &config).ok().unwrap();
     assert!(matches!(result, MetadataValue::List(x) if x.as_slice() == ["citem"]));
@@ -742,7 +742,7 @@ fn copy_full_simple() {
             ItemSelector::All { recursive: true },
             MetadataOperation::Set(HashMap::from([(
                 MetadataField::Title,
-                ValueGetter::Direct(MetadataValue::string("test".to_string())),
+                ValueGetter::Direct(MetadataValue::string(String::from("test"))),
             )])),
         ),
         fast_config(
@@ -814,7 +814,7 @@ fn copy_full_chain() {
             ItemSelector::All { recursive: true },
             MetadataOperation::Set(HashMap::from([(
                 MetadataField::Title,
-                ValueGetter::Direct(MetadataValue::string("test".to_string())),
+                ValueGetter::Direct(MetadataValue::string(String::from("test"))),
             )])),
         ),
         fast_config(
@@ -864,14 +864,14 @@ fn copy_full_modify() {
             ItemSelector::All { recursive: true },
             MetadataOperation::Set(HashMap::from([(
                 MetadataField::Title,
-                ValueGetter::Direct(MetadataValue::string("test".to_string())),
+                ValueGetter::Direct(MetadataValue::string(String::from("test"))),
             )])),
         ),
         fast_config(
             ItemSelector::All { recursive: true },
             MetadataOperation::Set(HashMap::from([(
                 MetadataField::Performers,
-                ValueGetter::Direct(MetadataValue::string("before-".to_string())),
+                ValueGetter::Direct(MetadataValue::string(String::from("before-"))),
             )])),
         ),
         fast_config(
@@ -985,11 +985,11 @@ fn selector_matches() {
     assert_results(
         ItemSelector::Segmented {
             path: vec![
-                PathSegment::Literal("sub".to_owned()),
+                PathSegment::Literal(String::from("sub")),
                 PathSegment::Regex {
                     regex: regex::Regex::new(r"deep\d").unwrap(),
                 },
-                PathSegment::Literal("one".to_owned()),
+                PathSegment::Literal(String::from("one")),
             ],
         },
         "",
