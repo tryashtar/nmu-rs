@@ -464,6 +464,7 @@ pub enum FieldValueGetter {
     FileName,
     CleanName,
     Path,
+    CleanPath,
 }
 
 impl FieldValueGetter {
@@ -481,6 +482,7 @@ impl FieldValueGetter {
     fn get<'a>(self, path: &'a Path, config: &LibraryConfig) -> Cow<'a, str> {
         match self {
             Self::CleanName => Self::clean(Self::file_name(path), config),
+            Self::CleanPath => Self::clean(path.to_string_lossy(), config),
             Self::FileName => Self::file_name(path),
             Self::Path => path.to_string_lossy(),
         }

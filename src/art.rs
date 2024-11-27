@@ -146,11 +146,17 @@ pub struct FinalArtSettings {
     background: Option<[u8; 4]>,
     scale: ArtScale,
 }
+struct Rectangle {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+}
 impl FinalArtSettings {
     fn apply(&self, mut image: DynamicImage) -> DynamicImage {
         if self.buffer.is_some() {
-            let (x, y, width, height) = Self::bounding_rectangle(&image);
-            image = image.crop(x, y, width, height);
+            let rect = Self::bounding_rectangle(&image);
+            image = image.crop(rect.x, rect.y, rect.width, rect.height);
         }
         if self.width.is_some() || self.height.is_some() {
             let (current_width, current_height) = image.dimensions();
@@ -210,7 +216,7 @@ impl FinalArtSettings {
             |bg| image::RgbaImage::from_pixel(width, height, image::Rgba::<u8>(bg)),
         )
     }
-    fn bounding_rectangle(image: &DynamicImage) -> (u32, u32, u32, u32) {
+    fn bounding_rectangle(image: &DynamicImage) -> Rectangle {
         let (mut left, mut top) = image.dimensions();
         let (mut right, mut bottom) = (0, 0);
         for (x, y, color) in image.pixels() {
@@ -221,7 +227,12 @@ impl FinalArtSettings {
                 bottom = std::cmp::max(y, bottom);
             }
         }
-        (left, top, right - left + 1, bottom - top + 1)
+        Rectangle {
+            x: left,
+            y: top,
+            width: right - left + 1,
+            height: bottom - top + 1,
+        }
     }
 }
 

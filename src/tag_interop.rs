@@ -65,10 +65,7 @@ pub fn set_metadata(tag: &mut impl SetMetadata, metadata: Metadata) -> SetMetada
 }
 
 fn or_blank(val: Option<MetadataValue>) -> MetadataValue {
-    match val {
-        None => MetadataValue::blank(),
-        Some(val) => val,
-    }
+    val.unwrap_or_else(|| MetadataValue::blank())
 }
 
 fn get_str(tag: &id3::Tag, key: &'static str) -> Option<MetadataValue> {
