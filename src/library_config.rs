@@ -661,15 +661,18 @@ pub enum LyricsReplaceMode {
 
 pub struct LibraryConfig {
     pub library_folder: PathBuf,
-    pub reports: Vec<LibraryReport>,
     pub lyrics: Option<LyricsConfig>,
     pub config_folders: Vec<PathBuf>,
     pub custom_fields: Vec<MetadataField>,
-    pub date_cache: DateCache,
-    pub art_repo: Option<ArtRepo>,
     pub named_strategies: HashMap<Rc<str>, Rc<MetadataOperation>>,
     pub find_replace: HashMap<String, String>,
     pub scan: Vec<ScanOptions>,
+}
+
+pub struct LibraryCache {
+    pub reports: Vec<LibraryReport>,
+    pub date_cache: DateCache,
+    pub art_repo: Option<ArtRepo>,
 }
 
 fn full_path(path: PathBuf) -> PathBuf {
@@ -677,14 +680,9 @@ fn full_path(path: PathBuf) -> PathBuf {
 }
 
 impl LibraryConfig {
-    pub fn new(folder: &Path, raw: RawLibraryConfig) -> Result<Self, LibraryError> {
-        let result = Self {
+    pub fn new(folder: &Path, raw: RawLibraryConfig) -> Result<(Self, LibraryCache), LibraryError> {
+        let config = Self {
             library_folder: full_path(folder.join(raw.library)),
-            reports: raw
-                .reports
-                .into_iter()
-                .map(|x| LibraryReport::load(x, folder))
-                .collect(),
             lyrics: raw.lyrics.map(|x| LyricsConfig {
                 folder: folder.join(x.folder),
                 priority: x.priority,
@@ -700,8 +698,6 @@ impl LibraryConfig {
                 .into_iter()
                 .map(MetadataField::Custom)
                 .collect(),
-            date_cache: DateCache::new(raw.cache.map(|x| folder.join(x))),
-            art_repo: raw.art.map(|x| ArtRepo::new(folder, x)),
             named_strategies: raw
                 .named_strategies
                 .into_iter()
@@ -710,10 +706,19 @@ impl LibraryConfig {
             find_replace: raw.find_replace,
             scan: raw.scan,
         };
-        for strat in result.named_strategies.values() {
-            result.check_operation(strat)?;
+        for strat in config.named_strategies.values() {
+            config.check_operation(strat)?;
         }
-        Ok(result)
+        let cache = LibraryCache {
+            reports: raw
+                .reports
+                .into_iter()
+                .map(|x| LibraryReport::load(x, folder))
+                .collect(),
+            date_cache: DateCache::new(raw.cache.map(|x| folder.join(x))),
+            art_repo: raw.art.map(|x| ArtRepo::new(folder, x)),
+        };
+        Ok((config, cache))
     }
     pub fn get_all_fields(&self) -> impl Iterator<Item = MetadataField> {
         let builtin = MetadataField::iter_default();
@@ -725,11 +730,6 @@ impl LibraryConfig {
         selector: &'a FieldSelector,
     ) -> impl Iterator<Item = MetadataField> + 'a {
         self.get_all_fields().filter(|x| selector.is_match(x))
-    }
-    pub fn update_reports(&mut self, nice_path: &Path, metadata: &Metadata) {
-        for report in &mut self.reports {
-            report.record(nice_path, metadata);
-        }
     }
     pub fn scan_settings(&self, full_path: &Path) -> Option<Rc<TagOptions>> {
         let relative = full_path
@@ -992,6 +992,14 @@ impl LibraryConfig {
                 .map(|x| self.resolve_operation(x))
                 .collect::<Result<Vec<_>, _>>()
                 .map(|x| Rc::new(MetadataOperation::Many(x))),
+        }
+    }
+}
+
+impl LibraryCache {
+    pub fn update_reports(&mut self, nice_path: &Path, metadata: &Metadata) {
+        for report in &mut self.reports {
+            report.record(nice_path, metadata);
         }
     }
 }

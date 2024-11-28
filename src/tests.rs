@@ -636,12 +636,9 @@ fn select_subpath_complex() {
 fn dummy_config() -> LibraryConfig {
     LibraryConfig {
         library_folder: PathBuf::from("a/b/c"),
-        reports: vec![],
         lyrics: None,
         config_folders: vec![],
         custom_fields: vec![],
-        date_cache: DateCache::new(None),
-        art_repo: None,
         named_strategies: HashMap::new(),
         find_replace: HashMap::new(),
         scan: vec![ScanOptions {

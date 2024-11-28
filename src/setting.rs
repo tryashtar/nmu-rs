@@ -2,6 +2,7 @@ use std::{path::Path, rc::Rc};
 
 use image::DynamicImage;
 
+use crate::library_config::LibraryCache;
 use crate::tag_interop::{GetLyrics, SetMetadata};
 use crate::{
     art::{GetArtResults, GetProcessedResult},
@@ -21,7 +22,8 @@ pub struct ProcessFolderResults {
 pub fn process_folder(
     nice_path: &ItemPath,
     full_path: &Path,
-    library_config: &mut LibraryConfig,
+    library_config: &LibraryConfig,
+    library_cache: &mut LibraryCache,
     config_cache: &mut ConfigCache,
     dry_run: bool,
 ) -> ProcessFolderResults {
@@ -30,7 +32,7 @@ pub fn process_folder(
     if let Ok(loaded) = &configs.result {
         let mut art_results = GetArtResults::Keep;
         let mut results = metadata::get_metadata(nice_path, loaded, library_config);
-        if let Some(repo) = &mut library_config.art_repo {
+        if let Some(repo) = &mut library_cache.art_repo {
             if let Some(MetadataValue::List(art)) = results.metadata.get_mut(&MetadataField::Art) {
                 art_results = repo.get_image(art);
                 repo.used_templates.add(full_path, &art_results);
@@ -106,7 +108,8 @@ impl ProcessSongResults {
 pub fn process_song(
     nice_path: &ItemPath,
     full_path: &Path,
-    library_config: &mut LibraryConfig,
+    library_config: &LibraryConfig,
+    library_cache: &mut LibraryCache,
     config_cache: &mut ConfigCache,
     options: &TagOptions,
     dry_run: bool,
@@ -116,7 +119,7 @@ pub fn process_song(
     if let Ok(loaded) = &configs.result {
         let mut art_results = GetArtResults::Keep;
         let mut results = metadata::get_metadata(nice_path, loaded, library_config);
-        if let Some(repo) = &mut library_config.art_repo {
+        if let Some(repo) = &mut library_cache.art_repo {
             if let Some(MetadataValue::List(art)) = results.metadata.get_mut(&MetadataField::Art) {
                 art_results = repo.get_image(art);
                 if let GetArtResults::Processed { nice_path, .. } = &art_results {

@@ -7,9 +7,10 @@ use std::{
 };
 
 use clap::Parser;
-use color_print::cformat;
+use color_print::{ceprintln, cformat};
 use regex::Regex;
 
+use crate::library_config::LibraryCache;
 use crate::{
     art::{
         ArtDiskCache, ArtError, GetArtResults, GetProcessedResult, ProcessedArtCache, RawArtRepo,
@@ -85,33 +86,24 @@ fn main() {
                 println!("Created template library configuration file");
             }
             Err(err) => {
-                eprintln!(
-                    "{}",
-                    cformat!("❌ <red>Error saving library config\n{}</>", err)
-                );
+                ceprintln!("❌ <red>Error saving library config\n{}</>", err);
             }
         },
         Commands::Scan(scan) => {
             let raw_config = file_stuff::load_yaml::<RawLibraryConfig>(&scan.library_config_path);
             match raw_config {
                 Err(error) => {
-                    eprintln!(
-                        "{}",
-                        cformat!("❌ <red>Error loading library config\n{}</>", error)
-                    );
+                    ceprintln!("❌ <red>Error loading library config\n{}</>", error);
                 }
                 Ok(raw_config) => {
                     let library_config_folder =
-                        &scan.library_config_path.parent().unwrap_or(Path::new(""));
+                        scan.library_config_path.parent().unwrap_or(Path::new(""));
                     match LibraryConfig::new(library_config_folder, raw_config) {
                         Err(error) => {
-                            eprintln!(
-                                "{}",
-                                cformat!("❌ <red>Error loading library config\n{}</>", error)
-                            );
+                            ceprintln!("❌ <red>Error loading library config\n{}</>", error);
                         }
-                        Ok(mut library_config) => {
-                            do_scan(scan, &mut library_config);
+                        Ok((library_config, mut library_cache)) => {
+                            do_scan(scan, &library_config, &mut library_cache);
                         }
                     }
                 }
@@ -177,26 +169,26 @@ struct WorkProgress {
     failed: u32,
 }
 
-fn do_scan(scan: ScanCommand, library_config: &mut LibraryConfig) {
+fn do_scan(scan: ScanCommand, library_config: &LibraryConfig, library_cache: &mut LibraryCache) {
     let mut config_cache: ConfigCache = HashMap::new();
     let mut progress = WorkProgress {
         changed: 0,
         failed: 0,
     };
     if scan.full
-        || library_config
+        || library_cache
             .date_cache
             .changed_recently(&scan.library_config_path)
     {
-        library_config.date_cache.cache.clear();
+        library_cache.date_cache.cache.clear();
     }
     let ScanResults {
         songs: scan_songs,
         folders: scan_folders,
         images: scan_images,
         skipped,
-    } = find_scan_items(library_config);
-    if let Some(art_repo) = &mut library_config.art_repo {
+    } = find_scan_items(library_config, library_cache);
+    if let Some(art_repo) = &mut library_cache.art_repo {
         if let Some(disk) = &mut art_repo.disk_cache {
             if scan.dry_run {
                 println!(
@@ -228,20 +220,21 @@ fn do_scan(scan: ScanCommand, library_config: &mut LibraryConfig) {
             &nice_path,
             song_path,
             library_config,
+            library_cache,
             &mut config_cache,
             options,
             scan.dry_run,
         );
-        handle_song_results(&results, &nice_path, library_config);
+        handle_song_results(&results, &nice_path, library_config, library_cache);
         if results.has_fatal_shared_error() || results.has_fatal_local_error() {
             progress.failed += 1;
-            library_config.date_cache.remove(song_path);
+            library_cache.date_cache.remove(song_path);
         } else {
             progress.changed += 1;
-            library_config.date_cache.mark_updated(song_path.clone());
+            library_cache.date_cache.mark_updated(song_path.clone());
             if let Some(assigned) = results.assigned {
-                library_config.update_reports(&nice_path, &assigned.metadata.metadata);
-                if let Some(art_repo) = &mut library_config.art_repo {
+                library_cache.update_reports(&nice_path, &assigned.metadata.metadata);
+                if let Some(art_repo) = &mut library_cache.art_repo {
                     art_repo.used_templates.add(song_path, &assigned.art);
                 }
             }
@@ -256,7 +249,7 @@ fn do_scan(scan: ScanCommand, library_config: &mut LibraryConfig) {
     if scan.dry_run {
         println!(
             "Not updating caches or {} reports in a dry run",
-            library_config.reports.len()
+            library_cache.reports.len()
         );
     } else {
         println!("Saving caches...");
@@ -267,15 +260,15 @@ fn do_scan(scan: ScanCommand, library_config: &mut LibraryConfig) {
                     .with_extension(""),
             );
         }
-        library_config
+        library_cache
             .date_cache
             .mark_updated(scan.library_config_path);
-        save_caches(library_config);
-        if !library_config.reports.is_empty() {
-            println!("Updating {} reports...", library_config.reports.len());
+        save_caches(library_cache);
+        if !library_cache.reports.is_empty() {
+            println!("Updating {} reports...", library_cache.reports.len());
         }
-        save_reports(library_config, &all_valid);
-        if let Some(art_repo) = &library_config.art_repo {
+        save_reports(library_cache, &all_valid);
+        if let Some(art_repo) = &library_cache.art_repo {
             if let Some(disk) = &art_repo.disk_cache {
                 println!("Saving {} cached images...", art_repo.processed_cache.len());
                 save_processed_art(disk, &art_repo.processed_cache);
@@ -288,10 +281,11 @@ fn do_scan(scan: ScanCommand, library_config: &mut LibraryConfig) {
 fn handle_song_results(
     results: &ProcessSongResults,
     nice_path: &Path,
-    library_config: &mut LibraryConfig,
+    library_config: &LibraryConfig,
+    library_cache: &mut LibraryCache,
 ) {
     for load in &results.configs.newly_loaded {
-        handle_config_loaded(load, library_config);
+        handle_config_loaded(load, library_config, library_cache);
     }
     if let Some(AssignResults {
         art:
@@ -303,7 +297,7 @@ fn handle_song_results(
         ..
     }) = &results.assigned
     {
-        handle_art_loaded(result, full_path, library_config);
+        handle_art_loaded(result, full_path, library_cache);
     }
     if results.has_fatal_shared_error() {
         return;
@@ -311,10 +305,7 @@ fn handle_song_results(
     println!("{}", nice_path.display());
     if let Some(assigned) = &results.assigned {
         if let GetArtResults::NoTemplateFound { tried } = &assigned.art {
-            eprintln!(
-                "{}",
-                cformat!("⚠️ <yellow>No matching templates found: {:?}</>", tried)
-            );
+            ceprintln!("⚠️ <yellow>No matching templates found: {:?}</>", tried);
         }
         handle_apply_reports(&assigned.metadata.reports);
         handle_tag_changes(
@@ -372,13 +363,10 @@ fn handle_lyrics_report(report: &SetLyricsReport) {
                 }
             },
             SetLyricsResult::Failed(err) => {
-                eprintln!(
-                    "{}",
-                    cformat!(
-                        "\t\t❌ <red>Error writing {:?} lyrics: {}</>",
-                        lyrics_type,
-                        err
-                    )
+                ceprintln!(
+                    "\t\t❌ <red>Error writing {:?} lyrics: {}</>",
+                    lyrics_type,
+                    err
                 );
             }
         }
@@ -420,41 +408,32 @@ fn handle_tag_changes(
                         }
                     }
                     tag_interop::SetFieldResult::Incompatible { expected } => {
-                        eprintln!(
-                            "{}",
-                            cformat!("⚠️ <yellow>Invalid field value, expected {}</>", expected)
-                        );
+                        ceprintln!("⚠️ <yellow>Invalid field value, expected {}</>", expected);
                     }
                 }
             }
         }
         Err(err) => {
-            eprintln!(
-                "{}",
-                cformat!("\t❌ <red>Error updating {} tag\n\t{}</>", tag_type, err)
-            );
+            ceprintln!("\t❌ <red>Error updating {} tag\n\t{}</>", tag_type, err);
         }
     }
 }
 
 fn handle_folder_results(results: &ProcessFolderResults) {}
 
-fn save_caches(library_config: &mut LibraryConfig) {
-    if let Err(err) = library_config.date_cache.save() {
-        eprintln!(
-            "{}",
-            cformat!("❌ <red>Error saving date cache\n{}</>", err)
-        );
+fn save_caches(library_cache: &mut LibraryCache) {
+    if let Err(err) = library_cache.date_cache.save() {
+        ceprintln!("❌ <red>Error saving date cache\n{}</>", err);
     }
-    if let Some(repo) = &library_config.art_repo {
+    if let Some(repo) = &library_cache.art_repo {
         if let Err(err) = repo.used_templates.save() {
-            eprintln!("{}", cformat!("❌ <red>Error saving art cache\n{}</>", err));
+            ceprintln!("❌ <red>Error saving art cache\n{}</>", err);
         }
     }
 }
 
-fn save_reports(library_config: &mut LibraryConfig, valid_names: &HashSet<PathBuf>) {
-    for report in &mut library_config.reports {
+fn save_reports(library_cache: &mut LibraryCache, valid_names: &HashSet<PathBuf>) {
+    for report in &mut library_cache.reports {
         report.clean(valid_names);
         let path = match &report {
             LibraryReport::SplitFields { path, .. }
@@ -462,13 +441,10 @@ fn save_reports(library_config: &mut LibraryConfig, valid_names: &HashSet<PathBu
             | LibraryReport::ItemData { path, .. } => path,
         };
         if let Err(err) = report.save() {
-            eprintln!(
-                "{}",
-                cformat!(
-                    "❌ <red>Error saving report\n{}\n{}</>",
-                    path.display(),
-                    err
-                )
+            ceprintln!(
+                "❌ <red>Error saving report\n{}\n{}</>",
+                path.display(),
+                err
             );
         }
     }
@@ -485,13 +461,10 @@ fn clean_processed_art(templates: &BTreeSet<PathBuf>, folder: &Path, disk: &mut 
         match std::fs::remove_file(&full) {
             Err(err) if err.kind() == ErrorKind::NotFound => {}
             Err(err) => {
-                eprintln!(
-                    "{}",
-                    cformat!(
-                        "❌ <red>Error deleting cached image {}\n{}",
-                        full.display(),
-                        err
-                    )
+                ceprintln!(
+                    "❌ <red>Error deleting cached image {}\n{}",
+                    full.display(),
+                    err
                 );
                 disk.nice_evicted.insert(nice);
             }
@@ -516,13 +489,10 @@ fn save_processed_art(disk: &ArtDiskCache, processed: &ProcessedArtCache) {
                 }
                 match img.save_with_format(&full, image::ImageFormat::Png) {
                     Err(err) => {
-                        eprintln!(
-                            "{}",
-                            cformat!(
-                                "❌ <red>Error saving cached image {}\n{}",
-                                full.display(),
-                                err
-                            )
+                        ceprintln!(
+                            "❌ <red>Error saving cached image {}\n{}",
+                            full.display(),
+                            err
                         );
                     }
                     Ok(()) => {
@@ -540,15 +510,12 @@ fn save_processed_art(disk: &ArtDiskCache, processed: &ProcessedArtCache) {
 fn handle_apply_reports(reports: &Vec<SourcedReport>) {
     for report in reports {
         if !report.errors.is_empty() {
-            eprintln!(
-                "{}",
-                cformat!(
-                    "⚠️ <yellow>Errors applying config\n{}</>",
-                    report.full_path.display()
-                )
+            ceprintln!(
+                "⚠️ <yellow>Errors applying config\n{}</>",
+                report.full_path.display()
             );
             for error in &report.errors {
-                eprintln!("{}", cformat!("\t<yellow>{}</>", error));
+                ceprintln!("\t<yellow>{}</>", error);
             }
         }
     }
@@ -557,23 +524,20 @@ fn handle_apply_reports(reports: &Vec<SourcedReport>) {
 fn handle_art_loaded(
     processed: &GetProcessedResult,
     full_path: &Path,
-    library_config: &mut LibraryConfig,
+    library_cache: &mut LibraryCache,
 ) {
     for load in &processed.newly_loaded {
         match &load.result {
             Err(error) => {
-                library_config.date_cache.remove(&load.full_path);
-                eprintln!(
-                    "{}",
-                    cformat!(
-                        "❌ <red>Error loading config: {}\n{}</>",
-                        load.full_path.display(),
-                        error
-                    )
+                library_cache.date_cache.remove(&load.full_path);
+                ceprintln!(
+                    "❌ <red>Error loading config: {}\n{}</>",
+                    load.full_path.display(),
+                    error
                 );
             }
             Ok(_) => {
-                library_config
+                library_cache
                     .date_cache
                     .mark_updated(load.full_path.clone());
             }
@@ -582,38 +546,36 @@ fn handle_art_loaded(
     match &processed.result {
         Err(error) => {
             if !matches!(error.deref(), ArtError::Config) {
-                library_config.date_cache.remove(full_path);
-                eprintln!(
-                    "{}",
-                    cformat!(
-                        "❌ <red>Error loading image {}:\n{}</>",
-                        full_path.display(),
-                        error
-                    )
+                library_cache.date_cache.remove(full_path);
+                ceprintln!(
+                    "❌ <red>Error loading image {}:\n{}</>",
+                    full_path.display(),
+                    error
                 );
             }
         }
         Ok(_) => {
-            library_config.date_cache.mark_updated(full_path.to_owned());
+            library_cache.date_cache.mark_updated(full_path.to_owned());
         }
     }
 }
 
-fn handle_config_loaded(load: &ConfigLoadResults, library_config: &mut LibraryConfig) {
+fn handle_config_loaded(
+    load: &ConfigLoadResults,
+    library_config: &LibraryConfig,
+    library_cache: &mut LibraryCache,
+) {
     match &load.result {
         Err(error) => {
-            library_config.date_cache.remove(&load.full_path);
-            eprintln!(
-                "{}",
-                cformat!(
-                    "❌ <red>Error loading config\n{}\n{}</>",
-                    load.full_path.display(),
-                    error
-                )
+            library_cache.date_cache.remove(&load.full_path);
+            ceprintln!(
+                "❌ <red>Error loading config\n{}\n{}</>",
+                load.full_path.display(),
+                error
             );
         }
         Ok(config) => {
-            library_config
+            library_cache
                 .date_cache
                 .mark_updated(load.full_path.to_owned());
             let mut warnings = vec![];
@@ -636,12 +598,9 @@ fn handle_config_loaded(load: &ConfigLoadResults, library_config: &mut LibraryCo
                 }
             }
             if !warnings.is_empty() {
-                eprintln!(
-                    "{}",
-                    cformat!(
-                        "⚠️ <yellow>Warnings loading config\n{}</>",
-                        load.full_path.display()
-                    )
+                ceprintln!(
+                    "⚠️ <yellow>Warnings loading config\n{}</>",
+                    load.full_path.display()
                 );
                 for warning in warnings {
                     eprintln!("{warning}");
@@ -665,7 +624,7 @@ fn is_hidden(entry: &walkdir::DirEntry) -> bool {
         .is_some_and(|s| s.starts_with('.'))
 }
 
-fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
+fn find_scan_items(library_config: &LibraryConfig, library_cache: &LibraryCache) -> ScanResults {
     let mut lock = std::io::stdout().lock();
     let is_terminal = std::io::stdout().is_terminal();
     let mut scan_songs = BTreeMap::new();
@@ -709,7 +668,7 @@ fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
         }
     };
     // scan songs affected by a removed config
-    for path in &library_config.date_cache.removed {
+    for path in &library_cache.date_cache.removed {
         if path.file_name().is_some_and(|x| x == "config.yaml") {
             let config_folder = path.parent().unwrap_or(Path::new(""));
             let config_root = library_config
@@ -734,15 +693,13 @@ fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
             let config_folder_path = config_folder.path();
             let config_file_path = config_folder_path.join("config.yaml");
             if config_file_path.exists()
-                && library_config
-                    .date_cache
-                    .changed_recently(&config_file_path)
+                && library_cache.date_cache.changed_recently(&config_file_path)
             {
                 add_corresponding(config_root, config_folder_path);
             }
         }
     }
-    if let Some(art_repo) = &library_config.art_repo {
+    if let Some(art_repo) = &library_cache.art_repo {
         // scan songs affected by a removed template
         for songs in art_repo.used_templates.removed.values() {
             for path in songs {
@@ -768,14 +725,14 @@ fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
             let is_config = template_file.file_name() == "images.yaml";
             let template_file_path = template_file.into_path();
             if is_config {
-                if library_config
+                if library_cache
                     .date_cache
                     .changed_recently(&template_file_path)
                 {
                     let config_folder = template_file_path.parent().unwrap_or(Path::new(""));
                     add_templates(config_folder, &mut scan_images);
                 }
-            } else if library_config
+            } else if library_cache
                 .date_cache
                 .changed_recently(&template_file_path)
                 || !art_repo
@@ -811,7 +768,7 @@ fn find_scan_items(library_config: &LibraryConfig) -> ScanResults {
     {
         let is_dir = entry.file_type().is_dir();
         let path = entry.into_path();
-        if library_config.date_cache.changed_recently(&path) {
+        if library_cache.date_cache.changed_recently(&path) {
             if is_dir {
                 scan_folders.insert(path);
             } else if let Some(settings) = library_config.scan_settings(&path) {
